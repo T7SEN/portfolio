@@ -32,6 +32,7 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "@types/react-lottie": "^1.2.10",
+    "@types/shimmer": "^1.2.0",
     "eslint": "^8",
     "eslint-config-next": "14.2.7",
     "postcss": "^8",

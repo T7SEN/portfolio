@@ -7,7 +7,10 @@ import { ThemeProvider } from "./provider";
 const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "T7SEN | Portfolio",
+  title: {
+    default: "T7SEN | Portfolio",
+    template: "%s | T7SEN",
+  },
   description:
     "🚀 Crafting innovative web experiences | 💻 Passionate developer | 🎮 Gamer at heart | 🌟 Explore my projects and let's connect!",
 };

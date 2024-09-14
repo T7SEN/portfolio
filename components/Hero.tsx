@@ -1,4 +1,4 @@
-import { FaLocationArrow } from "react-icons/fa6";
+import { TbFileDownload } from "react-icons/tb";
 
 import MagicButton from "./MagicButton";
 import { Spotlight } from "./ui/Spotlight";
@@ -64,7 +64,7 @@ const Hero = () => {
           <a href="#about">
             <MagicButton
               title="Download My CV"
-              icon={<FaLocationArrow />}
+              icon={<TbFileDownload />}
               position="right"
             />
           </a>

@@ -34,7 +34,7 @@ const Footer = () => {
         </a>
       </div>
       <div className="flex relative mt-16 md:flex-row flex-col justify-between items-center z-1">
-        <p className="md:text-base text-sm md:font-normal font-light">
+        <p className="md:text-base text-sm md:font-normal font-light mb-6 md:mb-0">
           Made with 💜 by {" T7SEN "}
         </p>
 

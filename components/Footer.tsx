@@ -1,6 +1,6 @@
 import { FaLocationArrow } from "react-icons/fa6";
 
-import { socialMedia } from "@/data";
+import { socialMedia } from "../data";
 import MagicButton from "./MagicButton";
 import Link from "next/link";
 
@@ -25,7 +25,7 @@ const Footer = () => {
           Reach out to me today and let&apos;s discuss how I can help you
           achieve your goals.
         </p>
-        <a href="mailto:contact@jsmastery.pro">
+        <a href="mailto:contact@t7sen.com">
           <MagicButton
             title="Let's get in touch"
             icon={<FaLocationArrow />}

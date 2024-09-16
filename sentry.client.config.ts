@@ -5,23 +5,9 @@
 import * as Sentry from "@sentry/nextjs";
 
 Sentry.init({
-  // You can find your project ID in your Sentry dashboard's project settings.
   dsn: "https://2a36ef9e89afed17ba12a1c52c14c0c1@o1032877.ingest.us.sentry.io/4507864900239360",
 
-  // Adjust this value in production, or use tracesSampler for greater control
-  tracesSampleRate: 1,
-
-  // Setting this option to true will print useful information to the console while you're setting up Sentry.
-  debug: false,
-
-  // You can adjust this value in production, or use tracesSampler for greater control
-  replaysOnErrorSampleRate: 1.0,
-
-  // This sets the sample rate to be 10%. You may want this to be 100% while
-  // in development and sample at a lower rate in production
-  replaysSessionSampleRate: 0.1,
-
-  // You can remove this option if you're not planning to use the Sentry Session Replay feature:
+  // Add optional integrations for additional features
   integrations: [
     Sentry.replayIntegration({
       // Additional Replay configuration goes in here, for example:
@@ -34,4 +20,18 @@ Sentry.init({
       isNameRequired: true,
     }),
   ],
+
+  // Define how likely traces are sampled. Adjust this value in production, or use tracesSampler for greater control.
+  tracesSampleRate: 1,
+
+  // Define how likely Replay events are sampled.
+  // This sets the sample rate to be 10%. You may want this to be 100% while
+  // in development and sample at a lower rate in production
+  replaysSessionSampleRate: 0.1,
+
+  // Define how likely Replay events are sampled when an error occurs.
+  replaysOnErrorSampleRate: 1.0,
+
+  // Setting this option to true will print useful information to the console while you're setting up Sentry.
+  debug: false,
 });

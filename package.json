@@ -13,7 +13,6 @@
     "@react-three/fiber": "^8.17.6",
     "@sentry/nextjs": "^8.27.0",
     "@tabler/icons-react": "^3.14.0",
-    "@types/react-native": "^0.72.8",
     "@types/three": "^0.167.2",
     "clsx": "^2.1.1",
     "framer-motion": "^11.3.31",

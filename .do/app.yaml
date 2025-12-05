@@ -1,0 +1,70 @@
+alerts:
+  - rule: DEPLOYMENT_FAILED
+  - rule: DOMAIN_FAILED
+domains:
+  - domain: t7sen.com
+    type: PRIMARY
+  - domain: www.t7sen.com
+    type: ALIAS
+features:
+  - buildpack-stack=ubuntu-22
+ingress:
+  rules:
+    - component:
+        name: portfolio
+      match:
+        authority:
+          exact: ""
+        path:
+          prefix: /
+name: t7sen-portfolio
+region: fra
+services:
+  - build_command: npm run build
+    environment_slug: node-js
+    envs:
+      - key: RESEND_API_KEY
+        scope: RUN_AND_BUILD_TIME
+        value: re_D4w2NNid_LMa8UpQkzJD7vumGK3wcFMwn
+      - key: SENTRY_AUTH_TOKEN
+        scope: RUN_AND_BUILD_TIME
+        value: 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
+      - key: PORT
+        scope: RUN_AND_BUILD_TIME
+        value: "8080"
+      - key: UPSTASH_REDIS_REST_TOKEN
+        scope: RUN_AND_BUILD_TIME
+        value: AazNAQIncDIwZmE3NjdmNTFjZTg0MzM3ODMyNmNmZTY2NGE2OTQ3OHAyNDQyMzc
+      - key: UPSTASH_REDIS_REST_URL
+        scope: RUN_AND_BUILD_TIME
+        value: https://tender-panda-44237.upstash.io
+      - key: UPSTASH_REDIS_URL
+        scope: RUN_AND_BUILD_TIME
+        value: rediss://default:AazNAQIncDIwZmE3NjdmNTFjZTg0MzM3ODMyNmNmZTY2NGE2OTQ3OHAyNDQyMzc@tender-panda-44237.upstash.io:6379
+      - key: NODE_ENV
+        scope: RUN_AND_BUILD_TIME
+        value: production
+    github:
+      branch: main
+      deploy_on_push: true
+      repo: T7SEN/portfolio
+    health_check:
+      failure_threshold: 9
+      http_path: /api/health
+      period_seconds: 10
+      success_threshold: 1
+      timeout_seconds: 1
+    http_port: 8080
+    instance_count: 1
+    instance_size_slug: apps-s-1vcpu-0.5gb
+    liveness_health_check:
+      failure_threshold: 9
+      http_path: /api/health
+      period_seconds: 10
+      success_threshold: 1
+      timeout_seconds: 1
+    name: portfolio
+    run_command: npm run start
+    source_dir: /
+vpc:
+  id: 2544f1dd-64d3-41b5-b106-43e0c64ca883

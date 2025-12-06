@@ -34,7 +34,7 @@
     "rate-limiter-flexible": "^9.0.0",
     "react": "19.2.1",
     "react-dom": "19.2.1",
-    "react-hook-form": "^7.67.0",
+    "react-hook-form": "^7.68.0",
     "react-spring": "^10.0.3",
     "resend": "^6.5.2",
     "simple-icons": "^16.0.0",

@@ -37,7 +37,7 @@
     "react-hook-form": "^7.68.0",
     "react-spring": "^10.0.3",
     "resend": "^6.5.2",
-    "simple-icons": "^16.0.0",
+    "simple-icons": "^16.1.0",
     "tailwind-merge": "^3.4.0",
     "zod": "^4.1.13"
   },

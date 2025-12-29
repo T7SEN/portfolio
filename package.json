@@ -71,7 +71,7 @@
     "@types/node": "^25",
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "@types/uuid": "^10.0.0",
+    "@types/uuid": "^11.0.0",
     "@vitejs/plugin-react": "^5.1.2",
     "baseline-browser-mapping": "^2.9.11",
     "cross-env": "^10.1.0",

@@ -6,6 +6,7 @@ import Google from "next-auth/providers/google";
 const adminEmails = process.env.ADMIN_EMAILS?.split(",") || [];
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
+  trustHost: true,
   providers: [GitHub, Discord, Google],
   pages: {
     signIn: "/guestbook",
@@ -19,10 +20,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
 
         // 2. RBAC Logic: Check if email is in the admin whitelist
-        // We normalize to lowercase to avoid casing issues
         const userEmail = session.user.email?.toLowerCase() || "";
         const isAdmin = adminEmails.some(
-          (admin) => admin.trim().toLowerCase() === userEmail
+          (admin) => admin.trim().toLowerCase() === userEmail,
         );
 
         session.user.isAdmin = isAdmin;

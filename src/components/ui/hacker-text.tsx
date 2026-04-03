@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
 
 import React, { useEffect, useState, useRef } from "react";
@@ -31,7 +32,7 @@ export function HackerText({ text, className, speed = 30 }: HackerTextProps) {
             }
             return LETTERS[Math.floor(Math.random() * 26)];
           })
-          .join("")
+          .join(""),
       );
 
       if (iteration >= text.length) {

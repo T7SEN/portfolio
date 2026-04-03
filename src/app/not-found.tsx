@@ -1,4 +1,3 @@
-/* eslint-disable react/jsx-no-comment-textnodes */
 "use client";
 
 import React, { useRef, useEffect } from "react";

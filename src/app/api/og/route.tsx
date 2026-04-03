@@ -1,6 +1,5 @@
 /* eslint-disable @next/next/no-img-element */
 /* eslint-disable @typescript-eslint/no-unused-vars */
-/* eslint-disable react/jsx-no-comment-textnodes */
 import { ImageResponse } from "next/og";
 import { NextRequest } from "next/server"; // FIX: Import NextRequest
 import { readFile } from "node:fs/promises";

@@ -1,0 +1,82 @@
+# AGENTS.md
+
+Guidance for AI coding agents working in the **T7SEN portfolio** — a gamified,
+cyberpunk-themed personal site that behaves like an interactive product.
+
+## Stack
+
+Next.js 16 (App Router, `cacheComponents` on) · React 19 · TypeScript 5 (strict)
+· Tailwind CSS v4 (CSS-configured, no JS config) · shadcn/ui · NextAuth v5 beta
+· Upstash Redis · Vercel AI SDK + Groq · Sentry · Liveblocks · GSAP. Path alias
+is `@/*`.
+
+## Setup and commands
+
+```
+npm install
+npm run dev          # dev server
+npm run build        # production build
+npm run lint         # ESLint — must pass
+npm run type-check   # tsc --noEmit — must pass
+npm run test:run     # Vitest (single run)
+npm run test:e2e     # Playwright e2e
+```
+
+A Husky pre-commit hook runs `lint-staged` (ESLint `--fix`, Prettier,
+`vitest related`). Keep changes lint- and type-clean or commits are blocked.
+
+## Project layout
+
+- `src/app/<route>/page.tsx` — thin route files: metadata + a `Suspense`
+  boundary only. Real logic lives in `src/components/pages/<route>-client.tsx`.
+- `src/app/actions/` — server actions (`"use server"`).
+- `src/app/api/` — chat, OG image, and auth route handlers.
+- `src/components/` — `ui/` (primitives), `skeletons/` (Suspense fallbacks),
+  and feature folders.
+- `src/lib/` — `redis`, `rate-limit`, `logger`, `validators`, `utils`.
+- `src/auth.ts` — NextAuth config and the admin RBAC session callback.
+
+## Conventions
+
+- New dynamic page: static shell + `<Suspense>` + a matching skeleton in
+  `src/components/skeletons/` + a `metadata` export with an OG image.
+- Keep `"use client"` components leaf-ward so server rendering and caching stay
+  effective.
+- Cached server actions use `"use cache"` with `cacheLife` / `cacheTag`; writes
+  invalidate with `revalidateTag`. Wire tags correctly — stale data fails
+  silently.
+- Rate-limit every user-facing write via `checkRateLimit` from
+  `@/lib/rate-limit`. Log with `@/lib/logger`; report errors with
+  `Sentry.captureException`.
+- Tailwind utilities only; theme tokens are CSS variables in
+  `src/app/globals.css`. Do not add a `tailwind.config.js`.
+- UI copy uses terminal / netrunner language ("ACCESS_DENIED", "NET_TRACE") —
+  match that tone.
+
+## Critical rules
+
+- **CSP is strict.** Any new external domain (script, image, font, fetch, or
+  WebSocket) must be added to the `Content-Security-Policy` in `next.config.ts`,
+  and new image hosts also to `images.remotePatterns`. Browsers block omissions
+  with only a console error.
+- **The AI chat stream is hand-parsed.** If you change the `/api/chat` response
+  shape, update the parser in `src/components/cyber-chat.tsx` in the same change
+  or the chat silently breaks.
+- **Realtime degrades gracefully.** The Liveblocks guards in `RealtimeProvider`
+  and `ActiveVisitors` must stay — removing them crashes pages when the key is
+  unset.
+- **NextAuth is a beta (v5).** Verify auth changes against v5 docs, not v4
+  knowledge. Provider credentials are auto-detected from `AUTH_*` env vars.
+- Never commit secrets. Required env vars include `AUTH_*`, `UPSTASH_REDIS_*`,
+  `GROQ_API_KEY`, `RESEND_API_KEY`, `GITHUB_TOKEN`, and
+  `NEXT_PUBLIC_LIVEBLOCKS_PUBLIC_KEY`.
+
+## Testing
+
+Vitest for unit logic (e.g. `src/lib/rate-limit.test.ts`); Playwright for e2e
+flows in `e2e/`, including `axe` accessibility checks on the main pages. E2E
+relies on `SKIP_RATE_LIMIT` and a dedicated spam IP (`6.6.6.6`) — do not
+repurpose either. Add or update tests whenever behavior changes.
+
+> For deep architecture, subsystem details, and the full list of non-obvious
+> failure modes, see `SKILL.md` in the repo root.

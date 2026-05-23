@@ -38,6 +38,7 @@ export function Globe() {
     const markerColor = [0.6, 0.2, 1];
 
     let globe: ReturnType<typeof createGlobe> | null = null;
+    let frameId = 0;
 
     try {
       globe = createGlobe(canvasRef.current, {
@@ -57,15 +58,24 @@ export function Globe() {
           { location: [21.5433, 39.1728], size: 0.1 },
           { location: [21.5433, 39.1728], size: 0.2 },
         ],
-        onRender: (state) => {
-          if (!pointerInteracting.current) {
-            phiRef.current += 0.003;
-          }
-          state.phi = phiRef.current;
-          state.width = width * 2;
-          state.height = width * 2;
-        },
       });
+
+      // cobe v2 removed the `onRender` option. Per-frame state mutation
+      // now goes through `globe.update(state)` from an external RAF loop.
+      const tick = () => {
+        if (!pointerInteracting.current) {
+          phiRef.current += 0.003;
+        }
+        if (globe) {
+          globe.update({
+            phi: phiRef.current,
+            width: width * 2,
+            height: width * 2,
+          });
+        }
+        frameId = requestAnimationFrame(tick);
+      };
+      frameId = requestAnimationFrame(tick);
 
       setTimeout(() => {
         if (canvasRef.current) {
@@ -82,6 +92,7 @@ export function Globe() {
     }
 
     return () => {
+      if (frameId) cancelAnimationFrame(frameId);
       if (globe) globe.destroy();
       window.removeEventListener("resize", onResize);
     };

@@ -12,11 +12,9 @@ import {
   Menu,
   X,
   Search,
-  Github,
-  Twitter,
-  Linkedin,
   Trophy,
 } from "lucide-react";
+import { Icons } from "@/components/ui/icons";
 import { gsap } from "gsap";
 import { useGSAP } from "@gsap/react";
 
@@ -41,9 +39,9 @@ const NAV_ITEMS = [
 ];
 
 const SOCIALS = [
-  { icon: Github, href: "https://github.com/t7sen" },
-  { icon: Twitter, href: "https://twitter.com/t7sen" },
-  { icon: Linkedin, href: "https://linkedin.com/in/t7sen" },
+  { icon: Icons.github, href: "https://github.com/t7sen" },
+  { icon: Icons.twitter, href: "https://twitter.com/t7sen" },
+  { icon: Icons.linkedin, href: "https://linkedin.com/in/t7sen" },
 ];
 
 export function Navbar() {

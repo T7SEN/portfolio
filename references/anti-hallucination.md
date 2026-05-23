@@ -153,10 +153,14 @@ coordinated change — see `chat-stream-contract.md` "Migration path".
 
 ## Crypto / randomness
 
-### ❌ `node:crypto`, `crypto` module from Node
+### ⚠️ `node:crypto` is available but prefer Web Crypto for portability
 
-Workers / edge runtime constraints. Even on the Node runtime in this
-project, prefer Web Crypto for consistency.
+The portfolio runs on Vercel's Node runtime (no route opts into
+`runtime: 'edge'`), so `node:crypto` would technically work. However,
+the globals `crypto.randomUUID()` and `crypto.getRandomValues()` are
+available everywhere (browser, Node, edge) and use the same Web Crypto
+API surface — pick those so a future move of any route to the edge
+runtime doesn't require an import swap.
 
 **Use:** `crypto.randomUUID()`, `crypto.getRandomValues()`.
 

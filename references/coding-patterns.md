@@ -233,8 +233,9 @@ Behavior:
   call `Sentry.captureException(error)` explicitly (see pattern #7).
 
 The logger is intentionally minimal. Do not import `pino`, `winston`, or
-similar — they bloat the bundle and don't run on the Vercel edge runtime
-without polyfills.
+similar — they bloat the bundle and are overkill for a single-tenant
+personal site whose log volume Sentry already absorbs via the
+`consoleLoggingIntegration` on the client.
 
 ---
 

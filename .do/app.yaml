@@ -25,19 +25,22 @@ services:
     envs:
       - key: RESEND_API_KEY
         scope: RUN_AND_BUILD_TIME
-        value: ${RESEND_API_KEY}
+        type: SECRET
+        value: EV[1:oCdwJQgPWlCJ7qraK0YQYv4kv6gvYx7Y:E3mdi9AsEimzgg2rFTrmpGgnO3V9zLCp5kKvRi7U5fWW240JDpQHlBDqg6ctybcIPzUbpg==]
       - key: SENTRY_AUTH_TOKEN
         scope: RUN_AND_BUILD_TIME
-        value: ${SENTRY_AUTH_TOKEN}
+        type: SECRET
+        value: EV[1:SglHwZmcv7pzCJWJPNdvcofEKAmNWQBs:CObU66pQEjB9EduJUMPCuHylGz/hWo9GgJZuWIL16cFRS/8Z2g3mHOtPnT+tFnFXOeVwvbYpEg1G7P/GtU36uXdd0i3x1UYmDLFBb6NURS+ZPJKbxAITaEZwkOjRB1hcUnRwW4uL8JTLYlEgw/RI8k4H98/LzUx3465xIe769iStoMf4N4Iovw8R1E9XC3i2FexgEYyN1J66X7U5sGO6LimkyBTt55zPIOjO1/OjQc7ztk4ppPR2KIhq27880Y8hpNqJZqczqV5NoOQi8lgG]
       - key: PORT
         scope: RUN_AND_BUILD_TIME
         value: "8080"
       - key: UPSTASH_REDIS_REST_TOKEN
         scope: RUN_AND_BUILD_TIME
-        value: ${UPSTASH_REDIS_REST_TOKEN}
+        type: SECRET
+        value: EV[1:eGSgJY+goubJ/0GqUv/3Gn9TtfihETR3:U6ehC99dicFUS+X3lwXWZyH/VXFO8Z+T4HDVuRdCgjkXXcKMewYCKkscgbu+ZODy2k59LfgtYybnZzMOxy7ckKxaxe8xFd+WWJMRQRJH+Q1Kx9++/8LL]
       - key: UPSTASH_REDIS_REST_URL
         scope: RUN_AND_BUILD_TIME
-        value: ${UPSTASH_REDIS_REST_URL}
+        value: https://awaited-sunbeam-91634.upstash.io
       - key: UPSTASH_REDIS_URL
         scope: RUN_AND_BUILD_TIME
         value: ${UPSTASH_REDIS_URL}
@@ -46,40 +49,45 @@ services:
         value: production
       - key: BETTER_AUTH_SECRET
         scope: RUN_AND_BUILD_TIME
-        value: ${BETTER_AUTH_SECRET}
+        type: SECRET
+        value: EV[1:EnWRPT4o0W5Ho36kQoTMrcJgfmeGZMmc:fnrSyNLYyZ8QtMniE3kMV1+R/hGcWxahdEKrBx3Qax5VBPU5TuTLPtIEJ/HMVTxRMT9KYfJjvtvD96S+]
       - key: BETTER_AUTH_URL
         scope: RUN_AND_BUILD_TIME
-        value: ${BETTER_AUTH_URL}
+        value: https://t7sen.com
       - key: NEXT_PUBLIC_APP_URL
         scope: RUN_AND_BUILD_TIME
-        value: ${NEXT_PUBLIC_APP_URL}
+        value: https://t7sen.com
       - key: TURSO_DATABASE_URL
         scope: RUN_AND_BUILD_TIME
-        value: ${TURSO_DATABASE_URL}
+        value: libsql://t7senportfolio-t7sen.aws-eu-west-1.turso.io
       - key: TURSO_AUTH_TOKEN
         scope: RUN_AND_BUILD_TIME
-        value: ${TURSO_AUTH_TOKEN}
+        type: SECRET
+        value: EV[1:d6dqL0wuBUbRiRHJuKDhbNifV39Rj/BE:vfEXUaMHSUU2gTJaXvzBfyo9yFrKygDwn8hEQoo6c3kq6/kXRORlllfkJC/0gXB8xGsLWHPARQo/a/7vNokf+Subzv/88EIERUnOkQ6V8pKOY6xl4euXHkLnB+SJrnZmjH5LjdmG/HVKF7Pk3f+TQgDIKlzhTnMN9JiBi5JBfDA0791JKRqsehBLOs83Ot7nIDc+8vBqEqaUwLfATW2B0cAX/Y4xiKnjZr/yPCar84tN8Hm6dcdFZedH1C8h7LnYhMV4EQjkMuWBiKu4KRAnICClOEDdcKjXpXnzHVyzShLi81s8syA0QFm3WYHGiXSVt0XLeAHMmSXQyswb3Pdo98TWZ0k29vaN3n2hTjQLiQbFbNDsMC1NQ7082QQRjSd6VXEevfdzJw==]
       - key: GITHUB_CLIENT_ID
         scope: RUN_AND_BUILD_TIME
-        value: ${GITHUB_CLIENT_ID}
+        value: Ov23liAbPjxTj2ChbU5l
       - key: GITHUB_CLIENT_SECRET
         scope: RUN_AND_BUILD_TIME
-        value: ${GITHUB_CLIENT_SECRET}
+        type: SECRET
+        value: EV[1:y/2DPuc55f9lJzqj1DCC72zKeaqzkXuI:+u4E8r7rMYQwsix4UCtLroqyn1cwHSTROVwTUm5mbD/i9v110rjx+NRj3mbfgJDdLDdhdI0mmyI=]
       - key: DISCORD_CLIENT_ID
         scope: RUN_AND_BUILD_TIME
-        value: ${DISCORD_CLIENT_ID}
+        value: "1447767298340294727"
       - key: DISCORD_CLIENT_SECRET
         scope: RUN_AND_BUILD_TIME
-        value: ${DISCORD_CLIENT_SECRET}
+        type: SECRET
+        value: EV[1:4S5GsakI7P48UINgT8AmeXR5qMwFFheS:bVIrx/r40Qm/j4jVS3Wg9763YCv1bSNDyyQmLwZsYt5zlSca1vQ4inBGa1dOY/Be]
       - key: GOOGLE_CLIENT_ID
         scope: RUN_AND_BUILD_TIME
-        value: ${GOOGLE_CLIENT_ID}
+        value: 328387795502-u262h9kk87g02nqpa2fuqaajiqodsmu9.apps.googleusercontent.com
       - key: GOOGLE_CLIENT_SECRET
         scope: RUN_AND_BUILD_TIME
-        value: ${GOOGLE_CLIENT_SECRET}
+        type: SECRET
+        value: EV[1:vlBCkG3H/NWYLRkxpXOG6zd6rrnbRoWX:cm9atYpcCwhxOqWCcsH0pa+c1pZrmyx9TZPPXczfTiFT5JaHJCiw4pCYuqyZtqt0IWvU]
       - key: ADMIN_EMAILS
         scope: RUN_AND_BUILD_TIME
-        value: ${ADMIN_EMAILS}
+        value: a.hitelare2@gmail.com, hitelare2@gmail.com
     github:
       branch: main
       deploy_on_push: true

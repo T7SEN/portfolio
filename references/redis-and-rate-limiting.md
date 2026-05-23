@@ -55,7 +55,7 @@ implement:
 | `dashboard.ts`    | `set`, `get`                 | same                               |
 | `guestbook.ts`    | `lrem`, `del`                | same                               |
 
-If you run `npm run dev` without Upstash creds, **achievements,
+If you run `pnpm dev` without Upstash creds, **achievements,
 dashboard, and admin guestbook delete/purge will throw** at first call.
 Local-dev workarounds: either set the Upstash creds in `.env.local`, or
 extend `MockRedis` with the missing methods. CI tests rely on
@@ -104,13 +104,16 @@ if (isProductionRedis) {
 ```
 
 - **Upstash mode:** `@upstash/ratelimit` with sliding-window algorithm,
-  `analytics: true`, key prefix `@upstash/ratelimit/<type>`. Survives
-  serverless cold starts and shares state across regions.
+  `analytics: true`, key prefix `@upstash/ratelimit/<type>`. Shares
+  state across regions, container restarts, and (if it ever happens)
+  multiple instances.
 - **In-memory mode:** `rate-limiter-flexible`'s `RateLimiterMemory`.
-  Per-process state — fine for local dev, useless on Vercel's serverless
-  (each invocation gets a fresh limiter, so the limit doesn't actually
-  rate-limit). This is by design: in-memory is for dev only; production
-  must have the Upstash creds.
+  Per-process state. On DO App Platform's long-running container with
+  `instance_count: 1`, this **does** actually rate-limit — the process
+  persists across requests. But if the app ever scales to >1 instance,
+  each instance gets its own limiter and the global cap effectively
+  multiplies. Treat memory mode as "dev / single-instance only";
+  production should rely on the Upstash path.
 
 Limiter instances are cached in `Map<RateLimitType, …>` so repeated calls
 don't reconstruct.
@@ -204,12 +207,12 @@ Do **not** add a type for "skip this one specifically" — use the
 
 ## Known tech debt
 
-| #   | Issue                                                                                                                                                                                                                              | Severity                                                                 |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| 1   | `MockRedis` only implements `lpush`/`lrange`. Achievements / dashboard / admin guestbook actions throw without Upstash creds.                                                                                                      | High for new contributors; medium otherwise (set creds in `.env.local`). |
-| 2   | In-memory rate-limit on Vercel doesn't actually limit — each invocation gets a fresh `RateLimiterMemory`. The Upstash mode is the only one that works in serverless. Document, or fail loudly if no Upstash + non-dev environment. | Med                                                                      |
-| 3   | `/api/chat` is not rate-limited.                                                                                                                                                                                                   | High (cost / abuse).                                                     |
-| 4   | The catch-all rewrap (`'Rate limit exceeded. Please try again later.'`) discards the original error. Log it via `@/lib/logger` before rewrapping so debugging an outage is possible.                                               | Low                                                                      |
+| #   | Issue                                                                                                                                                                                                                                                                                                              | Severity                                                                 |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| 1   | `MockRedis` only implements `lpush`/`lrange`. Achievements / dashboard / admin guestbook actions throw without Upstash creds.                                                                                                                                                                                      | High for new contributors; medium otherwise (set creds in `.env.local`). |
+| 2   | In-memory rate-limit works on DO's single long-running container today but breaks the moment `instance_count` goes above 1 (each instance gets its own limiter and the global cap multiplies). Upstash is the correct production path; surface a clearer warning when no Upstash creds are set on a non-dev build. | Med                                                                      |
+| 3   | `/api/chat` is not rate-limited.                                                                                                                                                                                                                                                                                   | High (cost / abuse).                                                     |
+| 4   | The catch-all rewrap (`'Rate limit exceeded. Please try again later.'`) discards the original error. Log it via `@/lib/logger` before rewrapping so debugging an outage is possible.                                                                                                                               | Low                                                                      |
 
 ---
 

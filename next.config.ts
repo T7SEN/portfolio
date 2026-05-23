@@ -89,7 +89,6 @@ export default bundleAnalyzer(
       treeshake: {
         removeDebugLogging: true,
       },
-      automaticVercelMonitors: true,
     },
   }),
 );

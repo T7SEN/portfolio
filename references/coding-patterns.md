@@ -428,21 +428,21 @@ Use everywhere conditional classes appear. `clsx` handles the booleans,
 ## 15. Three-gate rule (code touches)
 
 After finishing any task that modifies code (anything that affects
-`npm run build`, `npm run type-check`, or `npm run lint`), run all
-three gates before reporting the task as done:
+`pnpm build`, `pnpm type-check`, or `pnpm lint`), run all three gates
+before reporting the task as done:
 
 ```
-npm run build
-npm run type-check
-npm run lint
+pnpm build
+pnpm type-check
+pnpm lint
 ```
 
 Skip the gates only for documentation-only changes (`.md` files,
 `references/` content, README, CHANGELOG). Husky's `pre-commit` runs
-`lint-staged` (ESLint --fix, Prettier, `vitest related`) and `pre-push`
-runs `type-check` — neither runs `next build`. The gates catch what the
-hooks miss in a `cacheComponents: true` codebase where a single import
-can break route serialization.
+`pnpm exec lint-staged` (ESLint --fix, Prettier, `vitest related`) and
+`pre-push` runs `pnpm type-check` — neither runs `pnpm build`. The gates
+catch what the hooks miss in a `cacheComponents: true` codebase where a
+single import can break route serialization.
 
 ---
 

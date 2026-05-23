@@ -434,10 +434,11 @@ the agent-side discipline that catches build / type / lint
 regressions Husky's per-staged-file checks miss. If the user
 explicitly opts out for a specific task, respect it.
 
-**Counter-template:** "Confirming: skip `npm run build` / `npm run
-type-check` / `npm run lint` for this task? I'll proceed without
-them. Note: the Husky `pre-commit` hook still runs `lint-staged` and
-`pre-push` runs `type-check`, so partial gating will fire on commit."
+**Counter-template:** "Confirming: skip `pnpm build` / `pnpm
+type-check` / `pnpm lint` for this task? I'll proceed without them.
+Note: the Husky `pre-commit` hook still runs `pnpm exec lint-staged`
+and `pre-push` runs `pnpm type-check`, so partial gating will fire on
+commit and push."
 
 ---
 

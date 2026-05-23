@@ -13,17 +13,19 @@ is `@/*`.
 ## Setup and commands
 
 ```
-npm install
-npm run dev          # dev server
-npm run build        # production build
-npm run lint         # ESLint — must pass
-npm run type-check   # tsc --noEmit — must pass
-npm run test:run     # Vitest (single run)
-npm run test:e2e     # Playwright e2e
+pnpm install
+pnpm dev             # dev server
+pnpm build           # production build
+pnpm lint            # ESLint — must pass
+pnpm type-check      # tsc --noEmit — must pass
+pnpm test:run        # Vitest (single run)
+pnpm test:e2e        # Playwright e2e
 ```
 
-A Husky pre-commit hook runs `lint-staged` (ESLint `--fix`, Prettier,
-`vitest related`). Keep changes lint- and type-clean or commits are blocked.
+Package manager is **pnpm 11** (pinned in `package.json::packageManager`).
+The Husky `pre-commit` hook runs `pnpm exec lint-staged` (ESLint `--fix`,
+Prettier, `vitest related`); `pre-push` runs `pnpm type-check`. Keep
+changes lint- and type-clean or commits are blocked.
 
 ## Project layout
 
@@ -81,21 +83,22 @@ repurpose either. Add or update tests whenever behavior changes.
 ## Three-gate rule (code touches)
 
 After finishing any task that modifies code (anything that affects
-`npm run build`, `npm run type-check`, or `npm run lint`), run all three
-gates before reporting the task as done:
+`pnpm build`, `pnpm type-check`, or `pnpm lint`), run all three gates
+before reporting the task as done:
 
 ```
-npm run build
-npm run type-check
-npm run lint
+pnpm build
+pnpm type-check
+pnpm lint
 ```
 
 Skip the gates only for documentation-only changes (`.md` files,
-`references/` content, README, CHANGELOG). Husky's `pre-commit` hook runs
-`lint-staged` (ESLint --fix, Prettier, `vitest related`) and `pre-push`
-runs `type-check`; neither runs `next build` — the gates fill the gap in
-a `cacheComponents: true` codebase where a single bad import can break
-route serialization without showing up in a per-file lint.
+`references/` content, README, CHANGELOG). Husky's `pre-commit` runs
+`pnpm exec lint-staged` (ESLint --fix, Prettier, `vitest related`) and
+`pre-push` runs `pnpm type-check`; neither runs `pnpm build` — the gates
+fill the gap in a `cacheComponents: true` codebase where a single bad
+import can break route serialization without showing up in a per-file
+lint.
 
 ## Deep references
 
@@ -112,7 +115,7 @@ The `references/` directory holds in-depth companions to this file and
 - [`code-style.md`](references/code-style.md) — TS conventions, naming, imports, error handling
 - [`anti-hallucination.md`](references/anti-hallucination.md) — banned libraries / patterns / APIs in this stack
 - [`refusal-catalog.md`](references/refusal-catalog.md) — refusal triggers and templates
-- [`deployment.md`](references/deployment.md) — Vercel + env vars + Sentry + Husky gates
+- [`deployment.md`](references/deployment.md) — DigitalOcean App Platform + `.do/app.yaml` + env vars + Sentry + Husky gates
 
 > For deep architecture, subsystem details, and the full list of non-obvious
 > failure modes, see `SKILL.md` in the repo root.

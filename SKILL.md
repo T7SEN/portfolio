@@ -84,7 +84,7 @@ companions. Open the matching one before touching the relevant area.
 - [`code-style.md`](references/code-style.md) — TS conventions, naming, imports, error handling
 - [`anti-hallucination.md`](references/anti-hallucination.md) — banned libraries / patterns / APIs in this stack
 - [`refusal-catalog.md`](references/refusal-catalog.md) — refusal triggers and templates
-- [`deployment.md`](references/deployment.md) — Vercel + env vars + Sentry + Husky gates
+- [`deployment.md`](references/deployment.md) — DigitalOcean App Platform + `.do/app.yaml` + env vars + Sentry + Husky gates
 
 ## Core architectural patterns
 
@@ -236,19 +236,21 @@ SKIP_RATE_LIMIT=true    Bypasses limiter except for IP 6.6.6.6
 ## Commands
 
 ```
-npm run dev          Dev server
-npm run build        Production build
-npm run lint         ESLint
-npm run type-check   tsc --noEmit
-npm run test         Vitest (watch)
-npm run test:run     Vitest (single run)
-npm run test:e2e     Playwright
-npm run analyze      Bundle analyzer (ANALYZE=true build)
+pnpm dev             Dev server
+pnpm build           Production build
+pnpm lint            ESLint
+pnpm type-check      tsc --noEmit
+pnpm test            Vitest (watch)
+pnpm test:run        Vitest (single run)
+pnpm test:e2e        Playwright
+pnpm analyze         Bundle analyzer (ANALYZE=true build)
 ```
 
-A Husky pre-commit hook runs `lint-staged`: ESLint `--fix`, Prettier, and
-`vitest related --run` on staged files. Keep changes lint- and type-clean so
-commits are not blocked.
+Package manager is **pnpm 11** (pinned in `package.json::packageManager`).
+The Husky `pre-commit` hook runs `pnpm exec lint-staged`: ESLint `--fix`,
+Prettier, and `vitest related --run` on staged files; `pre-push` runs
+`pnpm type-check`. Keep changes lint- and type-clean so commits are not
+blocked.
 
 ## Landmines — read before editing
 
@@ -306,11 +308,12 @@ former nor ignore the latter.
 
 ## Before you finish a change
 
-- **Run the three gates** — `npm run build`, `npm run type-check`, `npm run lint`.
+- **Run the three gates** — `pnpm build`, `pnpm type-check`, `pnpm lint`.
   Required after any code-touching task. Skip only for doc-only changes (`.md`
   files, `references/`, README, CHANGELOG). Husky's `pre-commit` runs
-  `lint-staged` and `pre-push` runs `type-check`; neither runs `next build`,
-  so the gates fill the gap. You can run all three in parallel.
+  `pnpm exec lint-staged` and `pre-push` runs `pnpm type-check`; neither
+  runs `pnpm build`, so the gates fill the gap. You can run all three in
+  parallel.
 - New dynamic page → shell + `Suspense` + skeleton + `metadata` + OG image.
 - New external domain → updated CSP (and `remotePatterns` for images).
 - New cached read or write → correct `cacheTag` / `revalidateTag` wiring.

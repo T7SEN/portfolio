@@ -344,7 +344,7 @@ no `void` needed.
 
 ### Vitest
 
-`npm run test` (watch), `npm run test:run` (single).
+`pnpm test` (watch), `pnpm test:run` (single).
 
 ### Co-located
 
@@ -435,8 +435,8 @@ What's NOT customized (yet):
 
 ```
 .husky/
-├── pre-commit   → npx lint-staged
-└── pre-push     → npm run type-check
+├── pre-commit   → pnpm exec lint-staged
+└── pre-push     → pnpm type-check
 ```
 
 `lint-staged` config in `package.json`:
@@ -450,9 +450,9 @@ What's NOT customized (yet):
 
 So a commit triggers `eslint --fix + prettier + vitest related` on
 staged code files, and `prettier` on staged config/doc files. A push
-triggers `tsc --noEmit` across the whole tree.
+triggers `tsc --noEmit` across the whole tree (via `pnpm type-check`).
 
-Neither gate runs `next build`. The three-gate rule (see "Three-gate
+Neither gate runs `pnpm build`. The three-gate rule (see "Three-gate
 rule" below) is the agent-level discipline to fill that gap.
 
 ---
@@ -460,13 +460,13 @@ rule" below) is the agent-level discipline to fill that gap.
 ## Three-gate rule (code touches)
 
 After finishing any task that modifies code (anything that affects
-`npm run build`, `npm run type-check`, or `npm run lint`), run all
-three gates before reporting the task as done:
+`pnpm build`, `pnpm type-check`, or `pnpm lint`), run all three gates
+before reporting the task as done:
 
 ```
-npm run build
-npm run type-check
-npm run lint
+pnpm build
+pnpm type-check
+pnpm lint
 ```
 
 Skip the gates only for documentation-only changes (`.md` files,

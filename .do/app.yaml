@@ -20,7 +20,7 @@ ingress:
 name: t7sen-portfolio
 region: fra
 services:
-  - build_command: npm run build
+  - build_command: pnpm build
     environment_slug: node-js
     envs:
       - key: RESEND_API_KEY
@@ -64,7 +64,7 @@ services:
       success_threshold: 1
       timeout_seconds: 1
     name: portfolio
-    run_command: npm run start
+    run_command: pnpm start
     source_dir: /
 vpc:
   id: 2544f1dd-64d3-41b5-b106-43e0c64ca883

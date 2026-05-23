@@ -1,6 +1,6 @@
 # t7sen | Cyber Developer Portfolio
 
-![Project Status](https://img.shields.io/badge/System-ONLINE-success?style=for-the-badge&logo=vercel)
+![Project Status](https://img.shields.io/badge/System-ONLINE-success?style=for-the-badge&logo=digitalocean)
 ![Next.js](https://img.shields.io/badge/Next.js-16.0-black?style=for-the-badge&logo=next.js)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.0-blue?style=for-the-badge&logo=typescript)
 
@@ -36,10 +36,10 @@ This portfolio is a showcase of "Cyberpunk" aesthetics combined with modern web 
    cd portfolio
    ```
 
-2. **Install dependencies:**
+2. **Install dependencies (pnpm 11):**
 
    ```bash
-   npm install
+   pnpm install
    ```
 
 3. **Set up Environment Variables:**
@@ -61,7 +61,7 @@ This portfolio is a showcase of "Cyberpunk" aesthetics combined with modern web 
 4. **Run the development server:**
 
    ```bash
-   npm run dev
+   pnpm dev
    ```
 
 ## 🧪 Testing
@@ -70,8 +70,8 @@ This project uses **Playwright** for End-to-End (E2E) testing and **Axe-core** f
 
 ```bash
 # Run all E2E tests
-npm run test:e2e
+pnpm test:e2e
 
 # Run tests with UI Mode
-npm run test:e2e:ui
+pnpm test:e2e:ui
 ```

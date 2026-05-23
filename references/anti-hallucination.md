@@ -237,15 +237,18 @@ Use `@/lib/logger`. The sole sanctioned `console.*` callers are
 `src/lib/logger.ts` itself and the runtime error boundaries. New code
 that wants to log goes through the logger.
 
-Note: server-side errors from the logger reach Vercel function logs,
-not Sentry Issues. For an Issue, call `Sentry.captureException(error)`
+Note: server-side errors from the logger reach DO App Platform's
+container logs (visible in the DO dashboard → App → Runtime Logs), not
+Sentry Issues. For an Issue, call `Sentry.captureException(error)`
 explicitly. See [`coding-patterns.md`](./coding-patterns.md) "Logger"
 and "Sentry capture" patterns.
 
 ### ❌ `pino`, `winston`, `bunyan`
 
-Edge-runtime hostile / bundle-bloat / overkill for a personal site.
-`@/lib/logger` is fine.
+Bundle-bloat / overkill for a single-tenant personal site. Server logs
+go to DO App Platform's container logs; client logs go to Sentry via
+`consoleLoggingIntegration`. `@/lib/logger` is the only sanctioned
+wrapper.
 
 ---
 
@@ -271,10 +274,17 @@ anything but the simplest Zod surface.
 
 ## Package manager
 
-### ❌ `pnpm`, `yarn`, `pnpm-lock.yaml`, `yarn.lock`
+### ❌ `npm`, `yarn`, `package-lock.json`, `yarn.lock`
 
-Project uses **npm**. The lock file is `package-lock.json`. Husky's
-`pre-commit` runs `npx lint-staged`. CI uses `npm ci`.
+Project uses **pnpm 11** (pinned in `package.json::packageManager` as
+`pnpm@11.1.3`). The lock file is `pnpm-lock.yaml`. There is also a
+`pnpm-workspace.yaml` that holds the `allowBuilds` postinstall
+allowlist for `@sentry/cli`, `sharp`, and `unrs-resolver`. Husky's
+`pre-commit` runs `pnpm exec lint-staged`; CI uses
+`pnpm install --frozen-lockfile`.
+
+Running `npm install` re-creates `package-lock.json` and drifts the
+dependency graph. If you see one in `git status`, delete it.
 
 ---
 
@@ -366,7 +376,7 @@ asked.
 
 ## Quick-reference checklist before adding a dependency
 
-Before `npm install <thing>`, ask:
+Before `pnpm add <thing>`, ask:
 
 1. **Does it work in Next 16 / React 19?** Some libraries haven't
    updated for the async cookies/headers change or the new compiler.

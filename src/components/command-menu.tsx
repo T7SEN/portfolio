@@ -8,9 +8,6 @@ import {
   Laptop,
   Moon,
   Sun,
-  Github,
-  Twitter,
-  Linkedin,
   Mail,
   User,
   Book,
@@ -36,6 +33,7 @@ import {
   ExternalLink,
   History,
 } from "lucide-react";
+import { Icons } from "@/components/ui/icons";
 import { useAchievements } from "@/hooks/use-achievements";
 import {
   CommandDialog,
@@ -334,21 +332,21 @@ export function CommandMenu({ onOpenGame }: CommandMenuProps) {
       {
         id: "social-github",
         label: "GitHub",
-        icon: Github,
+        icon: Icons.github,
         group: "Connect",
         url: "https://github.com/t7sen",
       },
       {
         id: "social-linkedin",
         label: "LinkedIn",
-        icon: Linkedin,
+        icon: Icons.linkedin,
         group: "Connect",
         url: "https://linkedin.com/in/t7sen",
       },
       {
         id: "social-twitter",
         label: "Twitter",
-        icon: Twitter,
+        icon: Icons.twitter,
         group: "Connect",
         url: "https://twitter.com/t7sen",
       },

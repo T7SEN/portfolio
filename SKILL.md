@@ -69,6 +69,23 @@ e2e/                          Playwright specs
 boundary. All real work lives in `src/components/pages/<route>-client.tsx`.
 Follow this split when adding pages.
 
+## Deep references
+
+The `references/` directory expands this file with in-depth, subsystem-by-subsystem
+companions. Open the matching one before touching the relevant area.
+
+- [`chat-stream-contract.md`](references/chat-stream-contract.md) — `/api/chat` ↔ `cyber-chat.tsx` wire format
+- [`auth.md`](references/auth.md) — NextAuth v5 wiring + admin RBAC
+- [`redis-and-rate-limiting.md`](references/redis-and-rate-limiting.md) — Upstash + `@upstash/ratelimit` + dev fallback
+- [`redis-schema.md`](references/redis-schema.md) — concrete Redis keys, types, and lifecycles
+- [`design-system.md`](references/design-system.md) — theme tokens, fonts, shadcn primitives, copy tone
+- [`animations.md`](references/animations.md) — GSAP / `useGSAP` / reduced-motion patterns
+- [`coding-patterns.md`](references/coding-patterns.md) — Shell+Suspense, caching, server actions, rate limit, Sentry, logger
+- [`code-style.md`](references/code-style.md) — TS conventions, naming, imports, error handling
+- [`anti-hallucination.md`](references/anti-hallucination.md) — banned libraries / patterns / APIs in this stack
+- [`refusal-catalog.md`](references/refusal-catalog.md) — refusal triggers and templates
+- [`deployment.md`](references/deployment.md) — Vercel + env vars + Sentry + Husky gates
+
 ## Core architectural patterns
 
 ### Shell + Suspense streaming
@@ -289,7 +306,11 @@ former nor ignore the latter.
 
 ## Before you finish a change
 
-- Run `npm run type-check` and `npm run lint` — the pre-commit hook enforces both.
+- **Run the three gates** — `npm run build`, `npm run type-check`, `npm run lint`.
+  Required after any code-touching task. Skip only for doc-only changes (`.md`
+  files, `references/`, README, CHANGELOG). Husky's `pre-commit` runs
+  `lint-staged` and `pre-push` runs `type-check`; neither runs `next build`,
+  so the gates fill the gap. You can run all three in parallel.
 - New dynamic page → shell + `Suspense` + skeleton + `metadata` + OG image.
 - New external domain → updated CSP (and `remotePatterns` for images).
 - New cached read or write → correct `cacheTag` / `revalidateTag` wiring.

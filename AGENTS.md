@@ -78,5 +78,41 @@ flows in `e2e/`, including `axe` accessibility checks on the main pages. E2E
 relies on `SKIP_RATE_LIMIT` and a dedicated spam IP (`6.6.6.6`) — do not
 repurpose either. Add or update tests whenever behavior changes.
 
+## Three-gate rule (code touches)
+
+After finishing any task that modifies code (anything that affects
+`npm run build`, `npm run type-check`, or `npm run lint`), run all three
+gates before reporting the task as done:
+
+```
+npm run build
+npm run type-check
+npm run lint
+```
+
+Skip the gates only for documentation-only changes (`.md` files,
+`references/` content, README, CHANGELOG). Husky's `pre-commit` hook runs
+`lint-staged` (ESLint --fix, Prettier, `vitest related`) and `pre-push`
+runs `type-check`; neither runs `next build` — the gates fill the gap in
+a `cacheComponents: true` codebase where a single bad import can break
+route serialization without showing up in a per-file lint.
+
+## Deep references
+
+The `references/` directory holds in-depth companions to this file and
+`SKILL.md`. Open the matching one before touching the relevant subsystem.
+
+- [`chat-stream-contract.md`](references/chat-stream-contract.md) — `/api/chat` ↔ `cyber-chat.tsx` wire format
+- [`auth.md`](references/auth.md) — NextAuth v5 wiring + admin RBAC
+- [`redis-and-rate-limiting.md`](references/redis-and-rate-limiting.md) — Upstash + `@upstash/ratelimit` + dev fallback
+- [`redis-schema.md`](references/redis-schema.md) — concrete Redis keys, types, and lifecycles
+- [`design-system.md`](references/design-system.md) — theme tokens, fonts, shadcn primitives, copy tone
+- [`animations.md`](references/animations.md) — GSAP / `useGSAP` / reduced-motion patterns
+- [`coding-patterns.md`](references/coding-patterns.md) — Shell+Suspense, caching, server actions, rate limit, Sentry, logger
+- [`code-style.md`](references/code-style.md) — TS conventions, naming, imports, error handling
+- [`anti-hallucination.md`](references/anti-hallucination.md) — banned libraries / patterns / APIs in this stack
+- [`refusal-catalog.md`](references/refusal-catalog.md) — refusal triggers and templates
+- [`deployment.md`](references/deployment.md) — Vercel + env vars + Sentry + Husky gates
+
 > For deep architecture, subsystem details, and the full list of non-obvious
 > failure modes, see `SKILL.md` in the repo root.

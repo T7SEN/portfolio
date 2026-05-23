@@ -42,7 +42,7 @@ services:
         scope: RUN_AND_BUILD_TIME
         value: ${UPSTASH_REDIS_URL}
       - key: NODE_ENV
-        scope: RUN_AND_BUILD_TIME
+        scope: RUN_TIME
         value: production
       - key: BETTER_AUTH_SECRET
         scope: RUN_AND_BUILD_TIME
@@ -102,5 +102,3 @@ services:
     name: portfolio
     run_command: pnpm start
     source_dir: /
-vpc:
-  id: 2544f1dd-64d3-41b5-b106-43e0c64ca883

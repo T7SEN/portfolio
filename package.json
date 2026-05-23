@@ -83,6 +83,7 @@
     "@vitejs/plugin-react": "^6.0.1",
     "baseline-browser-mapping": "^2.10.13",
     "cross-env": "^10.1.0",
+    "dotenv": "^17.4.2",
     "drizzle-kit": "^0.31.10",
     "eslint": "^10",
     "eslint-config-next": "^16.2.2",

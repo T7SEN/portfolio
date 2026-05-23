@@ -259,7 +259,7 @@ order (siblings noted):
         <SystemContextMenu />           ← right-click menu (sibling)
         <CyberChat />                   ← AI chat (sibling, hidden until opened)
         <AchievementsManager />         ← unlock notifier (sibling)
-        <AdminProvider>                 ← SessionProvider + useAdmin
+        <AdminProvider>                 ← Better Auth useSession + useAdmin
           <GlobalAppWrapper>            ← cursor, preloader, navbar, command menu, snake game
             <main>{children}</main>
             <Footer />                  ← cached "use cache" + cacheLife('days')
@@ -280,9 +280,10 @@ order (siblings noted):
   care about theme but theme does need to be aware of the SSR shell.
 - `SoundProvider` wraps `AchievementsProvider` because achievement
   unlocks play sound on success.
-- `SessionProvider` (via `AdminProvider`) is **deep in the tree**, not at
-  the root — most of the app doesn't need it, and putting it deep keeps
-  the SSR shell trivially cacheable.
+- `AdminProvider` is **deep in the tree**, not at the root — Better
+  Auth's `useSession` is self-contained (no `SessionProvider` wrapper),
+  but putting `AdminProvider` deep keeps the SSR shell trivially
+  cacheable.
 - `Toaster` and `<Footer />` and the sibling components (`CyberChat`,
   `SystemContextMenu`, `AchievementsManager`) are mounted alongside the
   layout — they overlay the route content.

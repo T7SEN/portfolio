@@ -272,18 +272,21 @@ inbox records, etc. survive independently.
 
 ### Required for production
 
-| Name                                                  | Purpose              | Notes                                                                                                                             |
-| ----------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `AUTH_SECRET`                                         | NextAuth JWT signing | Required; `openssl rand -base64 32`. NextAuth refuses to start without it.                                                        |
-| `AUTH_GITHUB_ID` / `AUTH_GITHUB_SECRET`               | GitHub OAuth         | From GitHub Developer Settings.                                                                                                   |
-| `AUTH_DISCORD_ID` / `AUTH_DISCORD_SECRET`             | Discord OAuth        | From Discord Developer Portal.                                                                                                    |
-| `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`               | Google OAuth         | From Google Cloud Console.                                                                                                        |
-| `ADMIN_EMAILS`                                        | Admin whitelist      | Comma-separated. Case-insensitive match against `session.user.email`.                                                             |
-| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Redis client         | Required in production. Without these, `MockRedis` kicks in and most actions throw.                                               |
-| `GROQ_API_KEY`                                        | AI chat              | Required. AI SDK reads this auto.                                                                                                 |
-| `RESEND_API_KEY`                                      | Contact form email   | Required for contact form to deliver.                                                                                             |
-| `NEXT_PUBLIC_APP_URL`                                 | Canonical URL        | Used in `metadata.metadataBase` and OG image URLs. **Must be set on DO** — `layout.tsx` falls back to `localhost:3000` if absent. |
-| `PORT`                                                | Listen port          | `8080`. DO Apps injects this; don't override at runtime.                                                                          |
+| Name                                                  | Purpose                                 | Notes                                                                                                                                  |
+| ----------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `BETTER_AUTH_SECRET`                                  | Better Auth signing + cookie encryption | Required; `openssl rand -base64 32`. Better Auth refuses to start without it.                                                          |
+| `BETTER_AUTH_URL`                                     | Canonical site URL                      | `https://t7sen.com` (prod), `http://localhost:3000` (dev). Used to construct OAuth callback URLs.                                      |
+| `TURSO_DATABASE_URL`                                  | Turso libSQL URL                        | `libsql://<db>.turso.io`. Without this, the app falls back to `file:./local.db` which doesn't exist on DO → auth route 500s.           |
+| `TURSO_AUTH_TOKEN`                                    | Turso long-lived token                  | Create via the Turso web dashboard (**Create token**) or `turso db tokens create <db>` (CLI only on macOS/Linux/WSL). Encrypted on DO. |
+| `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET`           | GitHub OAuth (Better Auth)              | From GitHub Developer Settings. Callback URL: `${BETTER_AUTH_URL}/api/auth/callback/github`. App must request `user:email` scope.      |
+| `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET`         | Discord OAuth (Better Auth)             | From Discord Developer Portal. Callback URL: `${BETTER_AUTH_URL}/api/auth/callback/discord`.                                           |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`           | Google OAuth (Better Auth)              | From Google Cloud Console. Callback URL: `${BETTER_AUTH_URL}/api/auth/callback/google`.                                                |
+| `ADMIN_EMAILS`                                        | Admin whitelist                         | Comma-separated. Case-insensitive match against `session.user.email` via the `customSession` plugin.                                   |
+| `UPSTASH_REDIS_REST_URL` / `UPSTASH_REDIS_REST_TOKEN` | Redis client                            | Required in production. Without these, `MockRedis` kicks in and most actions throw.                                                    |
+| `GROQ_API_KEY`                                        | AI chat                                 | Required. AI SDK reads this auto.                                                                                                      |
+| `RESEND_API_KEY`                                      | Contact form email                      | Required for contact form to deliver.                                                                                                  |
+| `NEXT_PUBLIC_APP_URL`                                 | Canonical URL                           | Used in `metadata.metadataBase` and OG image URLs. **Must be set on DO** — `layout.tsx` falls back to `localhost:3000` if absent.      |
+| `PORT`                                                | Listen port                             | `8080`. DO Apps injects this; don't override at runtime.                                                                               |
 
 ### Optional / feature flags
 
@@ -465,7 +468,8 @@ Runs on every push to `main` and on every PR targeting `main`. Steps:
 9. Playwright E2E (`pnpm exec playwright install` then
    `pnpm test:e2e`) with real secrets injected via GitHub repo
    secrets:
-   `AUTH_SECRET`, `RESEND_API_KEY`, `SENTRY_AUTH_TOKEN`,
+   `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, `TURSO_DATABASE_URL`,
+   `TURSO_AUTH_TOKEN`, `RESEND_API_KEY`, `SENTRY_AUTH_TOKEN`,
    `NEXT_PUBLIC_SENTRY_DSN`, and `SKIP_RATE_LIMIT=true`
 10. Upload Playwright report as artifact
 

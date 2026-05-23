@@ -62,27 +62,32 @@ the three gates.
 
 ## Auth
 
-### Use `getServerSession` / `authOptions`
+### Use NextAuth / Auth.js at any version
 
 **Trigger:**
 
 - "Just import `getServerSession` to read the session."
 - "Let me write the `[...nextauth].ts` config."
 - "Add `@auth/drizzle-adapter`."
+- "Use `useSession` from `next-auth/react`."
+- "Wrap the app in `SessionProvider`."
 
-**Why refuse:** Project is on `next-auth@5.0.0-beta.30`. The v4 APIs
-(`getServerSession`, `NextAuthOptions`, `authOptions`,
-`@auth/<adapter>` packages) don't exist in v5. Mixing v4 patterns into
-the v5 surface breaks the session route, the cookie flow, and the
-RBAC callback.
+**Why refuse:** NextAuth was removed from this project. The auth stack
+is now **Better Auth + Drizzle + Turso (libSQL)**. The `next-auth`
+package is not in `package.json`; importing it fails at the module
+boundary. Even if the import resolved, the cookie shape, session
+schema, and callback contract are different — mixing the two breaks
+auth silently.
 
-**Alternative:** `import { auth } from '@/auth'` on the server.
-`useSession` from `next-auth/react` inside `AdminProvider` on the
-client. See [`auth.md`](./auth.md).
+**Alternative:** `import { auth } from "@/lib/auth"` on the server +
+`await auth.api.getSession({ headers: await headers() })`. Client:
+`import { useSession, signIn, signOut } from "@/lib/auth-client"`. No
+`SessionProvider` wrapper. See [`auth.md`](./auth.md).
 
-**Refusal template:** "Refused — project is on NextAuth v5 beta, not
-v4. `getServerSession` / `authOptions` don't exist in v5. Use `auth()`
-from `@/auth` per `references/auth.md`."
+**Refusal template:** "Refused — NextAuth is removed; project uses
+Better Auth + Drizzle + Turso. Use `auth.api.getSession({ headers })`
+on the server and `useSession` from `@/lib/auth-client` on the client
+per `references/auth.md`."
 
 ---
 
@@ -407,7 +412,7 @@ boundary per AGENTS.md. Client validation is UX only. See
 
 **Trigger:**
 
-- "Let me add `AUTH_SECRET=...` to `.env` and commit it."
+- "Let me add `BETTER_AUTH_SECRET=...` to `.env` and commit it."
 
 **Why refuse:** `.env*` is `.gitignored` for a reason. Secrets in
 git history are leaked even after later removal.

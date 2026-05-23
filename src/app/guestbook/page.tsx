@@ -1,5 +1,6 @@
 import { Suspense } from "react";
-import { auth } from "@/auth";
+import { headers } from "next/headers";
+import { auth } from "@/lib/auth";
 import { Metadata } from "next";
 import { GuestbookShell } from "@/components/pages/guestbook-client";
 import { GuestbookForm } from "@/components/guestbook/guestbook-form";
@@ -27,8 +28,8 @@ async function AsyncGuestbookList() {
 }
 
 async function AsyncGuestbookForm() {
-  const session = await auth();
-  return <GuestbookForm user={session?.user} />;
+  const session = await auth.api.getSession({ headers: await headers() });
+  return <GuestbookForm user={session?.user ?? null} />;
 }
 
 // --- ROOT PAGE ---

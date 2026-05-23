@@ -1,10 +1,18 @@
 # Redis Schema — keys, types, and lifecycles
 
 Companion to [`redis-and-rate-limiting.md`](./redis-and-rate-limiting.md).
-The portfolio has no SQL database; all server-side state lives in Upstash
-Redis (or the [`MockRedis`](./redis-and-rate-limiting.md) fallback). This
-file catalogs the keys, their Redis types, who writes them, and when
-they're invalidated.
+This file catalogs the keys, their Redis types, who writes them, and
+when they're invalidated.
+
+**Scope:** Upstash Redis holds **application state** — the guestbook,
+contact inbox, achievements, dashboard fallback cache, and rate-limit
+counters.
+
+**Not in Redis:** Better Auth's 4 tables (`user`, `session`, `account`,
+`verification`) live in **Turso / libSQL** via Drizzle, not in Redis.
+See [`auth.md`](./auth.md) for those. Reach for libSQL for anything
+that needs SQL semantics (joins, FKs, transactions); reach for Redis
+for caches, lists, sets, and rate-limit counters.
 
 ---
 

@@ -44,6 +44,42 @@ services:
       - key: NODE_ENV
         scope: RUN_AND_BUILD_TIME
         value: production
+      - key: BETTER_AUTH_SECRET
+        scope: RUN_AND_BUILD_TIME
+        value: ${BETTER_AUTH_SECRET}
+      - key: BETTER_AUTH_URL
+        scope: RUN_AND_BUILD_TIME
+        value: ${BETTER_AUTH_URL}
+      - key: NEXT_PUBLIC_APP_URL
+        scope: RUN_AND_BUILD_TIME
+        value: ${NEXT_PUBLIC_APP_URL}
+      - key: TURSO_DATABASE_URL
+        scope: RUN_AND_BUILD_TIME
+        value: ${TURSO_DATABASE_URL}
+      - key: TURSO_AUTH_TOKEN
+        scope: RUN_AND_BUILD_TIME
+        value: ${TURSO_AUTH_TOKEN}
+      - key: GITHUB_CLIENT_ID
+        scope: RUN_AND_BUILD_TIME
+        value: ${GITHUB_CLIENT_ID}
+      - key: GITHUB_CLIENT_SECRET
+        scope: RUN_AND_BUILD_TIME
+        value: ${GITHUB_CLIENT_SECRET}
+      - key: DISCORD_CLIENT_ID
+        scope: RUN_AND_BUILD_TIME
+        value: ${DISCORD_CLIENT_ID}
+      - key: DISCORD_CLIENT_SECRET
+        scope: RUN_AND_BUILD_TIME
+        value: ${DISCORD_CLIENT_SECRET}
+      - key: GOOGLE_CLIENT_ID
+        scope: RUN_AND_BUILD_TIME
+        value: ${GOOGLE_CLIENT_ID}
+      - key: GOOGLE_CLIENT_SECRET
+        scope: RUN_AND_BUILD_TIME
+        value: ${GOOGLE_CLIENT_SECRET}
+      - key: ADMIN_EMAILS
+        scope: RUN_AND_BUILD_TIME
+        value: ${ADMIN_EMAILS}
     github:
       branch: main
       deploy_on_push: true

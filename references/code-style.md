@@ -167,8 +167,12 @@ src/
 ├── lib/                         redis, rate-limit, logger, utils, validators
 ├── providers/                   admin-provider, realtime-provider
 ├── data/                        Static content (about, uses, socials)
-├── types/                       Module augmentation (next-auth.d.ts)
-├── auth.ts                      NextAuth v5 config
+├── db/                          Drizzle client + Better Auth schema + migrations
+│   ├── index.ts                 libSQL client (Turso prod / local.db dev)
+│   ├── schema.ts                Better Auth 4 tables (user/session/account/verification)
+│   └── migrations/              drizzle-kit generate output (checked in)
+├── lib/auth.ts                  Better Auth factory + customSession (isAdmin)
+├── lib/auth-client.ts           Better Auth React client (useSession, signIn, signOut)
 ├── instrumentation.ts           Sentry runtime dispatcher
 ├── instrumentation-client.ts    Sentry client config
 ├── sentry.server.config.ts      Sentry Node runtime config
@@ -213,7 +217,7 @@ import * as Sentry from "@sentry/nextjs";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useSfx } from "@/hooks/use-sfx";
-import { auth } from "@/auth";
+import { auth } from "@/lib/auth";
 
 import "./globals.css";
 ```

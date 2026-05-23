@@ -6,9 +6,9 @@ cyberpunk-themed personal site that behaves like an interactive product.
 ## Stack
 
 Next.js 16 (App Router, `cacheComponents` on) · React 19 · TypeScript 5 (strict)
-· Tailwind CSS v4 (CSS-configured, no JS config) · shadcn/ui · NextAuth v5 beta
-· Upstash Redis · Vercel AI SDK + Groq · Sentry · Liveblocks · GSAP. Path alias
-is `@/*`.
+· Tailwind CSS v4 (CSS-configured, no JS config) · shadcn/ui · **Better Auth +
+Drizzle + Turso (libSQL)** · Upstash Redis · Vercel AI SDK + Groq · Sentry ·
+Liveblocks · GSAP. Path alias is `@/*`.
 
 ## Setup and commands
 
@@ -36,7 +36,9 @@ changes lint- and type-clean or commits are blocked.
 - `src/components/` — `ui/` (primitives), `skeletons/` (Suspense fallbacks),
   and feature folders.
 - `src/lib/` — `redis`, `rate-limit`, `logger`, `validators`, `utils`.
-- `src/auth.ts` — NextAuth config and the admin RBAC session callback.
+- `src/lib/auth.ts` — Better Auth factory + admin RBAC via the `customSession` plugin.
+- `src/lib/auth-client.ts` — Better Auth React client (`useSession`, `signIn`, `signOut`).
+- `src/db/` — Drizzle libSQL client (`index.ts`), Better Auth's 4-table schema (`schema.ts`), and checked-in migrations.
 
 ## Conventions
 
@@ -67,11 +69,18 @@ changes lint- and type-clean or commits are blocked.
 - **Realtime degrades gracefully.** The Liveblocks guards in `RealtimeProvider`
   and `ActiveVisitors` must stay — removing them crashes pages when the key is
   unset.
-- **NextAuth is a beta (v5).** Verify auth changes against v5 docs, not v4
-  knowledge. Provider credentials are auto-detected from `AUTH_*` env vars.
-- Never commit secrets. Required env vars include `AUTH_*`, `UPSTASH_REDIS_*`,
-  `GROQ_API_KEY`, `RESEND_API_KEY`, `GITHUB_TOKEN`, and
-  `NEXT_PUBLIC_LIVEBLOCKS_PUBLIC_KEY`.
+- **Auth is Better Auth + Drizzle + Turso.** `src/lib/auth.ts` is the
+  factory; `src/lib/auth-client.ts` is the React client; sessions live in
+  Turso (libSQL) via Drizzle. **There is no NextAuth.** Verify auth
+  changes against [better-auth.com/docs](https://better-auth.com/docs),
+  not NextAuth / Auth.js memory. Server reads: `await auth.api.getSession({
+headers: await headers() })`. Client reads: `useSession()` from
+  `@/lib/auth-client`.
+- Never commit secrets. Required env vars include `BETTER_AUTH_SECRET`,
+  `BETTER_AUTH_URL`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`,
+  `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` (and Discord / Google
+  equivalents), `ADMIN_EMAILS`, `UPSTASH_REDIS_*`, `GROQ_API_KEY`,
+  `RESEND_API_KEY`, `GITHUB_TOKEN`, and `NEXT_PUBLIC_LIVEBLOCKS_PUBLIC_KEY`.
 
 ## Testing
 
@@ -106,7 +115,7 @@ The `references/` directory holds in-depth companions to this file and
 `SKILL.md`. Open the matching one before touching the relevant subsystem.
 
 - [`chat-stream-contract.md`](references/chat-stream-contract.md) — `/api/chat` ↔ `cyber-chat.tsx` wire format
-- [`auth.md`](references/auth.md) — NextAuth v5 wiring + admin RBAC
+- [`auth.md`](references/auth.md) — Better Auth + Drizzle + Turso wiring + admin RBAC via `customSession`
 - [`redis-and-rate-limiting.md`](references/redis-and-rate-limiting.md) — Upstash + `@upstash/ratelimit` + dev fallback
 - [`redis-schema.md`](references/redis-schema.md) — concrete Redis keys, types, and lifecycles
 - [`design-system.md`](references/design-system.md) — theme tokens, fonts, shadcn primitives, copy tone

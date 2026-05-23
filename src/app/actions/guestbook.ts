@@ -9,7 +9,7 @@ import { redis } from "@/lib/redis";
 import { checkRateLimit } from "@/lib/rate-limit";
 import logger from "@/lib/logger";
 import { headers } from "next/headers";
-import { auth } from "@/auth";
+import { auth } from "@/lib/auth";
 
 // --- 1. CONFIGURATION ---
 const filter = new Filter();
@@ -168,7 +168,7 @@ export async function signGuestbook(
   formData: FormData,
 ): Promise<GuestbookState> {
   // 1. AUTH GATE - Rejects bots immediately
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user) {
     return {
       success: false,
@@ -311,7 +311,7 @@ export async function signGuestbook(
 
 // --- ADMIN ACTIONS ---
 export async function deleteGuestbookEntry(entry: GuestbookEntry) {
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user?.isAdmin) return { error: "Access Denied" };
 
   try {
@@ -325,7 +325,7 @@ export async function deleteGuestbookEntry(entry: GuestbookEntry) {
 }
 
 export async function purgeGuestbook() {
-  const session = await auth();
+  const session = await auth.api.getSession({ headers: await headers() });
   if (!session?.user?.isAdmin) return { error: "Access Denied" };
 
   try {

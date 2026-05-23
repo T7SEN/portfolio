@@ -1,29 +1,25 @@
 "use server";
 
-import { signIn, signOut } from "@/auth";
 import { headers } from "next/headers";
 import { checkRateLimit } from "@/lib/rate-limit";
 
-export async function login(provider: string) {
-  await signIn(provider);
-}
-
-export async function logout() {
-  await signOut();
-}
+// Sign-in / sign-out are client-side under Better Auth (see
+// src/lib/auth-client.ts and the popup page); they don't need server-action
+// wrappers anymore.
+//
+// verifyAdminSecret remains a server action because the comparison must run
+// against ADMIN_SECRET, which is never exposed to the client. Rate-limited
+// against brute-force.
 
 export async function verifyAdminSecret(secret: string) {
-  // Rate Limit: Brute force protection
   try {
     const headerStore = await headers();
     const ip = headerStore.get("x-forwarded-for") || "unknown";
     await checkRateLimit(ip, "core");
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  } catch (error) {
+  } catch {
     return { error: "Too many attempts. Try again later." };
   }
 
-  // Simple check against server-side env
   if (secret === process.env.ADMIN_SECRET) {
     return { success: true };
   }

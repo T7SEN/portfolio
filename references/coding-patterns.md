@@ -178,8 +178,9 @@ try {
 
 Rules:
 
-- **`x-forwarded-for`** is the Vercel-injected IP. Do not use
-  `x-real-ip` or `cf-connecting-ip` — Vercel rewrites them.
+- **`x-forwarded-for`** is the platform-injected IP (DO App Platform
+  sets this on incoming requests). Do not use `x-real-ip` or
+  `cf-connecting-ip` — DO doesn't populate those.
 - **`await headers()` is mandatory** in Next 16 — they're async now.
 - **Fallback identifier** (`'unknown'`, `'127.0.0.1'`) ensures the
   limiter has a key even when the header is missing (local dev, broken
@@ -226,7 +227,8 @@ Behavior:
   Pino's `pino.info(msg, {...})`. Pay attention.
 - **Quiet in tests** (`NODE_ENV !== 'test'`).
 - **Output:** raw JSON to `console.{log|warn|error}`. Server-side, those
-  go to Vercel's function logs; client-side, the `instrumentation-client.ts`
+  go to DO App Platform's container logs (visible in the DO dashboard →
+  App → Runtime Logs); client-side, the `instrumentation-client.ts`
   `Sentry.consoleLoggingIntegration({ levels: ['log', 'warn', 'error'] })`
   routes them to Sentry Logs.
 - **Errors don't open a Sentry Issue** through the logger. For an Issue,

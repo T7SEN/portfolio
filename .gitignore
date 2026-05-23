@@ -70,3 +70,9 @@ Thumbs.db
 .vscode/
 *.swp
 *.swo
+
+# Local libSQL DB (Better Auth dev — production uses Turso)
+local.db
+local.db-journal
+local.db-wal
+local.db-shm

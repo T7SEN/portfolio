@@ -33,8 +33,10 @@ The project runs on the bleeding edge. Do not assume v4-era APIs.
   `tailwind.config.js`. Do not create one.
 - **shadcn/ui** (new-york style), components under `src/components/ui/`. Path
   alias is `@/*`. Icon library is `lucide-react`.
-- **NextAuth v5** (`5.0.0-beta.30`) — a beta. Its API differs from v4; verify
-  against v5 docs, not memory.
+- **Better Auth** (`^1.6.x`) + **Drizzle ORM** + **Turso (libSQL)** for auth.
+  Sessions / users / accounts live in a libSQL DB (local `./local.db` for
+  dev; Turso cloud for production). NextAuth is **removed**; do not import it.
+  Verify auth changes against [better-auth.com/docs](https://better-auth.com/docs).
 - **Vercel AI SDK v6** + `@ai-sdk/groq` for the chatbot.
 - **Upstash Redis** + `@upstash/ratelimit` for persistence and limiting.
 - **Sentry**, **Liveblocks**, **Resend**, **GSAP**, **react-hook-form** + **Zod v4**.
@@ -49,7 +51,7 @@ src/
 │   ├── actions/              Server actions ("use server")
 │   ├── api/chat/route.ts     AI chat streaming endpoint
 │   ├── api/og/route.tsx      Dynamic OG image generation
-│   ├── api/auth/[...nextauth] NextAuth handlers
+│   ├── api/auth/[...all]     Better Auth route handler (toNextJsHandler)
 │   └── auth/                 Login popup + success pages
 ├── components/
 │   ├── pages/*-client.tsx    Page logic (client components)
@@ -60,7 +62,9 @@ src/
 ├── hooks/                    use-sfx, use-lanyard, use-achievements, etc.
 ├── lib/                      redis, rate-limit, logger, validators, utils
 ├── providers/                admin-provider, realtime-provider
-├── auth.ts                   NextAuth config + RBAC session callback
+├── lib/auth.ts               Better Auth factory + customSession (isAdmin)
+├── lib/auth-client.ts        Better Auth React client
+├── db/                       Drizzle libSQL client + 4-table schema + migrations
 └── instrumentation*.ts       Sentry init (server/edge/client)
 e2e/                          Playwright specs
 ```
@@ -75,7 +79,7 @@ The `references/` directory expands this file with in-depth, subsystem-by-subsys
 companions. Open the matching one before touching the relevant area.
 
 - [`chat-stream-contract.md`](references/chat-stream-contract.md) — `/api/chat` ↔ `cyber-chat.tsx` wire format
-- [`auth.md`](references/auth.md) — NextAuth v5 wiring + admin RBAC
+- [`auth.md`](references/auth.md) — Better Auth + Drizzle + Turso wiring + admin RBAC via `customSession`
 - [`redis-and-rate-limiting.md`](references/redis-and-rate-limiting.md) — Upstash + `@upstash/ratelimit` + dev fallback
 - [`redis-schema.md`](references/redis-schema.md) — concrete Redis keys, types, and lifecycles
 - [`design-system.md`](references/design-system.md) — theme tokens, fonts, shadcn primitives, copy tone
@@ -144,13 +148,17 @@ built from an inline `KNOWLEDGE_BASE` object and the user's current pathname;
 history is sliced to the last 6 messages. **The client parser is hand-rolled**
 (see Landmines).
 
-**Guestbook + auth** (`src/app/actions/guestbook.ts`, `src/auth.ts`).
-Writes are auth-gated (GitHub / Discord / Google). The write path runs:
-auth check → IP rate limit (`guestbook` type) → Zod message validation →
-`bad-words` + leetspeak-evasion list → HuggingFace `toxic-bert` → Redis
-`lpush`. Admin actions (delete, purge) are gated by `session.user.isAdmin`,
-which is set in the `auth.ts` session callback by matching the user email
-against the `ADMIN_EMAILS` whitelist.
+**Guestbook + auth** (`src/app/actions/guestbook.ts`, `src/lib/auth.ts`).
+Writes are auth-gated (GitHub / Discord / Google via Better Auth). The
+write path runs: `await auth.api.getSession({ headers })` → IP rate limit
+(`guestbook` type) → Zod message validation → `bad-words` +
+leetspeak-evasion list → HuggingFace `toxic-bert` → Redis `lpush`. Admin
+actions (delete, purge) are gated by `session.user.isAdmin`, which is set
+by Better Auth's `customSession` plugin (in `src/lib/auth.ts`) by matching
+the user email against the `ADMIN_EMAILS` whitelist. **The 4 auth tables
+(`user`, `session`, `account`, `verification`) live in Turso/libSQL, not
+in Redis** — see [`redis-schema.md`](references/redis-schema.md) and
+[`auth.md`](references/auth.md).
 
 **Dashboard** (`src/app/actions/dashboard.ts`). `fetchDashboardData()` runs five
 fetchers in parallel: GitHub contributions (GraphQL), code stats, Valorant,
@@ -202,18 +210,24 @@ The Konami code opens a Snake game, dynamically imported with `ssr: false`.
 
 ## Environment variables
 
-NextAuth v5 auto-reads provider credentials, and `@ai-sdk/groq` auto-reads
-`GROQ_API_KEY` — there is no explicit wiring in code, so a missing variable
-fails silently or at runtime.
+Better Auth needs OAuth credentials passed explicitly in `src/lib/auth.ts`
+(not auto-read), and `@ai-sdk/groq` auto-reads `GROQ_API_KEY` — a missing
+variable fails at request time, not boot time. Better Auth itself refuses
+to start without `BETTER_AUTH_SECRET`.
 
 ```
-# Auth (NextAuth v5 auto-detected)
-AUTH_SECRET
-AUTH_GITHUB_ID / AUTH_GITHUB_SECRET
-AUTH_DISCORD_ID / AUTH_DISCORD_SECRET
-AUTH_GOOGLE_ID / AUTH_GOOGLE_SECRET
-ADMIN_EMAILS            Comma-separated admin whitelist
-ADMIN_SECRET            Override code for verifyAdminSecret
+# Auth (Better Auth — credentials passed explicitly in src/lib/auth.ts)
+BETTER_AUTH_SECRET                  openssl rand -base64 32
+BETTER_AUTH_URL                     Canonical site URL (https://t7sen.com prod)
+GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET
+DISCORD_CLIENT_ID / DISCORD_CLIENT_SECRET
+GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET
+ADMIN_EMAILS                        Comma-separated admin whitelist
+ADMIN_SECRET                        Override code for verifyAdminSecret
+
+# Auth database (Turso / libSQL — local dev uses ./local.db)
+TURSO_DATABASE_URL                  libsql://<db>.turso.io
+TURSO_AUTH_TOKEN
 
 # Data / services
 UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
@@ -282,9 +296,13 @@ These are non-obvious failure modes. Several are easy to break with no error.
 6. **Sound needs a user gesture.** Do not expect `play()` to work before first
    interaction — the `AudioContext` initializes lazily by design.
 
-7. **NextAuth is a beta.** Provider config in `auth.ts` is intentionally minimal
-   and relies on auto-detected `AUTH_*` env vars. Verify any auth change against
-   v5 documentation.
+7. **Better Auth + Turso/libSQL is the auth stack.** The factory in
+   `src/lib/auth.ts` uses `drizzleAdapter` against `src/db/schema.ts` (4
+   tables: `user`, `session`, `account`, `verification`). Sessions live in
+   Turso (or local `./local.db` in dev), not Redis. The `customSession`
+   plugin injects `isAdmin` from `ADMIN_EMAILS`. Don't import `next-auth`
+   anywhere — it's removed. Schema changes go through `pnpm exec
+drizzle-kit generate` + `migrate`.
 
 8. **Tailwind v4 has no JS config.** Theme changes go in `globals.css`. Do not
    add `tailwind.config.js`.

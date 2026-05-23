@@ -101,26 +101,30 @@ breaks the future light-mode pass.
 
 ## Auth
 
-### ❌ `next-auth` v4 surface — `[...nextauth].ts` route, `getServerSession`, `authOptions`, `NextAuthOptions`, `useSession({ required: true })`, `@auth/drizzle-adapter`
+### ❌ `next-auth` / `@auth/*` at any version — `[...nextauth].ts` route, `getServerSession`, `authOptions`, `NextAuthOptions`, `useSession` / `signIn` / `signOut` from `next-auth/react`, `SessionProvider`, `@auth/drizzle-adapter`
 
-This project is on **`next-auth@5.0.0-beta.30`**. The v5 destructure
-`(handlers, auth, signIn, signOut)` from
-[`src/auth.ts`](../src/auth.ts) is the API. Verify any auth change
-against [authjs.dev v5 docs](https://authjs.dev) — column names,
-session model, route handler, and adapter contract differ from v4.
+**NextAuth has been removed from this project.** The auth stack is
+**Better Auth + Drizzle + Turso (libSQL)**. Importing any `next-auth` or
+`@auth/*` package will fail at the package boundary (the dep no longer
+exists in `package.json`).
 
 **Use** the patterns in [`auth.md`](./auth.md):
 
-- `import { auth } from '@/auth'` for server-side session reads
-- `signIn(provider)` / `signOut()` from `@/auth` (or `@/app/actions/auth-actions`)
-- `useSession` from `next-auth/react` only inside `AdminProvider`
-  (which mounts `SessionProvider`)
+- `import { auth } from "@/lib/auth"` for the server-side Better Auth
+  instance
+- `await auth.api.getSession({ headers: await headers() })` to read the
+  session in a server action / route handler / page
+- `import { authClient, useSession, signIn, signOut } from "@/lib/auth-client"`
+  on the client (no `SessionProvider` wrapper needed)
+- Admin actions re-check `session?.user?.isAdmin` server-side; `isAdmin`
+  is injected by the `customSession` plugin from `ADMIN_EMAILS`
 
-### ❌ Adding a fourth provider without env
+### ❌ Adding a fourth OAuth provider without env vars + callback URL
 
-NextAuth v5 auto-reads `AUTH_<PROVIDER>_ID` / `AUTH_<PROVIDER>_SECRET`.
-Adding a new provider means adding both env vars AND extending
-`src/auth.ts` with the `<Provider>` import.
+Better Auth needs `<PROVIDER>_CLIENT_ID` / `<PROVIDER>_CLIENT_SECRET`
+passed explicitly to `socialProviders.<provider>` in `src/lib/auth.ts`,
+**and** the OAuth provider's developer console needs the callback URL
+`${BETTER_AUTH_URL}/api/auth/callback/<provider>` registered.
 
 ### ❌ Hardcoding admin emails in source
 
@@ -360,7 +364,7 @@ silently disables Sentry server-side; client side still works because
 ### ❌ Removing `eslint-disable @typescript-eslint/no-unused-vars` without fixing the unused vars
 
 Several files (`chat`/route.ts`, `cyber-chat.tsx`, `guestbook.ts`,
-`dashboard.ts`, `github.ts`, `next-auth.d.ts`) have top-level
+`dashboard.ts`, `github.ts`) have top-level
 `eslint-disable`that masks real unused vars. Removing the disable
 without renaming to`\_<name>` or removing the symbol re-introduces a
 lint failure. Each disable is documented in the relevant reference doc
@@ -388,8 +392,9 @@ Before `pnpm add <thing>`, ask:
 4. **Does it pull in heavy peers?** `react-three-fiber` etc. that
    could double the bundle.
 5. **Is there an existing alternative already in the stack?** GSAP for
-   motion, Redis for state, NextAuth for auth, Zod for validation,
-   Sentry for observability.
+   motion, Redis for application state, Turso/libSQL via Drizzle for
+   relational data (auth), Better Auth for sessions / OAuth, Zod for
+   validation, Sentry for observability.
 
 The stack lock is removed — versions can move — but the substitution
 discipline above is permanent.

@@ -4,8 +4,10 @@ import * as React from "react";
 import { useRef, useEffect, useState, useMemo } from "react";
 import { useActionState } from "react";
 import Image from "next/image";
-import { User } from "next-auth";
-import { signOut, useSession } from "next-auth/react";
+import { signOut, useSession } from "@/lib/auth-client";
+import type { Session } from "@/lib/auth";
+
+type SessionUser = Session["user"];
 import { useRouter } from "next/navigation";
 import { signGuestbook, type GuestbookState } from "@/app/actions/guestbook";
 import { Button } from "@/components/ui/button";
@@ -21,14 +23,18 @@ const initialState: GuestbookState = {
   message: "",
 };
 
-export function GuestbookForm({ user: serverUser }: { user?: User | null }) {
+export function GuestbookForm({
+  user: serverUser,
+}: {
+  user?: SessionUser | null;
+}) {
   const formRef = useRef<HTMLFormElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const { play } = useSfx();
   const router = useRouter();
 
-  // 1. CLIENT SOURCE OF TRUTH
-  const { data: session, status, update } = useSession();
+  // 1. CLIENT SOURCE OF TRUTH (Better Auth)
+  const { data: session, isPending: sessionPending, refetch } = useSession();
   const [charCount, setCharCount] = useState(0);
 
   // Animation States
@@ -43,9 +49,9 @@ export function GuestbookForm({ user: serverUser }: { user?: User | null }) {
   );
 
   const effectiveUser = useMemo(() => {
-    if (status === "loading") return serverUser;
+    if (sessionPending) return serverUser;
     return session?.user ?? null;
-  }, [status, session, serverUser]);
+  }, [sessionPending, session, serverUser]);
 
   // --- 3D TILT LOGIC ---
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -136,21 +142,21 @@ export function GuestbookForm({ user: serverUser }: { user?: User | null }) {
       if (event.origin !== window.location.origin) return;
       if (event.data?.type === "AUTH_SUCCESS") {
         play("on");
-        await update();
+        await refetch();
         router.refresh();
         setIsAuthenticating(null);
       }
     };
     window.addEventListener("message", handleMessage);
     return () => window.removeEventListener("message", handleMessage);
-  }, [play, router, update]);
+  }, [play, router, refetch]);
 
   // Optimistic Logout
   const handleLogout = async () => {
     play("click");
     setIsLoggingOut(true);
     await new Promise((resolve) => setTimeout(resolve, 600));
-    await signOut({ redirect: false });
+    await signOut();
     router.refresh();
     setIsLoggingOut(false);
   };

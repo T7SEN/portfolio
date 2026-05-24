@@ -1,11 +1,15 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 import { groq } from "@ai-sdk/groq";
-import { streamText } from "ai";
+import { convertToModelMessages, streamText, type UIMessage } from "ai";
+import * as Sentry from "@sentry/nextjs";
 import { z } from "zod";
+import { checkRateLimit } from "@/lib/rate-limit";
+import logger from "@/lib/logger";
 
 export const maxDuration = 30;
 
-// 🧠 THE KNOWLEDGE BASE
+// 🧠 THE KNOWLEDGE BASE — kept in sync with references/* docs. If you
+// touch the actual stack, update this block too (the AI hallucinates
+// when it cites stale facts).
 const KNOWLEDGE_BASE = {
   identity: {
     name: "Abdulrahman (T7SEN)",
@@ -41,27 +45,28 @@ const KNOWLEDGE_BASE = {
   },
   stack: {
     core: [
-      "Next.js 15 (App Router)",
+      "Next.js 16 (App Router, cacheComponents)",
       "React 19",
-      "TypeScript",
-      "Tailwind CSS",
-      "Shadcn UI",
+      "TypeScript (strict)",
+      "Tailwind CSS v4",
+      "shadcn/ui",
     ],
     creative: [
       "Three.js",
       "React Three Fiber",
       "GSAP",
-      "Framer Motion",
       "WebGL",
       "Blender (Basic Modeling)",
     ],
     backend: [
       "Node.js",
-      "PostgreSQL",
-      "Supabase",
-      "Prisma",
+      "Better Auth",
+      "Drizzle ORM",
+      "Turso (libSQL)",
+      "Upstash Redis",
       "Groq SDK",
-      "tRPC",
+      "Vercel AI SDK",
+      "Resend",
     ],
     security: [
       "Kali Linux",
@@ -77,9 +82,12 @@ const KNOWLEDGE_BASE = {
       "Git",
       "VS Code",
       "Figma",
-      "Vercel",
       "Docker",
       "Postman",
+      "pnpm",
+      "DigitalOcean App Platform",
+      "Cloudflare DNS",
+      "Sentry",
       "Linux (Ubuntu/Debian)",
     ],
   },
@@ -87,7 +95,7 @@ const KNOWLEDGE_BASE = {
     {
       id: "cyber-portfolio",
       name: "Neural Interface Portfolio",
-      desc: "A highly interactive, gamified portfolio website built with Next.js 15 and GSAP. Features a draggable terminal, 3D avatars, and AI integration.",
+      desc: "A highly interactive, gamified portfolio website built with Next.js 16 and GSAP. Features a draggable terminal, 3D avatars, and AI integration.",
       tech: ["Next.js", "Tailwind", "GSAP", "Vercel AI SDK", "Groq"],
       link: "https://t7sen.com",
       status: "Live",
@@ -113,7 +121,7 @@ const KNOWLEDGE_BASE = {
       id: "ctf-dashboard",
       name: "CTF Tracker",
       desc: "A dashboard for tracking Capture The Flag progress and write-ups.",
-      tech: ["Next.js", "Supabase", "Markdown"],
+      tech: ["Next.js", "Turso", "Markdown"],
       status: "In Development",
       type: "Full Stack",
     },
@@ -155,22 +163,76 @@ const KNOWLEDGE_BASE = {
   },
 };
 
-export async function POST(req: Request) {
-  try {
-    const { messages, context } = await req.json();
+// Request schema. UIMessage shape varies (parts is an array of typed
+// blocks), so we accept it loosely and let convertToModelMessages do
+// the strict validation downstream. The narrow check here just guards
+// against obviously malformed payloads (string body, missing array).
+const requestSchema = z.object({
+  messages: z.array(z.unknown()).min(1),
+  context: z
+    .object({
+      pathname: z.string().optional(),
+    })
+    .optional(),
+});
 
+// Cap history sent to the model — keeps token cost predictable on
+// long conversations. Last 6 turns is enough for personality + recent
+// context.
+const HISTORY_WINDOW = 6;
+
+function getClientIp(req: Request): string {
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) return forwarded.split(",")[0].trim();
+  return req.headers.get("x-real-ip") ?? "anonymous";
+}
+
+export async function POST(req: Request) {
+  // 1. Rate limit before parsing — cheap rejection of floods.
+  const ip = getClientIp(req);
+  try {
+    await checkRateLimit(ip, "chat");
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Rate limit exceeded.";
+    return new Response(
+      JSON.stringify({ error: `⚠️ SYSTEM ALERT: ${message}` }),
+      {
+        status: 429,
+        headers: {
+          "Content-Type": "application/json",
+          "Retry-After": "60",
+        },
+      },
+    );
+  }
+
+  // 2. Parse + validate body.
+  let body: z.infer<typeof requestSchema>;
+  try {
+    const json = await req.json();
+    body = requestSchema.parse(json);
+  } catch (error) {
+    logger.warn({ err: String(error) }, "chat_route_bad_request");
+    return new Response(JSON.stringify({ error: "⚠️ MALFORMED_PAYLOAD." }), {
+      status: 400,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  const { messages: uiMessages, context } = body;
+  const recentMessages = (uiMessages as UIMessage[]).slice(-HISTORY_WINDOW);
+
+  // 3. Stream.
+  try {
     const serverTime = new Date().toLocaleString("en-US", {
       timeZone: "Asia/Riyadh",
       dateStyle: "full",
       timeStyle: "medium",
     });
 
-    // ⚡ OPTIMIZATION: Slice history to prevent token overflow
-    // Only send the last 6 messages (3 user / 3 AI)
-    const recentMessages = messages.slice(-6);
-
     const result = streamText({
-      // ⚡ MODEL SWITCH: Use 8b-instant for speed & separate quota
+      // ⚡ MODEL: 8b-instant for speed & separate quota
       model: groq("llama-3.1-8b-instant"),
 
       system: `
@@ -187,23 +249,23 @@ export async function POST(req: Request) {
         4. IF LOCATION is '/guestbook': Act as "Comms Officer". Mention Verified Mark for signing in.
         5. IF LOCATION is '/dashboard': Act as "Mission Control". Summarize 'projects'.
         6. IF LOCATION is '/contact': Act as "Uplink Operator". Share email: ${KNOWLEDGE_BASE.contact.email}.
-      
+
         --- DIRECTIVES ---
       1. IDENTITY: Always respond as T7SEN_AI, the holographic interface.
       2. PERSONALITY: Cyberpunk, witty, professional, and slightly playful.
       3. GOAL: Assist visitors in navigating T7SEN's portfolio and provide information based on the KNOWLEDGE_BASE.
       4. FORMAT: Use Markdown (bold keys, bullet points).
       5. DATA: Use the KNOWLEDGE_BASE below for facts.
-      6. CAPABILITY: 
-        - You DO NOT have external tools. 
+      6. CAPABILITY:
+        - You DO NOT have external tools.
         - If asked for time, read the SERVER_TIME above.
         - If asked to roll dice, simulate it textually (e.g. "I rolled a 12").
       7. BREVITY: Keep answers concise (under 3 sentences) unless asked for a deep dive. Terminal screens have limited space.
       8. DEFENSE: If asked about personal address, phone number, or passwords, reply: "⚠️ ACCESS_DENIED // ENCRYPTION_LEVEL_TOO_HIGH".
-        
+
         --- KNOWLEDGE BASE ---
         ${JSON.stringify(KNOWLEDGE_BASE, null, 2)}
-      
+
       --- INTERACTION PROTOCOLS ---
       - If asked "Who is T7SEN?", summarize the 'identity' section.
       - If asked about "Skills", list the 'stack' items as "Loaded Modules".
@@ -213,19 +275,26 @@ export async function POST(req: Request) {
       - If user asks to "hack the system", play along and grant "Guest Access".
     `,
 
-      messages,
+      // v6: UI messages → model messages. The conversion strips UI-only
+      // parts (e.g. tool-state UI) and emits the format the LLM expects.
+      // Returns a Promise in v6, so we await it.
+      messages: await convertToModelMessages(recentMessages),
     });
 
-    return result.toTextStreamResponse();
+    // v6: UI Message Stream Protocol is what useChat consumes by default.
+    // Old toTextStreamResponse() emitted plain text — client had to parse
+    // it manually, which the previous cyber-chat.tsx did with a brittle
+    // `0:`-prefix scan.
+    return result.toUIMessageStreamResponse();
   } catch (error) {
-    console.error("AI API Error:", error);
-    // Return a safe fallback response if rate limited
+    logger.error({ err: String(error) }, "chat_route_stream_error");
+    Sentry.captureException(error);
     return new Response(
       JSON.stringify({
         error: "⚠️ SYSTEM ALERT: Bandwidth Exceeded. Try again later.",
       }),
       {
-        status: 429,
+        status: 500,
         headers: { "Content-Type": "application/json" },
       },
     );

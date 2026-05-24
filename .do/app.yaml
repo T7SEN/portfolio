@@ -88,6 +88,18 @@ services:
       - key: ADMIN_EMAILS
         scope: RUN_AND_BUILD_TIME
         value: a.hitelare2@gmail.com, hitelare2@gmail.com
+      - key: CONTACT_RECIPIENT_EMAIL
+        scope: RUN_AND_BUILD_TIME
+        value: a.hitelare2@gmail.com
+      - key: RESEND_FROM_EMAIL
+        scope: RUN_AND_BUILD_TIME
+        value: Portfolio Contact <onboarding@resend.dev>
+      - key: NEXT_PUBLIC_DISCORD_USER_ID
+        scope: RUN_AND_BUILD_TIME
+        value: "170916597156937728"
+      - key: NEXT_PUBLIC_SENTRY_DSN
+        scope: RUN_AND_BUILD_TIME
+        value: https://1d927523e7a78cfd434339ed1b35883a@o1032877.ingest.us.sentry.io/4510457780633600
     github:
       branch: main
       deploy_on_push: true

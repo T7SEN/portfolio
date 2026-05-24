@@ -63,9 +63,12 @@ changes lint- and type-clean or commits are blocked.
   WebSocket) must be added to the `Content-Security-Policy` in `next.config.ts`,
   and new image hosts also to `images.remotePatterns`. Browsers block omissions
   with only a console error.
-- **The AI chat stream is hand-parsed.** If you change the `/api/chat` response
-  shape, update the parser in `src/components/cyber-chat.tsx` in the same change
-  or the chat silently breaks.
+- **The AI chat uses `useChat` ↔ `toUIMessageStreamResponse()`.** Server in
+  `src/app/api/chat/route.ts`; client in `src/components/cyber-chat.tsx`. The
+  pairing is load-bearing — don't switch the server to `toTextStreamResponse()`
+  (or any other transport) without also moving the client off `useChat`.
+  `useChat` needs a stable `id` because `<CyberChat />` is in the root layout
+  and prerenders into `/_not-found`; `Math.random()` there trips `cacheComponents`.
 - **Realtime degrades gracefully.** The Liveblocks guards in `RealtimeProvider`
   and `ActiveVisitors` must stay — removing them crashes pages when the key is
   unset.

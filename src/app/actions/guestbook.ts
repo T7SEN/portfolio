@@ -95,6 +95,33 @@ filter.addWords(...evasions);
 const normalizeText = (text: string) =>
   text.replace(/[\s.]+/g, "").toLowerCase();
 
+// Provider detection by avatar URL pattern. Pattern matching is more
+// robust than substring `.includes("github")` because:
+//   - `googleusercontent.com` covers lh3/lh4/lh5 variants
+//   - Anchored regex avoids false positives when "github" or "discord"
+//     appears in an unrelated path segment
+// SKILL.md "Known tech debt → Guestbook provider detection" still
+// applies as a guidepost; the only fully-correct alternative is
+// querying the Better Auth `account` table per write, which doesn't
+// disambiguate multi-provider users any better than the avatar host.
+const PROVIDER_AVATAR_PATTERNS: Array<
+  [RegExp, "github" | "discord" | "google"]
+> = [
+  [/avatars\.githubusercontent\.com/i, "github"],
+  [/cdn\.discordapp\.com/i, "discord"],
+  [/googleusercontent\.com/i, "google"],
+];
+
+function detectProvider(
+  avatar: string | undefined,
+): "github" | "discord" | "google" | undefined {
+  if (!avatar) return undefined;
+  for (const [pattern, provider] of PROVIDER_AVATAR_PATTERNS) {
+    if (pattern.test(avatar)) return provider;
+  }
+  return undefined;
+}
+
 // --- Types ---
 interface HuggingFaceScore {
   label: string;
@@ -181,11 +208,7 @@ export async function signGuestbook(
   const name = session.user.name || "Verified User";
   const avatar = session.user.image || undefined;
   const verified = true; // Always true since we require auth
-  let provider: "github" | "discord" | "google" | undefined;
-
-  if (avatar?.includes("github")) provider = "github";
-  else if (avatar?.includes("discord")) provider = "discord";
-  else if (avatar?.includes("google")) provider = "google";
+  const provider = detectProvider(avatar);
 
   // 3. Rate Limit
   const headerStore = await headers();
@@ -234,9 +257,20 @@ export async function signGuestbook(
     logger.error({ error }, "Moderation error");
   }
 
-  // 6. AI Safety Filter (Toxic-BERT)
+  // 6. AI Safety Filter (Toxic-BERT) — best-effort, NOT a hard gate.
+  //
+  // The local `bad-words` filter above is the synchronous gate. This
+  // HF call is a secondary AI-grade check that only blocks on confirmed
+  // toxicity (score > 0.7). On timeout (3 s) or network error we fail
+  // OPEN — site reliability shouldn't be coupled to HuggingFace
+  // availability, and HF is documented as "Optional" in SKILL.md.
+  //
+  // If toxicity slips past the local filter and HF is down, an admin
+  // can still delete the entry via `deleteGuestbookEntry`.
   const hfToken = process.env.HUGGING_FACE_TOKEN;
   if (hfToken) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 3000);
     try {
       const response = await fetch(
         "https://router.huggingface.co/hf-inference/models/unitary/toxic-bert",
@@ -247,6 +281,7 @@ export async function signGuestbook(
             "Content-Type": "application/json",
           },
           body: JSON.stringify({ inputs: `${name}: ${message}` }),
+          signal: controller.signal,
         },
       );
 
@@ -262,18 +297,29 @@ export async function signGuestbook(
             timestamp: Date.now(),
           };
         }
+      } else {
+        // Non-OK from HF (rate limit, model cold start, etc.) — log
+        // and continue. The user shouldn't be penalized for HF
+        // throttling.
+        logger.warn(
+          { status: response.status },
+          "HF moderation returned non-OK; failing open",
+        );
       }
     } catch (error) {
-      logger.error({ error }, "AI Moderation network error");
-      // Fail safe: reject if we can't verify safety?
-      // Or fail open? Usually fail open for reliability, but fail safe for strictness.
-      // Currently failing open (logging error but continuing would be default unless we return)
-      // Let's return error to be strict since you want "bot proofing".
-      return {
-        success: false,
-        message: "Safety verification unavailable. Try again.",
-        timestamp: Date.now(),
-      };
+      const wasTimeout = error instanceof Error && error.name === "AbortError";
+      logger.warn(
+        { wasTimeout, err: String(error) },
+        wasTimeout
+          ? "HF moderation timed out after 3s; failing open"
+          : "HF moderation network error; failing open",
+      );
+      // Capture network errors (not timeouts — those are expected
+      // under HF cold-start latency) so they're visible in Sentry
+      // trends without spamming alerts.
+      if (!wasTimeout) Sentry.captureException(error);
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

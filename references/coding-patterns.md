@@ -318,7 +318,7 @@ The action's validation order matters. Pattern from
 3. Rate limit          — IP-based
 4. Zod validate        — schema check on form data
 5. Profanity filter    — bad-words + normalized text
-6. HuggingFace toxic-bert — AI moderation (fail-safe: reject on network error)
+6. HuggingFace toxic-bert — AI moderation, best-effort (3 s timeout, fails open on network error / timeout / non-OK; blocks only on confirmed toxicity score > 0.7)
 7. Persist             — Redis lpush
 8. revalidateTag       — bust cache
 ```
@@ -329,7 +329,9 @@ Each step returns early with a structured `GuestbookState` on failure
 trigger re-renders even when the message is the same as last time).
 
 The order matters: cheap rejections (auth, rate-limit) come first;
-expensive ones (network fetch to HuggingFace) come last.
+expensive ones (network fetch to HuggingFace) come last. The HF call
+specifically is wrapped in an `AbortController` 3 s timeout so it can't
+delay a guestbook write more than 3 s even when HF is degraded.
 
 ---
 

@@ -51,7 +51,9 @@ import { useLanyard } from "@/hooks/use-lanyard";
 import { cn } from "@/lib/utils";
 
 // --- CONSTANTS ---
-const DISCORD_ID = "170916597156937728";
+// Lanyard user ID (distinct from DISCORD_CLIENT_ID for OAuth). When
+// unset, the profile footer renders a skeleton instead of fetching.
+const DISCORD_ID = process.env.NEXT_PUBLIC_DISCORD_USER_ID ?? "";
 
 // --- TYPES ---
 type CommandId = string;

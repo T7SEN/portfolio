@@ -145,8 +145,10 @@ loading state.
 **AI chat** (`src/app/api/chat/route.ts` + `src/components/cyber-chat.tsx`).
 Streams from Groq `llama-3.1-8b-instant` via `streamText`. The system prompt is
 built from an inline `KNOWLEDGE_BASE` object and the user's current pathname;
-history is sliced to the last 6 messages. **The client parser is hand-rolled**
-(see Landmines).
+history is sliced to the last 6 messages server-side. The server returns
+`toUIMessageStreamResponse()`; the client uses `useChat` from `@ai-sdk/react`
+(stable `id` required — see Landmines #1). Rate-limited via the `chat` bucket
+(10 req/min).
 
 **Guestbook + auth** (`src/app/actions/guestbook.ts`, `src/lib/auth.ts`).
 Writes are auth-gated (GitHub / Discord / Google via Better Auth). The
@@ -270,10 +272,14 @@ blocked.
 
 These are non-obvious failure modes. Several are easy to break with no error.
 
-1. **The AI chat stream is hand-parsed.** `cyber-chat.tsx` manually reads the
-   response body and looks for a `0:` line prefix. If you change the `/api/chat`
-   response shape (or migrate to `useChat`), you **must** update that parser in
-   the same change, or the chat silently renders nothing.
+1. **The AI chat needs a stable `useChat` id.** `<CyberChat />` is mounted in
+   the root layout and therefore renders into every prerendered page —
+   including `/_not-found`. `useChat` without an explicit `id` falls back to
+   `Math.random()`, which Next 16's `cacheComponents: true` flags as a
+   non-deterministic prerender side effect. The hook is called with
+   `id: "cyber-chat-default"` — don't remove that. Also: the wire format
+   coupling between `toUIMessageStreamResponse()` (server) and `useChat`
+   (client) is owned by the AI SDK — don't swap one side without the other.
 
 2. **CSP is strict.** `next.config.ts` defines a `Content-Security-Policy`. Any
    new external domain — for a script, image, font, or `connect`/`fetch`/WS —
@@ -312,17 +318,31 @@ drizzle-kit generate` + `migrate`.
 Distinguish deliberate decisions from genuine bugs so you neither "fix" the
 former nor ignore the latter.
 
-- **Hand-rolled chat streaming** — works, but fragile; `@ai-sdk/react` is
-  installed and unused. A migration to `useChat` is a known improvement.
-- **Hardcoded values** — the contact recipient email, the Resend `from` address
-  (`onboarding@resend.dev`, a sandbox sender), the Discord ID, and the Sentry
-  DSN are inlined. Prefer environment variables for any new such value.
-- **Sentry `tracesSampleRate: 1`** — 100% sampling; expensive in production.
-- **Guestbook provider detection** by substring-matching the avatar URL — works
-  but brittle.
-- **HuggingFace moderation blocks the guestbook write path** and rejects on
-  network error ("fail safe"). This is a deliberate strictness choice; note it
-  before changing.
+- **Env-driven defaults are graceful-degrade.** `NEXT_PUBLIC_SENTRY_DSN`,
+  `NEXT_PUBLIC_DISCORD_USER_ID`, `CONTACT_RECIPIENT_EMAIL`, and
+  `RESEND_FROM_EMAIL` all have safe-fallback behavior when unset
+  (Sentry self-disables, Discord widgets render nothing, contact form saves
+  to Redis inbox without emailing, Resend uses the sandbox sender). Add new
+  external values via env, not inline constants.
+- **Guestbook provider detection** by regex-matching the avatar URL host
+  (GitHub / Discord CDN / Google user-content). More robust than the prior
+  `.includes()` substring check, but still inherently a guess: a user with
+  multiple linked providers (account linking is enabled) has one avatar
+  belonging to whichever provider's image they're currently using, and
+  that's what the icon reflects. There's no cleaner alternative — Better
+  Auth's `account` table doesn't track which provider is "primary".
+- **HuggingFace moderation is best-effort, not a hard gate.** The local
+  `bad-words` + leetspeak filter is the synchronous gate; the HF toxic-bert
+  call runs after with a 3 s timeout and **fails open** on timeout / network
+  error / non-OK response. HF only blocks on confirmed toxicity (score > 0.7).
+  Don't reintroduce fail-closed without an explicit reliability discussion —
+  site availability shouldn't be coupled to a third-party inference endpoint.
+- **CSP still allows `'unsafe-inline'` for `script-src` and `style-src`.**
+  `'unsafe-eval'` was dropped (current stack doesn't need it). Removing
+  `'unsafe-inline'` requires per-request nonces via middleware, which would
+  force every page off static prerender — incompatible with
+  `cacheComponents: true`. Don't add `'unsafe-eval'` back without checking
+  whether a nonce/hash would work first.
 
 ## Before you finish a change
 
@@ -336,6 +356,6 @@ former nor ignore the latter.
 - New external domain → updated CSP (and `remotePatterns` for images).
 - New cached read or write → correct `cacheTag` / `revalidateTag` wiring.
 - New user-facing write → rate limited and Sentry-instrumented.
-- Touched `/api/chat` response shape → updated `cyber-chat.tsx` parser.
+- Touched `/api/chat` response shape → kept the `useChat` ↔ `toUIMessageStreamResponse()` pairing intact.
 - Add or update tests where behavior changed (Vitest for logic, Playwright for
   flows); accessibility specs run `axe` against the main pages.

@@ -60,9 +60,11 @@ brittle but working.
 
 **Lifecycle:**
 
-- `signGuestbook` LPUSHes after auth + rate-limit + Zod + `bad-words` +
-  HuggingFace moderation succeed (see
-  [`coding-patterns.md`](./coding-patterns.md)).
+- `signGuestbook` LPUSHes after auth + rate-limit + Zod + `bad-words`
+  succeed. HuggingFace moderation runs as a best-effort secondary check
+  (3 s timeout, fails open on network/timeout errors, blocks only on
+  confirmed toxicity score > 0.7). See
+  [`coding-patterns.md`](./coding-patterns.md).
 - `deleteGuestbookEntry` removes a single entry via
   `lrem('guestbook', 1, JSON.stringify(cleanEntry))`. The serialized JSON
   must match byte-for-byte — `sanitizeEntry` strips undefined fields so

@@ -12,6 +12,13 @@ import { unlockServerAchievement } from "@/app/actions/achievements";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// Env-driven sender/recipient. Defaults are the Resend sandbox sender
+// and the maintainer's address — keep these in env so per-environment
+// inboxes (staging vs. prod) are a config change, not a deploy.
+const FROM_EMAIL =
+  process.env.RESEND_FROM_EMAIL ?? "Portfolio Contact <onboarding@resend.dev>";
+const CONTACT_RECIPIENT = process.env.CONTACT_RECIPIENT_EMAIL;
+
 export interface ContactState {
   success: boolean;
   message?: string;
@@ -90,10 +97,27 @@ export async function sendMessage(
       status: "received",
     });
 
+    // Fail soft if CONTACT_RECIPIENT_EMAIL is unset — the message is
+    // already in Redis (the inbox archive), so the user's transmission
+    // isn't lost. Surface a clear server log so the misconfig is
+    // diagnosable.
+    if (!CONTACT_RECIPIENT) {
+      logger.error(
+        { email },
+        "CONTACT_RECIPIENT_EMAIL is unset; message saved to inbox but not emailed",
+      );
+      return {
+        success: true,
+        message:
+          "Transmission saved to archive. (Operator inbox not configured — message stored, no email sent.)",
+        timestamp: Date.now(),
+      };
+    }
+
     // Send Email
     const data = await resend.emails.send({
-      from: "Portfolio Contact <onboarding@resend.dev>",
-      to: "a.hitelare2@gmail.com",
+      from: FROM_EMAIL,
+      to: CONTACT_RECIPIENT,
       replyTo: email,
       subject: `New Transmission from ${name}`,
       react: ContactTemplate({ name, email, message }),

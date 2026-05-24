@@ -1,7 +1,6 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import {
   Send,
   Cpu,
@@ -24,6 +23,8 @@ import ReactMarkdown from "react-markdown";
 import { usePathname } from "next/navigation";
 import { HackerText } from "@/components/ui/hacker-text";
 import * as Sentry from "@sentry/nextjs";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport, type UIMessage } from "ai";
 
 // --- TYPES ---
 interface SpeechRecognitionResult {
@@ -67,18 +68,34 @@ interface IWindow extends Window {
   webkitSpeechRecognition?: { new (): SpeechRecognition };
 }
 
-interface Message {
-  id: string;
-  role: "user" | "assistant";
-  content: string;
-}
-
 const SUGGESTED_ACTIONS = [
   { label: "Identify", action: "Who are you?" },
   { label: "Tech Stack", action: "What is your stack?" },
   { label: "Projects", action: "Show me projects." },
   { label: "Contact", action: "How do I reach T7SEN?" },
 ];
+
+// Persist under a versioned key — the v6 UIMessage shape ({id, role,
+// parts: [{type, text}]}) is incompatible with the old {id, role,
+// content} shape, so we deliberately don't migrate.
+const HISTORY_KEY = "t7sen_chat_history_v2";
+
+// Pull plain text out of a UIMessage's parts array. Used for TTS,
+// ReactMarkdown rendering, and the message bubble fallback.
+function messageText(m: UIMessage): string {
+  return m.parts
+    .filter((p): p is { type: "text"; text: string } => p.type === "text")
+    .map((p) => p.text)
+    .join("");
+}
+
+function makeTextMessage(role: "user" | "assistant", text: string): UIMessage {
+  return {
+    id: `${role}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role,
+    parts: [{ type: "text", text }],
+  };
+}
 
 export function CyberChat() {
   const pathname = usePathname();
@@ -87,9 +104,7 @@ export function CyberChat() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
 
   // ⚡ VOICE INPUT STATE
   const [isListening, setIsListening] = useState(false);
@@ -98,13 +113,76 @@ export function CyberChat() {
 
   // ⚡ AUDIO OUTPUT STATE (TTS)
   const [isMuted, setIsMuted] = useState(false);
+  const isMutedRef = useRef(isMuted);
+  useEffect(() => {
+    isMutedRef.current = isMuted;
+  }, [isMuted]);
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const voicesRef = useRef<SpeechSynthesisVoice[]>([]);
+  useEffect(() => {
+    voicesRef.current = voices;
+  }, [voices]);
 
   // ⚡ PERSISTENCE STATE
   const [isClient, setIsClient] = useState(false);
 
   // HACK MODE
   const [hackMode, setHackMode] = useState(false);
+
+  // ⚡ TTS FUNCTION — reads from refs so the useChat onFinish closure
+  // doesn't go stale across renders.
+  const speak = useCallback((text: string) => {
+    if (isMutedRef.current || typeof window === "undefined") return;
+
+    // Clean text (remove Markdown symbols)
+    const cleanText = text.replace(/[*#`]/g, "");
+
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+
+    const preferredVoice = voicesRef.current.find(
+      (v) =>
+        v.name.includes("Google US English") ||
+        v.name.includes("Zira") ||
+        v.name.includes("Samantha"),
+    );
+
+    if (preferredVoice) utterance.voice = preferredVoice;
+
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    utterance.volume = 0.8;
+
+    window.speechSynthesis.speak(utterance);
+  }, []);
+
+  // Memoize the transport so useChat doesn't tear it down per render.
+  const transport = useMemo(
+    () => new DefaultChatTransport({ api: "/api/chat" }),
+    [],
+  );
+
+  const { messages, setMessages, sendMessage, status, stop } = useChat({
+    // Stable id avoids Math.random() during SSR, which trips Next 16's
+    // cacheComponents prerender guard (Cyber Chat is mounted in the
+    // root layout and therefore renders into /_not-found as well).
+    id: "cyber-chat-default",
+    transport,
+    onFinish: ({ message }) => {
+      play("success");
+      speak(messageText(message));
+    },
+    onError: (err) => {
+      console.error(err);
+      Sentry.captureException(err);
+      setMessages((prev) => [
+        ...prev,
+        makeTextMessage("assistant", "ERR: CONNECTION_LOST"),
+      ]);
+    },
+  });
+
+  const isLoading = status === "submitted" || status === "streaming";
 
   // 1. LOAD VOICES
   useEffect(() => {
@@ -122,54 +200,40 @@ export function CyberChat() {
   // 2. LOAD HISTORY FROM STORAGE
   useEffect(() => {
     setIsClient(true);
-    const saved = localStorage.getItem("t7sen_chat_history");
+    const saved = localStorage.getItem(HISTORY_KEY);
     if (saved) {
       try {
-        setMessages(JSON.parse(saved));
+        const parsed = JSON.parse(saved) as UIMessage[];
+        // Defensive: only hydrate if shape matches.
+        if (
+          Array.isArray(parsed) &&
+          parsed.every((m) => Array.isArray(m.parts))
+        ) {
+          setMessages(parsed);
+        }
       } catch (e) {
         console.error("Failed to load chat history", e);
       }
     }
+    // setMessages is stable from useChat; intentionally omit from deps
+    // to mirror the original mount-only effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 3. SAVE HISTORY TO STORAGE
+  // 3. SAVE HISTORY TO STORAGE — fires on every message tick, including
+  // mid-stream chunks. Cheap (a few KB JSON.stringify) and means a
+  // refresh during streaming still saves what we had.
   useEffect(() => {
-    if (isClient && messages.length > 0) {
-      localStorage.setItem("t7sen_chat_history", JSON.stringify(messages));
-    } else if (isClient && messages.length === 0) {
-      localStorage.removeItem("t7sen_chat_history");
+    if (!isClient) return;
+    if (messages.length > 0) {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(messages));
+    } else {
+      localStorage.removeItem(HISTORY_KEY);
     }
   }, [messages, isClient]);
 
-  // ⚡ TTS FUNCTION
-  const speak = (text: string) => {
-    if (isMuted || typeof window === "undefined") return;
-
-    // Clean text (remove Markdown symbols)
-    const cleanText = text.replace(/[*#`]/g, "");
-
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-
-    // Pick a good voice
-    const preferredVoice = voices.find(
-      (v) =>
-        v.name.includes("Google US English") ||
-        v.name.includes("Zira") ||
-        v.name.includes("Samantha"),
-    );
-
-    if (preferredVoice) utterance.voice = preferredVoice;
-
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-    utterance.volume = 0.8;
-
-    window.speechSynthesis.speak(utterance);
-  };
-
+  // 4. BOOT MESSAGE — only when chat opens with empty history.
   useEffect(() => {
-    // Only show boot message if NO history exists
     if (isOpen && messages.length === 0) {
       let bootText = "SYSTEM_ONLINE... WAITING_FOR_INPUT.";
       if (pathname === "/guestbook")
@@ -181,8 +245,16 @@ export function CyberChat() {
       else if (pathname === "/contact")
         bootText = "UPLINK_OPERATOR_ACTIVE. READY_FOR_COMMUNICATION.";
 
-      setMessages([{ id: "boot", role: "assistant", content: bootText }]);
+      setMessages([
+        {
+          id: "boot",
+          role: "assistant",
+          parts: [{ type: "text", text: bootText }],
+        },
+      ]);
     }
+    // setMessages is stable; pathname/isOpen drive boot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen, messages.length, pathname]);
 
   // --- VOICE INPUT TOGGLE ---
@@ -216,7 +288,7 @@ export function CyberChat() {
           audio: true,
         });
         stream.getTracks().forEach((track) => track.stop());
-      } catch (permErr: unknown) {
+      } catch {
         alert("Microphone access blocked.");
         setIsVoiceLoading(false);
         return;
@@ -253,7 +325,7 @@ export function CyberChat() {
 
       recognitionRef.current = recognition;
       recognition.start();
-    } catch (error) {
+    } catch {
       setIsVoiceLoading(false);
       alert("Voice failed to initialize.");
     }
@@ -298,149 +370,73 @@ export function CyberChat() {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [messages]);
 
-  const sendMessage = async (text: string) => {
+  // Handle a submit — either intercept slash commands (synthetic
+  // messages, no network) or delegate to useChat.sendMessage.
+  const submitText = (text: string) => {
     if (!text.trim() || isLoading) return;
 
     play("click");
     setInput("");
-    setIsLoading(true);
-
     window.speechSynthesis.cancel(); // Stop current speech
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: "user",
-      content: text,
-    };
-    setMessages((prev) => [...prev, userMessage]);
 
     if (text.startsWith("/")) {
       const command = text.toLowerCase().trim();
-      let response = "";
+
+      // /clear is destructive — wipe and bail.
+      if (command === "/clear") {
+        setMessages([]);
+        play("success");
+        return;
+      }
+
+      // Echo the user command, then schedule a synthetic assistant
+      // reply on a short delay (matches the original 500ms cadence).
+      const userMsg = makeTextMessage("user", text);
+      setMessages((prev) => [...prev, userMsg]);
 
       setTimeout(() => {
-        if (command === "/clear") {
-          setMessages([]);
-          play("success");
-          setIsLoading(false);
-          return;
-        } else if (command === "/hack") {
+        let response = "";
+        if (command === "/hack") {
           setHackMode(true);
           response =
             "⚠️ INTRUSION DETECTED. BYPASSING FIREWALL... ACCESS GRANTED.";
           play("error");
           setTimeout(() => setHackMode(false), 5000);
-        } else if (command === "/help")
+        } else if (command === "/help") {
           response =
             "**COMMANDS:**\n- `/clear`: Purge Logs\n- `/time`: Local Time";
-        else if (command === "/time")
+        } else if (command === "/time") {
           response = `**LOCAL_TIME:** ${new Date().toLocaleTimeString()}`;
-        else response = `⚠️ **ERR:** UNKNOWN_COMMAND "${text}".`;
+        } else {
+          response = `⚠️ **ERR:** UNKNOWN_COMMAND "${text}".`;
+        }
 
-        const botMsg = {
-          id: (Date.now() + 1).toString(),
-          role: "assistant" as const,
-          content: response,
-        };
+        const botMsg = makeTextMessage("assistant", response);
         setMessages((prev) => [...prev, botMsg]);
 
         if (command !== "/hack") speak(response);
-
         play("hover");
-        setIsLoading(false);
       }, 500);
       return;
     }
 
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messages: [...messages, userMessage],
-          context: { pathname },
-        }),
-      });
-
-      if (!response.ok) throw new Error(response.statusText);
-      const botId = (Date.now() + 1).toString();
-      setMessages((prev) => [
-        ...prev,
-        { id: botId, role: "assistant", content: "" },
-      ]);
-
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let botContent = "";
-      let buffer = "";
-
-      if (reader) {
-        const parseLine = (line: string) => {
-          const trimmed = line.trim();
-          if (!trimmed) return;
-          if (trimmed.startsWith("0:")) {
-            try {
-              const jsonStr = trimmed.slice(2);
-              if (jsonStr.startsWith('"')) botContent += JSON.parse(jsonStr);
-              else botContent += jsonStr;
-            } catch (e) {
-              botContent += trimmed.slice(2);
-            }
-          } else {
-            botContent += trimmed;
-          }
-        };
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            if (buffer.trim()) {
-              parseLine(buffer);
-              setMessages((prev) => {
-                const updated = [...prev];
-                updated[updated.length - 1].content = botContent;
-                return updated;
-              });
-            }
-            break;
-          }
-          const chunk = decoder.decode(value, { stream: true });
-          buffer += chunk;
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-          for (const line of lines) parseLine(line);
-          setMessages((prev) => {
-            const updated = [...prev];
-            updated[updated.length - 1].content = botContent;
-            return updated;
-          });
-        }
-      }
-      play("success");
-
-      // ⚡ SPEAK RESPONSE
-      speak(botContent);
-    } catch (error) {
-      console.error(error);
-      Sentry.captureException(error);
-      setMessages((prev) => [
-        ...prev,
-        { id: "error", role: "assistant", content: "ERR: CONNECTION_LOST" },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
+    // Real model call. Pathname context flows through the per-call
+    // body — the server route reads it for navigation-aware system
+    // prompts.
+    sendMessage({ text }, { body: { context: { pathname } } });
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    sendMessage(input);
+    submitText(input);
   };
   const handleChipClick = (action: string) => {
-    sendMessage(action);
+    submitText(action);
   };
   const closeChat = () => {
     play("click");
+    // Cancel any in-flight stream so closing the chat doesn't leak it.
+    if (isLoading) stop();
     gsap.to(containerRef.current, {
       scale: 0,
       opacity: 0,
@@ -539,67 +535,70 @@ export function CyberChat() {
             </div>
           </div>
         )}
-        {messages.map((m) => (
-          <div
-            key={m.id}
-            className={cn(
-              "flex flex-col max-w-[85%]",
-              m.role === "user" ? "ml-auto items-end" : "items-start",
-            )}
-          >
+        {messages.map((m) => {
+          const text = messageText(m);
+          return (
             <div
+              key={m.id}
               className={cn(
-                "relative px-4 py-3 text-sm shadow-sm backdrop-blur-sm",
-                m.role === "user"
-                  ? "bg-primary text-primary-foreground rounded-2xl rounded-tr-sm"
-                  : "bg-card border border-border/50 text-card-foreground rounded-2xl rounded-tl-sm shadow-md",
+                "flex flex-col max-w-[85%]",
+                m.role === "user" ? "ml-auto items-end" : "items-start",
               )}
             >
-              {m.role === "user" ? (
-                m.content
-              ) : (
-                <div className="prose prose-sm dark:prose-invert max-w-none font-mono text-xs">
-                  <ReactMarkdown
-                    components={{
-                      p: ({ node, ...props }) => (
-                        <p
-                          className="mb-2 last:mb-0 leading-relaxed"
-                          {...props}
-                        />
-                      ),
-                      ul: ({ node, ...props }) => (
-                        <ul
-                          className="list-disc pl-4 mb-2 space-y-1"
-                          {...props}
-                        />
-                      ),
-                      li: ({ node, ...props }) => (
-                        <li className="text-primary/90" {...props} />
-                      ),
-                      strong: ({ node, ...props }) => (
-                        <strong
-                          className="text-primary font-bold tracking-wide"
-                          {...props}
-                        />
-                      ),
-                      code: ({ node, ...props }) => (
-                        <code
-                          className="bg-black/50 text-green-400 px-1 py-0.5 rounded border border-green-900/30 text-[10px]"
-                          {...props}
-                        />
-                      ),
-                    }}
-                  >
-                    {m.content}
-                  </ReactMarkdown>
-                </div>
-              )}
+              <div
+                className={cn(
+                  "relative px-4 py-3 text-sm shadow-sm backdrop-blur-sm",
+                  m.role === "user"
+                    ? "bg-primary text-primary-foreground rounded-2xl rounded-tr-sm"
+                    : "bg-card border border-border/50 text-card-foreground rounded-2xl rounded-tl-sm shadow-md",
+                )}
+              >
+                {m.role === "user" ? (
+                  text
+                ) : (
+                  <div className="prose prose-sm dark:prose-invert max-w-none font-mono text-xs">
+                    <ReactMarkdown
+                      components={{
+                        p: ({ ...props }) => (
+                          <p
+                            className="mb-2 last:mb-0 leading-relaxed"
+                            {...props}
+                          />
+                        ),
+                        ul: ({ ...props }) => (
+                          <ul
+                            className="list-disc pl-4 mb-2 space-y-1"
+                            {...props}
+                          />
+                        ),
+                        li: ({ ...props }) => (
+                          <li className="text-primary/90" {...props} />
+                        ),
+                        strong: ({ ...props }) => (
+                          <strong
+                            className="text-primary font-bold tracking-wide"
+                            {...props}
+                          />
+                        ),
+                        code: ({ ...props }) => (
+                          <code
+                            className="bg-black/50 text-green-400 px-1 py-0.5 rounded border border-green-900/30 text-[10px]"
+                            {...props}
+                          />
+                        ),
+                      }}
+                    >
+                      {text}
+                    </ReactMarkdown>
+                  </div>
+                )}
+              </div>
+              <span className="text-[10px] text-muted-foreground/60 mt-1.5 px-1 font-mono uppercase">
+                {m.role === "user" ? "YOU" : "T7SEN_AI"}
+              </span>
             </div>
-            <span className="text-[10px] text-muted-foreground/60 mt-1.5 px-1 font-mono uppercase">
-              {m.role === "user" ? "YOU" : "T7SEN_AI"}
-            </span>
-          </div>
-        ))}
+          );
+        })}
         {isLoading && (
           <div className="flex items-start ml-2">
             <div className="bg-card border border-border/50 rounded-2xl rounded-tl-sm px-4 py-3 flex gap-1 shadow-sm">

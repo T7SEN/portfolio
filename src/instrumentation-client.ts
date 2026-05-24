@@ -4,8 +4,13 @@
 
 import * as Sentry from "@sentry/nextjs";
 
+const isProd = process.env.NODE_ENV === "production";
+
+// DSN is designed-public; pulled from env so it can differ per
+// environment. SDK no-ops with an empty value so a missing env var
+// just disables client-side reporting rather than crashing the page.
 Sentry.init({
-  dsn: "https://1d927523e7a78cfd434339ed1b35883a@o1032877.ingest.us.sentry.io/4510457780633600",
+  dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
 
   // Add optional integrations for additional features
   integrations: [
@@ -27,17 +32,18 @@ Sentry.init({
     Sentry.consoleLoggingIntegration({ levels: ["log", "warn", "error"] }),
   ],
 
-  // Define how likely traces are sampled. Adjust this value in production, or use tracesSampler for greater control.
-  tracesSampleRate: 1,
+  // Sample 10% of traces in prod (quota-friendly), 100% in dev so
+  // local debugging gets full visibility.
+  tracesSampleRate: isProd ? 0.1 : 1.0,
   // Enable logs to be sent to Sentry
   enableLogs: true,
 
-  // Define how likely Replay events are sampled.
-  // This sets the sample rate to be 10%. You may want this to be 100% while
-  // in development and sample at a lower rate in production
-  replaysSessionSampleRate: 0.1,
+  // Session replays are expensive — 1% in prod is plenty for spotting
+  // patterns; 10% in dev for richer local repro.
+  replaysSessionSampleRate: isProd ? 0.01 : 0.1,
 
-  // Define how likely Replay events are sampled when an error occurs.
+  // Always capture replays around errors regardless of env — errors
+  // are rare and high-signal, replays are what make them debuggable.
   replaysOnErrorSampleRate: 1.0,
 
   // Enable sending user PII (Personally Identifiable Information)

@@ -5,11 +5,16 @@
 
 import * as Sentry from "@sentry/nextjs";
 
-Sentry.init({
-  dsn: "https://1d927523e7a78cfd434339ed1b35883a@o1032877.ingest.us.sentry.io/4510457780633600",
+const isProd = process.env.NODE_ENV === "production";
 
-  // Define how likely traces are sampled. Adjust this value in production, or use tracesSampler for greater control.
-  tracesSampleRate: 1,
+// DSN is designed-public; pulled from env so dev/prod can differ
+// without code edits. Empty value → SDK self-disables.
+Sentry.init({
+  dsn: process.env.NEXT_PUBLIC_SENTRY_DSN,
+
+  // Sample 10% in prod, 100% in dev — matches the server config so
+  // edge and server traces have the same sampling story.
+  tracesSampleRate: isProd ? 0.1 : 1.0,
 
   // Enable logs to be sent to Sentry
   enableLogs: true,

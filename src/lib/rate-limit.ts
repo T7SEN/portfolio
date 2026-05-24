@@ -2,7 +2,12 @@ import { Ratelimit, type Duration } from "@upstash/ratelimit";
 import { redis } from "@/lib/redis";
 import { RateLimiterMemory } from "rate-limiter-flexible";
 
-export type RateLimitType = "core" | "guestbook" | "contact" | "achievements";
+export type RateLimitType =
+  | "core"
+  | "guestbook"
+  | "contact"
+  | "achievements"
+  | "chat";
 
 // --- Configuration ---
 const LIMITERS: Record<
@@ -14,6 +19,8 @@ const LIMITERS: Record<
   contact: { points: 3, duration: "1 h", blockDuration: 60 * 60 },
 
   achievements: { points: 10, duration: "60 s", blockDuration: 60 },
+  // AI calls cost money — tighter bucket than core.
+  chat: { points: 10, duration: "60 s", blockDuration: 60 },
 };
 
 // --- Cache Containers ---

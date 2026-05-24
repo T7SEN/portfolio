@@ -7,7 +7,10 @@ import { useLanyard } from "@/hooks/use-lanyard";
 import { useSfx } from "@/hooks/use-sfx";
 import { cn } from "@/lib/utils";
 
-const DISCORD_ID = "170916597156937728";
+// Lanyard user ID (distinct from DISCORD_CLIENT_ID for OAuth). If
+// unset, the component renders nothing — keeps the layout from
+// reserving space for a feature that can't function.
+const DISCORD_ID = process.env.NEXT_PUBLIC_DISCORD_USER_ID ?? "";
 
 export function DiscordStatus() {
   const { data, isConnected } = useLanyard(DISCORD_ID);
@@ -20,6 +23,11 @@ export function DiscordStatus() {
     const timer = setTimeout(() => setIsTimeout(true), 3000);
     return () => clearTimeout(timer);
   }, [data]);
+
+  // No Discord ID configured → render nothing. Placed after all hooks
+  // so rules-of-hooks stays intact across renders. useLanyard already
+  // bails internally on empty id.
+  if (!DISCORD_ID) return null;
 
   const isLoading = (!data || !isConnected) && !isTimeout;
 

@@ -1,7 +1,8 @@
-/* eslint-disable @typescript-eslint/no-unused-vars */
 "use server";
 
 import { cacheLife, cacheTag } from "next/cache";
+import * as Sentry from "@sentry/nextjs";
+import logger from "@/lib/logger";
 
 export async function getLatestCommit() {
   "use cache";
@@ -20,7 +21,15 @@ export async function getLatestCommit() {
       },
     );
 
-    if (!res.ok) return null;
+    if (!res.ok) {
+      // GitHub API throttling / 404 / 5xx — log and degrade silently
+      // (caller is the GitPulse component, which renders a fallback).
+      logger.warn(
+        { status: res.status, statusText: res.statusText },
+        "getLatestCommit: GitHub API returned non-OK",
+      );
+      return null;
+    }
 
     const data = await res.json();
 
@@ -30,6 +39,11 @@ export async function getLatestCommit() {
       url: data.html_url,
     };
   } catch (error) {
+    // Network error, JSON parse error, etc. Always returned null
+    // before — that's still the right default — but the failure used
+    // to vanish entirely. Surface to Sentry so trends are visible.
+    logger.error({ err: String(error) }, "getLatestCommit: unexpected error");
+    Sentry.captureException(error);
     return null;
   }
 }

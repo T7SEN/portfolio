@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en-GB" dir="ltr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>T7SEN</title>
+    <meta name="description" content="Real-time worlds, built for your GPU. A new site arrives in 2027." />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="T7SEN" />
+    <meta property="og:description" content="Real-time worlds, built for your GPU. A new site arrives in 2027." />
+    <meta name="color-scheme" content="dark" />
+    <meta name="theme-color" content="#07070a" />
+    <link
+      rel="icon"
+      type="image/svg+xml"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='-20 -20 504.22 482.36'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23ef4444'/%3E%3Cstop offset='.5' stop-color='%23a855f7'/%3E%3Cstop offset='1' stop-color='%233b82f6'/%3E%3C/linearGradient%3E%3Cfilter id='f' x='-.2' y='-.2' width='1.4' height='1.4'%3E%3CfeGaussianBlur stdDeviation='10' result='blur'/%3E%3CfeComposite in='SourceGraphic' in2='blur' operator='over'/%3E%3C/filter%3E%3C/defs%3E%3Cpolygon fill='url(%23g)' filter='url(%23f)' points='464.22 0 464.22 7.43 411.18 73.13 186.22 351.77 113.09 442.36 113.09 325.94 186.22 235.35 317.19 73.13 186.22 73.13 186.22 164.38 113.09 254.97 113.09 73.13 0 73.13 0 0 464.22 0'/%3E%3C/svg%3E"
+    />
+    <style>
+      :root {
+        --color-void: #07070a;
+        --color-muted: #9a9aab;
+        --color-text: #ededf2;
+        --color-glow: #a78bfa;
+        --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", Menlo, Consolas, monospace;
+        color-scheme: dark;
+      }
+
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+
+      html {
+        background: var(--color-void);
+      }
+
+      body {
+        margin: 0;
+        min-block-size: 100vh;
+        min-block-size: 100svh;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        padding-block: clamp(1.25rem, 4vw, 2.5rem);
+        padding-inline: clamp(1rem, 6vw, 4.5rem);
+        color: var(--color-text);
+        font-family: var(--font-sans);
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      /* A still field of points, faded at the edges. It never moves, so the page claims nothing it does not do. */
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        z-index: -1;
+        pointer-events: none;
+        background-image: radial-gradient(circle, rgb(237 237 242 / 0.22) 1px, transparent 1.6px);
+        background-size: 22px 22px;
+        background-position: center;
+        -webkit-mask-image: radial-gradient(ellipse 70% 60% at 50% 48%, #000 0%, transparent 78%);
+        mask-image: radial-gradient(ellipse 70% 60% at 50% 48%, #000 0%, transparent 78%);
+      }
+
+      .wordmark {
+        margin: 0;
+        font-family: var(--font-mono);
+        font-size: 1rem;
+        font-weight: 700;
+        letter-spacing: 0.32em;
+      }
+
+      main {
+        align-self: center;
+        max-inline-size: 72rem;
+        padding-block: 3rem 4rem;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(2.125rem, 1rem + 5.4vw, 5.5rem);
+        font-weight: 700;
+        line-height: 1.04;
+        letter-spacing: -0.03em;
+        text-wrap: balance;
+      }
+
+      .nowrap {
+        white-space: nowrap;
+      }
+
+      .note {
+        margin-block: 1.5rem 0;
+        color: var(--color-muted);
+        font-size: clamp(1rem, 0.92rem + 0.4vw, 1.25rem);
+      }
+
+      .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25rem 2rem;
+        margin-block: 1.75rem 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      a {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4em;
+        min-block-size: 44px;
+        color: var(--color-text);
+        font-size: 1.0625rem;
+        font-weight: 500;
+        text-decoration: none;
+        border-radius: 4px;
+      }
+
+      a svg {
+        flex: none;
+        color: var(--color-glow);
+      }
+
+      a:hover,
+      a:focus-visible {
+        color: var(--color-glow);
+      }
+
+      a:focus-visible {
+        outline: 2px solid var(--color-glow);
+        outline-offset: 4px;
+      }
+
+      @media (forced-colors: active), (prefers-contrast: more) {
+        body::before {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <p class="wordmark">T7SEN</p>
+    </header>
+    <main>
+      <h1><span class="nowrap">Real-time</span> worlds, built for your GPU.</h1>
+      <p class="note">A new site arrives in 2027.</p>
+      <ul class="links">
+        <li>
+          <a href="https://github.com/T7SEN" rel="me"
+            >GitHub<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+              <path d="M5 11 11 5M6 5h5v5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg
+          ></a>
+        </li>
+        <li>
+          <a href="https://links.t7sen.com/" rel="me"
+            >All links<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" focusable="false">
+              <path d="M5 11 11 5M6 5h5v5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg
+          ></a>
+        </li>
+      </ul>
+    </main>
+  </body>
+</html>

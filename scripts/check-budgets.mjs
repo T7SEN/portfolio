@@ -1,0 +1,204 @@
+// Budget check for every gate (REQ-PERF-04, REQ-PERF-05). Reads the production
+// build in .next, so run `pnpm build` first. Writes a dated table to
+// docs/results/ and prints one summary line for docs/test-log.md.
+// The files it reads (app-path-routes-manifest.json, prerender-manifest.json,
+// server/app/*.html) are Next.js build internals, not a documented interface,
+// so anything it cannot find or measure is a failure, never a silent pass.
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import {
+  FIRST_LOAD_LIMIT_BYTES,
+  findDeferredLibraries,
+  firstLoadScripts,
+  formatKb,
+  gzipBytes,
+  htmlPathFor,
+  pageRoutes,
+  payloadFailures,
+  staticFilePath,
+  unprerenderedPages,
+} from "./budget-lib.mjs";
+
+const NEXT_DIR = ".next";
+const CHUNKS_DIR = join(NEXT_DIR, "static", "chunks");
+const MANIFEST_PATH = "src/engine/manifest.json";
+const SCRIPT_FILE = /\.(?:js|jsx|mjs|cjs|ts|tsx|mts|cts)$/;
+
+const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
+const failures = [];
+
+if (!existsSync(join(NEXT_DIR, "BUILD_ID"))) {
+  console.log("FAIL budget: no production build in .next; run pnpm build");
+  process.exit(1);
+}
+
+const buildId = readFileSync(join(NEXT_DIR, "BUILD_ID"), "utf8").trim();
+const nextVersion = readJson("node_modules/next/package.json").version;
+const pages = pageRoutes(
+  readJson(join(NEXT_DIR, "app-path-routes-manifest.json")),
+);
+const prerenderRoutes = readJson(
+  join(NEXT_DIR, "prerender-manifest.json"),
+).routes;
+
+for (const page of unprerenderedPages(pages, prerenderRoutes)) {
+  failures.push(`${page} is not prerendered, so its first load is unmeasured`);
+}
+
+const fileCache = new Map();
+function measureFile(path) {
+  if (!fileCache.has(path)) {
+    const source = readFileSync(path);
+    fileCache.set(path, {
+      bytes: gzipBytes(source),
+      libraries: findDeferredLibraries(source.toString("utf8")),
+    });
+  }
+  return fileCache.get(path);
+}
+
+const pageSet = new Set(pages);
+const rows = [];
+for (const [route, entry] of Object.entries(prerenderRoutes)) {
+  if (!pageSet.has(entry?.srcRoute ?? route)) continue;
+  const htmlPath = join(NEXT_DIR, htmlPathFor(route));
+  if (!existsSync(htmlPath)) {
+    failures.push(`${route}: no prerendered HTML at ${htmlPath}`);
+    continue;
+  }
+
+  let bytes = 0;
+  const libraries = new Set();
+  const scripts = firstLoadScripts(readFileSync(htmlPath, "utf8"));
+  if (scripts.length === 0) {
+    failures.push(`${route}: no first-load scripts found in its HTML`);
+  }
+  for (const src of scripts) {
+    const relative = staticFilePath(src);
+    if (relative === null) {
+      failures.push(
+        `${route}: first-load script from outside the build: ${src}`,
+      );
+      continue;
+    }
+    const filePath = join(NEXT_DIR, "static", relative);
+    if (!existsSync(filePath)) {
+      failures.push(`${route}: first-load script missing from .next: ${src}`);
+      continue;
+    }
+    const measured = measureFile(filePath);
+    bytes += measured.bytes;
+    measured.libraries.forEach((name) => libraries.add(name));
+  }
+
+  rows.push({
+    route,
+    scripts: scripts.length,
+    bytes,
+    libraries: [...libraries],
+  });
+  if (bytes > FIRST_LOAD_LIMIT_BYTES) {
+    failures.push(
+      `${route}: first-load JavaScript ${formatKb(bytes)} is over ${formatKb(FIRST_LOAD_LIMIT_BYTES)}`,
+    );
+  }
+  if (libraries.size > 0) {
+    failures.push(`${route}: first load contains ${[...libraries].join(", ")}`);
+  }
+}
+if (rows.length === 0) failures.push("no prerendered page was measured");
+
+// Chunks that hold three.js count toward the 3D payload of tiers 1 and 2.
+const engineChunks = existsSync(CHUNKS_DIR)
+  ? readdirSync(CHUNKS_DIR)
+      .filter((file) => file.endsWith(".js"))
+      .map((file) => join(CHUNKS_DIR, file))
+      .filter((path) => measureFile(path).libraries.includes("three.js"))
+  : [];
+const engineJsBytes = engineChunks.reduce(
+  (sum, path) => sum + measureFile(path).bytes,
+  0,
+);
+
+let payloadLines = [];
+const engineHasCode =
+  existsSync("src/engine") &&
+  readdirSync("src/engine", { recursive: true }).some(
+    (file) => SCRIPT_FILE.test(file) && !/\.test\./.test(file),
+  );
+if (existsSync(MANIFEST_PATH)) {
+  const manifest = readJson(MANIFEST_PATH);
+  const sizeOf = (file) => (existsSync(file) ? statSync(file).size : null);
+  const result = payloadFailures(manifest, sizeOf, engineJsBytes);
+  failures.push(...result.failures);
+  payloadLines = result.totals.map(
+    ({ tier, device, bytes, limit }) =>
+      `| ${tier} | ${device} | ${formatKb(bytes)} | ${formatKb(limit)} |`,
+  );
+} else if (engineHasCode || engineChunks.length > 0) {
+  failures.push(
+    `the engine or three.js is in the build but no ${MANIFEST_PATH} lists its 3D payload`,
+  );
+}
+
+rows.sort((a, b) => a.route.localeCompare(b.route));
+const largest = rows.reduce((max, row) => Math.max(max, row.bytes), 0);
+const date = new Date().toLocaleDateString("en-CA");
+const report = [
+  `# Budget check, ${date}`,
+  "",
+  `Next.js ${nextVersion}, build ${buildId}. Gzip level 9; 1 KB is 1,024 bytes.`,
+  "",
+  "## First-load JavaScript per route (REQ-PERF-04)",
+  "",
+  "| Route | Scripts | Gzip | Deferred libraries found |",
+  "| --- | --- | --- | --- |",
+  ...rows.map(
+    (row) =>
+      `| ${row.route} | ${row.scripts} | ${formatKb(row.bytes)} | ${row.libraries.join(", ") || "none"} |`,
+  ),
+  "",
+  `Limit: ${formatKb(FIRST_LOAD_LIMIT_BYTES)} per route.`,
+  "",
+  "## 3D payload (REQ-PERF-05)",
+  "",
+  `Built chunks holding three.js: ${engineChunks.length}, ${formatKb(engineJsBytes)} gzip, counted in tiers 1 and 2.`,
+  "",
+  ...(payloadLines.length > 0
+    ? [
+        "| Tier | Device | Size | Limit |",
+        "| --- | --- | --- | --- |",
+        ...payloadLines,
+      ]
+    : [`Not measured: ${MANIFEST_PATH} does not exist yet.`]),
+  "",
+  "## Result",
+  "",
+  ...(failures.length > 0
+    ? failures.map((failure) => `- FAIL ${failure}`)
+    : ["- ok"]),
+  "",
+];
+
+mkdirSync("docs/results", { recursive: true });
+const reportPath = `docs/results/${date}-budget.md`;
+writeFileSync(reportPath, report.join("\n"));
+
+for (const row of rows) {
+  console.log(`${row.route}  ${row.scripts} scripts  ${formatKb(row.bytes)}`);
+}
+if (failures.length > 0) {
+  failures.forEach((failure) => console.log(`FAIL ${failure}`));
+  console.log(`FAIL budget (${reportPath})`);
+  process.exit(1);
+}
+console.log(
+  `ok budget: ${rows.length} routes, largest first load ${formatKb(largest)}, ${payloadLines.length > 0 ? "3D payload within limits" : "no 3D payload yet"} (${reportPath})`,
+);

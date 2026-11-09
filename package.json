@@ -18,6 +18,7 @@
     "e2e": "playwright test",
     "e2e:gpu": "playwright test --config playwright.gpu.config.ts",
     "budget": "node scripts/check-budgets.mjs",
+    "tokens": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/tokens-css.mjs",
     "env:check": "node scripts/check-env.mjs"
   },
   "dependencies": {

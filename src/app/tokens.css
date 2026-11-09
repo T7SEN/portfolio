@@ -1,0 +1,19 @@
+/*
+ * Written by scripts/tokens-css.mjs from src/tokens/colors.ts.
+ * Do not edit by hand: change the tokens there and run the script.
+ */
+@theme {
+  --color-*: initial;
+  --color-void: #07070a;
+  --color-surface: #111116;
+  --color-raised: #1c1c24;
+  --color-edge: #66667c;
+  --color-muted: #9a9aab;
+  --color-text: #ededf2;
+  --color-violet: #a855f7;
+  --color-logo-red: #ef4444;
+  --color-logo-blue: #3b82f6;
+  --color-glow: #a78bfa;
+  --color-danger: #f87171;
+  --color-paper: #f4f4f7;
+}

@@ -1,11 +1,31 @@
-export default function Home() {
+import type { Metadata } from "next";
+
+import {
+  AboutSection,
+  ContactSection,
+  Hero,
+  ServicesSection,
+  WorkSection,
+} from "@/components/home";
+import { pages } from "@/content/pages";
+
+// The layout's title template does not apply to a page in its own segment,
+// so the home title is set in full here.
+export const metadata: Metadata = {
+  title: { absolute: pages.home.title },
+};
+
+// Static HTML: the hero, the services (REQ-CNT-11), then work, about and
+// contact in the story's chapter order. The scroll story and the field arrive
+// later and never hold back this text (REQ-CNT-01).
+export default function HomePage() {
   return (
-    <main className="mx-auto flex min-h-dvh max-w-3xl flex-col justify-center gap-6 px-6 py-16">
-      <p className="font-mono text-sm tracking-widest">T7SEN</p>
-      <h1 className="text-4xl font-semibold text-balance sm:text-6xl">
-        Real-time worlds, built for your GPU.
-      </h1>
-      <p className="text-neutral-300">A new site arrives in 2027.</p>
-    </main>
+    <>
+      <Hero />
+      <ServicesSection />
+      <WorkSection />
+      <AboutSection />
+      <ContactSection />
+    </>
   );
 }

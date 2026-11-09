@@ -4,31 +4,40 @@ import nextTs from "eslint-config-next/typescript";
 
 const engineBoundary =
   "The engine never imports app code. Only @/tokens is shared (REQ-ENG-02).";
-const frameworkFree = "The engine is framework-free (REQ-ENG-02).";
+const tokensBoundary =
+  "The tokens file is shared with the engine, so it imports no app code (REQ-ENG-02).";
+const frameworkFree =
+  "The engine and the tokens file are framework-free (REQ-ENG-02).";
 
-// Any @/ alias except the engine's own and the shared tokens.
-const APP_ALIAS = "^@/(?!(?:engine|tokens)(?:/|$))";
+const SCRIPT_FILES = "{js,jsx,mjs,cjs,ts,tsx,mts,cts}";
 const FRAMEWORK = "^(?:react|react-dom|next)(?:/|$)";
-// The same two patterns for AST selectors, where a "/" would end the regex.
-const APP_ALIAS_SELECTOR = "^@\\x2F(?!(?:engine|tokens)(?:\\x2F|$))";
+// The same pattern for AST selectors, where a "/" would end the regex.
 const FRAMEWORK_SELECTOR = "^(?:react|react-dom|next)(?:\\x2F|$)";
 
-export default defineConfig([
-  ...nextVitals,
-  ...nextTs,
-  {
-    files: ["src/engine/**/*.{js,jsx,mjs,cjs,ts,tsx,mts,cts}"],
+// Any @/ alias except the named folders, for import statements and, with "/"
+// written as \x2F, for AST selectors.
+function aliasExcept(folders, slash) {
+  const names = folders.join("|");
+  return `^@${slash}(?!(?:${names})(?:${slash}|$))`;
+}
+
+// One boundary: files in src/<folder> may import only the allowed folders of
+// src, never React or Next.js, through static imports, re-exports, import()
+// and require().
+function boundary({ folder, allowed, message, patterns = [] }) {
+  const alias = aliasExcept(allowed, "/");
+  const aliasSelector = aliasExcept(allowed, "\\x2F");
+
+  return {
+    files: [`src/${folder}/**/*.${SCRIPT_FILES}`],
     rules: {
       "no-restricted-imports": [
         "error",
         {
           patterns: [
-            { regex: APP_ALIAS, message: engineBoundary },
+            { regex: alias, message },
             { regex: FRAMEWORK, message: frameworkFree },
-            {
-              regex: "^(?:\\.\\./)+tokens(?:/|$)",
-              message: "Tokens come in through @/tokens only (REQ-ENG-02).",
-            },
+            ...patterns,
           ],
         },
       ],
@@ -36,39 +45,58 @@ export default defineConfig([
       "no-restricted-syntax": [
         "error",
         {
-          selector: `ImportExpression[source.value=/${APP_ALIAS_SELECTOR}/]`,
-          message: engineBoundary,
+          selector: `ImportExpression[source.value=/${aliasSelector}/]`,
+          message,
         },
         {
           selector: `ImportExpression[source.value=/${FRAMEWORK_SELECTOR}/]`,
           message: frameworkFree,
         },
         {
-          selector: `CallExpression[callee.name="require"][arguments.0.value=/${APP_ALIAS_SELECTOR}/]`,
-          message: engineBoundary,
+          selector: `CallExpression[callee.name="require"][arguments.0.value=/${aliasSelector}/]`,
+          message,
         },
         {
           selector: `CallExpression[callee.name="require"][arguments.0.value=/${FRAMEWORK_SELECTOR}/]`,
           message: frameworkFree,
         },
       ],
-      // Catches relative paths that leave src/engine for app code, which the
+      // Catches relative paths that leave the folder for app code, which the
       // alias patterns above cannot see.
       "import/no-restricted-paths": [
         "error",
         {
           zones: [
             {
-              target: "./src/engine",
+              target: `./src/${folder}`,
               from: "./src",
-              except: ["./engine", "./tokens"],
-              message: engineBoundary,
+              except: allowed.map((name) => `./${name}`),
+              message,
             },
           ],
         },
       ],
     },
-  },
+  };
+}
+
+export default defineConfig([
+  ...nextVitals,
+  ...nextTs,
+  boundary({
+    folder: "engine",
+    allowed: ["engine", "tokens"],
+    message: engineBoundary,
+    patterns: [
+      {
+        regex: "^(?:\\.\\./)+tokens(?:/|$)",
+        message: "Tokens come in through @/tokens only (REQ-ENG-02).",
+      },
+    ],
+  }),
+  // The engine may import the tokens, so the tokens must not import app code,
+  // or app code would reach the engine through them.
+  boundary({ folder: "tokens", allowed: ["tokens"], message: tokensBoundary }),
   globalIgnores([
     ".next/**",
     "out/**",

@@ -16,7 +16,7 @@ async function boundaryErrors(code: string, filePath: string) {
   );
 }
 
-describe("engine boundary", () => {
+describe("engine and tokens boundary", () => {
   it.each([
     'import "@/app/layout";',
     'import "@/components/hero";',
@@ -72,6 +72,44 @@ describe("engine boundary", () => {
     'export const load = () => import("./simulation");',
   ])("REQ-ENG-02 allows %s in src/engine", async (code) => {
     expect(await boundaryErrors(code, "src/engine/sample.ts")).toHaveLength(0);
+  });
+
+  it.each([
+    'import "@/app/layout";',
+    'import "@/components/hero";',
+    'import "@/content/studies";',
+    'import "@/lib/env";',
+    'import "@/engine/index";',
+    'export * from "@/lib/env";',
+    'import "react";',
+    'import "next/font/google";',
+    'import "../app/layout";',
+    'export const load = () => import("@/components/hero");',
+    'export const load = () => import("react");',
+    'export const env = require("@/lib/env");',
+    'export const react = require("react");',
+  ])("REQ-ENG-02 blocks %s in src/tokens", async (code) => {
+    expect(await boundaryErrors(code, "src/tokens/colors.ts")).not.toHaveLength(
+      0,
+    );
+  });
+
+  it("REQ-ENG-02 blocks a relative path out of a nested tokens folder", async () => {
+    const errors = await boundaryErrors(
+      'import "../../app/layout";',
+      "src/tokens/nested/sample.ts",
+    );
+    expect(errors.map((error) => error.ruleId)).toContain(
+      "import/no-restricted-paths",
+    );
+  });
+
+  it.each([
+    'import "./palette";',
+    'import "@/tokens/palette";',
+    'export const load = () => import("./palette");',
+  ])("REQ-ENG-02 allows %s in src/tokens", async (code) => {
+    expect(await boundaryErrors(code, "src/tokens/colors.ts")).toHaveLength(0);
   });
 
   it("REQ-ENG-02 leaves app code free to import React and app modules", async () => {

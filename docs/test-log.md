@@ -87,3 +87,13 @@ Results are written only after the command ran, copied from its output. Failures
 - Source: two lines of the build log, read by T7SEN and pasted into the session
 - Result: "$ node -v && next build" followed by "v26.13.0". Locally the PC runs Node 26.12.1: a minor drift within 26.x, which is expected; only a major drift is a parity failure (A10).
 - Covers: REQ-OPS-03 (Node 26.x confirmed; pnpm 12.18.0 confirmed by the first preview build above)
+
+## 2026-11-09 P1 readiness review: guard checks and gate
+
+- Environment: Windows 11 Pro, Node 26.12.1, pnpm 12.18.0, Chrome for Testing 158.0.8127.18
+- Baseline at fe5d779, before any change: typecheck, lint, format:check (29 files), test (3 files, 52 tests), build, e2e (9 passed, 1 skipped), budget (3 routes, 131.5 KB each) and e2e:gpu (1 passed, the same adapter as headless) all exit 0.
+- Budget check run against test build folders outside the repo: a 294.2 KB first-load script failed ("over 200.0 KB"); a first-load script holding three.js failed; a top-level three.js chunk with no engine manifest failed. A three.js chunk in a subfolder passed, which was wrong (decision D-026).
+- Engine boundary, ESLint lintText with the repo config: @/app/layout, ../app/layout, @/tokens/../app/layout, @/engine/../app/layout and import("@/tokens/../app/layout") failed in src/engine; @/tokens/colors and three/webgpu passed. In src/tokens/colors.ts, @/app/layout and react passed, which was wrong (decision D-025).
+- Env check with a test .env.local holding marker values: the output held only ok and missing lines and none of the values; --strict exited 1.
+- After the fixes for D-025 and D-026: the subfolder chunk fails the budget check; typecheck, lint, format:check (29 files), test (3 files, 70 tests), build, e2e (9 passed, 1 skipped) and budget (131.5 KB per route, no 3D payload yet) all exit 0.
+- Covers: REQ-ENG-02, REQ-PERF-04, REQ-PERF-05, REQ-SEC-01

@@ -80,3 +80,10 @@ Results are written only after the command ran, copied from its output. Failures
 - Build: pnpm run build ran next build; Next.js 16.4.5 (Turbopack) compiled in 3.8 s, TypeScript finished, 3 of 3 static pages generated, routes / and /_not-found both static; "Deployment completed".
 - Node: the log does not print the Node.js version. Vercel's docs say to run node -v in the Build Command to see it (vercel.com/docs/functions/runtimes/node-js/node-js-versions, read 9 Nov 2026). Not confirmed by a log yet.
 - Covers: REQ-OPS-03 (pnpm confirmed; Node open)
+
+## 2026-11-09 Node version in the Vercel build log
+
+- Environment: Vercel preview build of main, commit 41f5121, the first build with the build script `node -v && next build` (decision D-024)
+- Source: two lines of the build log, read by T7SEN and pasted into the session
+- Result: "$ node -v && next build" followed by "v26.13.0". Locally the PC runs Node 26.12.1: a minor drift within 26.x, which is expected; only a major drift is a parity failure (A10).
+- Covers: REQ-OPS-03 (Node 26.x confirmed; pnpm 12.18.0 confirmed by the first preview build above)

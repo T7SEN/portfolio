@@ -71,3 +71,12 @@ Results are written only after the command ran, copied from its output. Failures
 - pnpm e2e: exit 0, 9 passed, 1 skipped (the WebGPU probe on the phone project, by design); headless probe result unchanged
 - pnpm budget: exit 0; ok budget: 3 routes, largest first load 131.5 KB, no 3D payload yet (docs/results/2026-11-09-budget.md)
 - Covers: REQ-ENG-02, REQ-ENG-04, REQ-PERF-04, REQ-PERF-05, REQ-SEC-01, REQ-CNT-01, REQ-A11Y-01 (home page only), REQ-TIER-01 (probe input)
+
+## 2026-11-09 First Vercel preview build of main
+
+- Environment: Vercel build in iad1, 2 cores and 8 GB, Vercel CLI 65.11.0; branch main, commit d7f3fed; no build cache yet; project settings Framework Preset Next.js with no overrides, Node.js Version 26.x; ENABLE_EXPERIMENTAL_COREPACK set to 1 for Production and Preview
+- Source: the build log, read by T7SEN and pasted into the session
+- pnpm: the log shows "Detected ENABLE_EXPERIMENTAL_COREPACK=1 and "pnpm@12.18.0" in package.json", Corepack downloading pnpm 12.18.0 for linux-x64, and "Done in 6.1s using pnpm v12.18.0". The lockfile passed pnpm's supply-chain policies (549 entries) and was up to date; 462 packages installed, and the listed dependency versions match package.json.
+- Build: pnpm run build ran next build; Next.js 16.4.5 (Turbopack) compiled in 3.8 s, TypeScript finished, 3 of 3 static pages generated, routes / and /_not-found both static; "Deployment completed".
+- Node: the log does not print the Node.js version. Vercel's docs say to run node -v in the Build Command to see it (vercel.com/docs/functions/runtimes/node-js/node-js-versions, read 9 Nov 2026). Not confirmed by a log yet.
+- Covers: REQ-OPS-03 (pnpm confirmed; Node open)

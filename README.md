@@ -50,12 +50,18 @@ pnpm budget
 ## Layout
 
 ```
-src/app/        routes and the root layout
-src/app/(dev)/  pages that exist only on the development server
-scripts/        budget, environment and format checks
-e2e/            browser tests at 1280 and 375 px, with an accessibility scan
-docs/           decisions, the test log and dated results
+src/app/         routes, the root layout, fonts and the global styles
+src/app/(dev)/   pages that exist only on the development server
+src/components/  the bar, footer and links, the home sections and the study pages
+src/content/     every word on the site as typed objects, with the study outline
+src/tokens/      the colour tokens shared by the CSS and the engine
+public/brand/    the T7SEN marks
+scripts/         budget, environment, format, class and colour token checks
+e2e/             browser tests at 1280 and 375 px, with an accessibility scan
+docs/            decisions, the test log and dated results
 ```
+
+`pnpm tokens` rewrites `src/app/tokens.css` from `src/tokens/colors.ts` after a colour change; `pnpm test` fails while the two differ.
 
 ## Licence
 

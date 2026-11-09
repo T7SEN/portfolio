@@ -97,3 +97,41 @@ Results are written only after the command ran, copied from its output. Failures
 - Env check with a test .env.local holding marker values: the output held only ok and missing lines and none of the values; --strict exited 1.
 - After the fixes for D-025 and D-026: the subfolder chunk fails the budget check; typecheck, lint, format:check (29 files), test (3 files, 70 tests), build, e2e (9 passed, 1 skipped) and budget (131.5 KB per route, no 3D payload yet) all exit 0.
 - Covers: REQ-ENG-02, REQ-PERF-04, REQ-PERF-05, REQ-SEC-01
+
+## 2026-11-09 P1 gate, run 1
+
+- Environment: Windows 11 Pro, Node 26.12.1, pnpm 12.18.0, Chrome for Testing 158.0.8127.18 headless (Playwright 1.65.0)
+- pnpm typecheck: exit 0
+- pnpm lint: exit 0
+- pnpm format:check: exit 0, 91 files
+- pnpm test: exit 0, 11 files, 282 tests
+- pnpm build: exit 0; 13 static pages: /, /_not-found, /about, /contact, /icon.svg, /v1, /work and the five study pages prerendered through generateStaticParams
+- pnpm e2e: exit 0, 106 passed, 4 skipped (the WebGPU probe on the phone project, and the three vitals tests on the desktop project, both by design)
+- Lab vitals, phone project, Slow 4G (latency 562.5 ms, 180,000 and 84,375 bytes/s) and a 4x CPU slowdown, run alongside the other tests: / LCP 1648 ms, CLS 0.009; /work LCP 1616 ms, CLS 0.009; /work/making-of LCP 1652 ms, CLS 0.002
+- pnpm budget: exit 0; 12 routes, largest first load 134.6 KB (131.8 KB on /_global-error), no 3D payload yet
+- Covers: REQ-CNT-01, REQ-CNT-02, REQ-CNT-03, REQ-CNT-04, REQ-CNT-05, REQ-CNT-06, REQ-CNT-07, REQ-CNT-08, REQ-CNT-10, REQ-CNT-11, REQ-CNT-12, REQ-NAV-01, REQ-I18N-01, REQ-I18N-02, REQ-A11Y-01, REQ-A11Y-02, REQ-A11Y-06, REQ-PERF-01, REQ-PERF-03, REQ-PERF-04, REQ-ENG-02
+
+## 2026-11-09 P1 review fixes
+
+- The served stylesheet held at least 26 physical left and right rules, such as text-align: right, taken from strings in the class scan's own tests, because Tailwind read every file git does not ignore. After globals.css imported Tailwind with source(".."), the class scan run over the built stylesheet found 0, and text-align: right was gone. A browser test now runs that check on the served stylesheet (REQ-I18N-01).
+- Skip intro on a 375 x 548 screen, measured on a production build with fonts loaded: its bottom edge sat at 541 px, 7 px inside the screen. After tighter hero spacing on screens 40rem tall or less: 532 px. On 375 x 667: 651 px; 375 x 740: 724 px; 375 x 812: 796 px (REQ-NAV-01).
+- The class scan run over src after its new checks for arbitrary properties and uneven shorthands: ok, 58 files.
+
+## 2026-11-09 P1 gate rerun, attempt 1
+
+- pnpm typecheck, lint, format:check (91 files), test (11 files, 298 tests) and build: exit 0
+- pnpm e2e: exit 1. Playwright could not load the class scan module from e2e/pages.spec.ts ("Cannot use 'import.meta' outside a module"), so no browser test ran. The checks moved into scripts/class-scan-lib.mjs, which uses no import.meta; scripts/class-scan.mjs keeps only the command line part.
+- pnpm budget: exit 0, 134.6 KB
+
+## 2026-11-09 P1 gate rerun, attempt 2
+
+- Environment: as run 1
+- pnpm typecheck: exit 0
+- pnpm lint: exit 0
+- pnpm format:check: exit 0, 92 files
+- pnpm test: exit 0, 11 files, 298 tests
+- pnpm build: exit 0, the same 13 static pages
+- pnpm e2e: exit 0, 114 passed, 1 skipped (the WebGPU probe on the phone project, by design). New since run 1: the headline swap test (the h1 and the sub-line keep their place at 1280 and 375 px when the tier 1 and 2 line replaces the tier 3 line), the served stylesheet check, See the work and Skip intro on a 375 x 548 screen, and the 404 page (status, one h1, axe, skip link).
+- Lab vitals, now in their own project after the others, one test at a time, same throttling: / LCP 1576 ms, CLS 0.009; /work LCP 1568 ms, CLS 0.009; /work/making-of LCP 1600 ms, CLS 0.002
+- pnpm budget: exit 0; 12 routes, largest first load 134.6 KB, no 3D payload yet (docs/results/2026-11-09-budget.md)
+- Covers: as run 1

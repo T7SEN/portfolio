@@ -18,6 +18,7 @@ export default defineConfig({
   projects: [
     {
       name: "desktop",
+      testIgnore: /vitals\.spec\.ts/,
       use: {
         ...devices["Desktop Chrome"],
         channel: "chromium",
@@ -26,6 +27,20 @@ export default defineConfig({
     },
     {
       name: "phone",
+      testIgnore: /vitals\.spec\.ts/,
+      use: {
+        ...devices["Pixel 5"],
+        channel: "chromium",
+        viewport: { width: 375, height: 812 },
+      },
+    },
+    // Lab vitals run after the other projects, one test at a time, so no
+    // other browser competes for the CPU while they measure (D-019).
+    {
+      name: "phone-vitals",
+      testMatch: /vitals\.spec\.ts/,
+      dependencies: ["desktop", "phone"],
+      workers: 1,
       use: {
         ...devices["Pixel 5"],
         channel: "chromium",

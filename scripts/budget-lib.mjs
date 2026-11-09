@@ -1,3 +1,5 @@
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 
 // REQ-PERF-04: about 200 KB gzip of JavaScript before any 3D, counted in KiB.
@@ -76,6 +78,15 @@ export function unprerenderedPages(pages, prerenderRoutes) {
 
 export function htmlPathFor(route) {
   return `server/app${route === "/" ? "/index" : route}.html`;
+}
+
+// Every built JavaScript file under dir, at any depth. Turbopack writes chunks
+// flat today, but a chunk in a subfolder must still count toward the 3D
+// payload rather than pass unmeasured.
+export function chunkFiles(dir) {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".js"))
+    .map((entry) => join(entry.parentPath, entry.name));
 }
 
 // REQ-PERF-05: about 8 MB on desktop and 3 MB on phones, counted in MiB.

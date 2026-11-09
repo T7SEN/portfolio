@@ -1,8 +1,17 @@
 // @vitest-environment node
-import { readFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   FIRST_LOAD_LIMIT_BYTES,
+  chunkFiles,
   findDeferredLibraries,
   firstLoadScripts,
   gzipBytes,
@@ -98,6 +107,26 @@ describe("routes", () => {
     expect(htmlPathFor("/work/coup-online")).toBe(
       "server/app/work/coup-online.html",
     );
+  });
+});
+
+describe("built chunks", () => {
+  it("REQ-PERF-05 lists chunks in subfolders as well as at the top level", () => {
+    const dir = mkdtempSync(join(tmpdir(), "chunks-"));
+    try {
+      mkdirSync(join(dir, "nested", "deeper"), { recursive: true });
+      writeFileSync(join(dir, "a.js"), "");
+      writeFileSync(join(dir, "nested", "b.js"), "");
+      writeFileSync(join(dir, "nested", "deeper", "c.js"), "");
+      writeFileSync(join(dir, "style.css"), "");
+      mkdirSync(join(dir, "folder.js"));
+      const found = chunkFiles(dir)
+        .map((path) => relative(dir, path).split(sep).join("/"))
+        .sort();
+      expect(found).toEqual(["a.js", "nested/b.js", "nested/deeper/c.js"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

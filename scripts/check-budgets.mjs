@@ -15,6 +15,7 @@ import {
 import { join } from "node:path";
 import {
   FIRST_LOAD_LIMIT_BYTES,
+  chunkFiles,
   findDeferredLibraries,
   firstLoadScripts,
   formatKb,
@@ -117,10 +118,9 @@ if (rows.length === 0) failures.push("no prerendered page was measured");
 
 // Chunks that hold three.js count toward the 3D payload of tiers 1 and 2.
 const engineChunks = existsSync(CHUNKS_DIR)
-  ? readdirSync(CHUNKS_DIR)
-      .filter((file) => file.endsWith(".js"))
-      .map((file) => join(CHUNKS_DIR, file))
-      .filter((path) => measureFile(path).libraries.includes("three.js"))
+  ? chunkFiles(CHUNKS_DIR).filter((path) =>
+      measureFile(path).libraries.includes("three.js"),
+    )
   : [];
 const engineJsBytes = engineChunks.reduce(
   (sum, path) => sum + measureFile(path).bytes,

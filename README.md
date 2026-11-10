@@ -47,17 +47,22 @@ pnpm budget
 
 `pnpm e2e` installs nothing; run `pnpm exec playwright install --no-shell chromium` once first. `pnpm env:check` prints which environment names from `.env.example` are set, never their values.
 
+Two more runs open a visible browser on the machine's own GPU and are not part of the checks above: `pnpm e2e:engine` measures the particle field on the development page, and `pnpm e2e:gpu` measures the home page on a production build (run `pnpm build` first).
+
 ## Layout
 
 ```
 src/app/         routes, the root layout, fonts and the global styles
 src/app/(dev)/   pages that exist only on the development server
-src/components/  the bar, footer and links, the home sections and the study pages
+src/components/  the bar, footer and links, the home sections, the study pages and the field's place behind the page
 src/content/     every word on the site as typed objects, with the study outline
+src/engine/      the particle field: tier choice, one simulation for WebGPU and WebGL2, loaded after first content
+src/lib/         the store that tells the page which tier is running
 src/tokens/      the colour tokens shared by the CSS and the engine
 public/brand/    the T7SEN marks
+public/still/    the still frames shown where the field cannot run
 scripts/         budget, environment, format, class and colour token checks
-e2e/             browser tests at 1280 and 375 px, with an accessibility scan
+e2e/             browser tests at 1280 and 375 px, with an accessibility scan; gpu/ and headed/ hold the runs on a real GPU
 docs/            decisions, the test log and dated results
 ```
 

@@ -135,3 +135,106 @@ Results are written only after the command ran, copied from its output. Failures
 - Lab vitals, now in their own project after the others, one test at a time, same throttling: / LCP 1576 ms, CLS 0.009; /work LCP 1568 ms, CLS 0.009; /work/making-of LCP 1600 ms, CLS 0.002
 - pnpm budget: exit 0; 12 routes, largest first load 134.6 KB, no 3D payload yet (docs/results/2026-11-09-budget.md)
 - Covers: as run 1
+
+## 2026-11-10 P2 tier 2 spike
+
+- Environment: Windows 11 Pro, Node 26.12.1, Chrome for Testing 158.0.8127.18 headed (Playwright 1.65.0, channel chromium), viewport 1280 x 800, NVIDIA GeForce RTX 4060 Ti, driver 32.0.16.2101, display at 240 Hz. WebGL renderer string: ANGLE (NVIDIA, NVIDIA GeForce RTX 4060 Ti (0x00002803) Direct3D11 vs_5_0 ps_5_0, D3D11), so the real GPU, not a software renderer.
+- Command: pnpm exec playwright test --config playwright.engine.config.ts (the development server on port 3102, started and stopped by the run; the page is /engine?backend=webgl&count=<n>)
+- What ran: one per-particle simulation written in TSL (a noise field, a cursor force and a pull to one ring target per particle), built with compute(count) only, on the WebGL2 backend through forceWebGL, drawn as additive sprites. Three storage buffers: positions, velocities and targets.
+- Result: 2 passed. After a 3 s warm-up, over a 10 s window of requestAnimationFrame intervals:
+  - 100,000 particles: 2401 frames, median 4.20 ms, 95th percentile 4.30 ms
+  - 250,000 particles: 2401 frames, median 4.20 ms, 95th percentile 4.30 ms
+- Both counts sit on the display's 240 Hz ceiling, so the figures mean at least this fast. They do not show the GPU's limit or any difference between the two counts. The canvas was 1217 x 561 CSS px at a pixel ratio of 1, smaller than a full screen hero.
+- Proof the simulation ran: the page reported the webgl2 backend and the count; the engine's own frame counter and the page's frame count both advanced by 2280 over the same 20 readouts; two screenshots 1 s apart differed; no page or console error.
+- The same run was made five times while the spike was written and once more afterwards, with the same figures each time.
+- Pass line: 30 fps or more at both counts (a median of 33.3 ms or less). Passed, so engine work continues on the shared simulation (REQ-ENG-05).
+- Not measured here: frame times on WebGPU, a full screen canvas, a pixel ratio above 1, phones, and the paths tier 2 must not use (storage textures, atomics, reads of another particle).
+- Covers: REQ-ENG-06, REQ-ENG-05, REQ-PERF-06
+
+## 2026-11-10 P2 engine on the development page, headed
+
+- Environment: as the spike entry. Primary display 1280 x 882 at 240 Hz, a second display at 75 Hz. Command: pnpm e2e:engine (playwright.engine.config.ts: the development server on port 3102, started and stopped by the run; e2e/gpu/frame-rate.spec.ts and e2e/gpu/lifecycle.spec.ts; the page is /engine with ?tier, ?count, ?calm and ?bare).
+- Method: after a 3 s warm-up, 10 s of the page's own requestAnimationFrame intervals. Median and 95th percentile come from the engine's own probe functions. The engine's frameRate events are compared with the page's frame count over the same intervals and must agree within 3%. Pass lines: a median of 16.7 ms or less on tier 1, 33.3 ms or less on tier 2. The particle count in each line is the count asked for; the engine reports no count.
+- Run 1, whole suite: exit 1; 14 passed, 1 failed, 2 skipped (the two still captures, which run only with CAPTURE_STILLS=1).
+  - Failed: tier 2 forced, 100,000 particles on WebGL2: 10 frames, median 1004.10 ms. The engine reported 1.00 fps and the page's own frame count also gave 1.00 fps, so the browser was showing the window once a second. It was the first window of the run. The cause was not found.
+  - Tier 2 forced, 250,000 particles on WebGL2: 2377 frames, median 4.20 ms, 95th percentile 4.30 ms (engine 237.45 fps, page 237.45 fps)
+  - Tier 1 forced, 1,000,000 particles on WebGPU: 2388 frames, median 4.20 ms, 95th percentile 4.30 ms (engine 239.11 fps, page 239.12 fps)
+  - No tier forced: the probe passed (reason probe-pass), tier 1, 1,000,000 particles: 2376 frames, median 4.20 ms, 95th percentile 4.30 ms (engine 237.18 fps, page 237.18 fps)
+- Run 2, frame-rate spec only: exit 0; 4 passed.
+  - Tier 2 forced, 100,000: 2388 frames, median 4.20 ms, 95th percentile 4.30 ms (238.68 fps)
+  - Tier 2 forced, 250,000: 2384 frames, median 4.20 ms, 95th percentile 4.30 ms (238.11 fps)
+  - Tier 1 forced, 1,000,000: 1311 frames, median 4.20 ms, 95th percentile 4.30 ms (131.78 fps). The frames that came kept the 240 Hz interval, but only 1311 came in 10 s, so the window was not shown for part of the time.
+  - No tier forced, probe-pass, tier 1, 1,000,000: 2397 frames, median 4.20 ms, 95th percentile 4.30 ms (239.73 fps)
+- Reading: every case that ran undisturbed sits on the 240 Hz ceiling, so the figures mean at least this fast and show no difference between the counts or the backends. The headed window's own frame cadence is disturbed at times on this desktop (1 fps once, a gap once; runs made while the engine was written also saw about 143 fps for the lightest and the heaviest case alike). The field's load does not explain it and the cause is not established.
+- Lifecycle, run 1, all passed:
+  - A WebGL2 context lost on tier 2 ended on tier 3 with reason device-lost and no canvas. A WebGPU device lost on tier 1 (the GPU process crashed through the browser's debugging protocol, in a browser of its own) rebuilt once as tier 2 on a new canvas with reason device-lost. three.js prints one console error on each loss.
+  - Calm froze the field to one frame on tier 1 and on tier 2 and let it go again (share of lit pixels in the frozen frame: 0.4984 and 0.3804).
+  - Tiers 1, 2, 3 and 1 again on one host element: each backend drew on a canvas of its own.
+  - Leaving the page disposed the tier 1 and the tier 2 field with no console error and no warning afterwards.
+  - A resize from 1217 x 560 to 937 x 490 redrew the calm field at its new size on both tiers.
+  - Slow frames (30 ms, made by the test) lowered the drawing buffer's pixel ratio from 1 to 0.75 on tier 2, and fast frames raised it to 1 again. On tier 1 the test printed "ratio 1, then not restored" and passed.
+- Not measured: phones, Firefox, Safari, memory, a display slower than 240 Hz, a pixel ratio above 1.
+- Covers: REQ-ENG-05, REQ-ENG-06, REQ-ENG-07, REQ-ENG-08, REQ-TIER-01, REQ-TIER-04, REQ-TIER-05, REQ-PERF-06, REQ-A11Y-03
+
+## 2026-11-10 P2 gate, run 1
+
+- Environment: Windows 11 Pro, Node 26.12.1, pnpm 12.18.0, Chrome for Testing 158.0.8127.18 headless (Playwright 1.65.0)
+- pnpm typecheck: exit 0
+- pnpm lint: exit 0
+- pnpm format:check: exit 0, 130 files
+- pnpm test: exit 0, 19 files, 500 tests
+- pnpm build: exit 0, the same 13 static pages as P1
+- pnpm e2e: exit 0, 139 passed, 4 skipped by design (the WebGPU probe on the phone project; the phone tier test on the desktop project; the two desktop tier tests on the phone project). 143 tests in 7 files.
+  - Tier choice on the desktop project with nothing forced: tier 1, reason probe-pass (headless, the real adapter, 14 workers). The gate accepts tier 1 or tier 2 here and asserts no frame rate.
+  - Order on the home page: desktop first contentful paint 816 ms, three.js first requested 2176 ms, ready 4090 ms; phone first contentful paint 348 ms, three.js first requested 361 ms, ready 687 ms.
+  - Reduced motion: one still frame, two screenshots 600 ms apart identical on the first pair; share of lit pixels 0.4575 on desktop and 0.7000 on phone.
+- Lab vitals, phone-vitals project, same throttling as P1, measured on / until the field has faded in plus 1 s: / LCP 1588 ms, CLS 0.009, the field ready (tier 2, reason phone) by 6817 ms; /work LCP 1556 ms, CLS 0.009; /work/making-of LCP 1568 ms, CLS 0.002
+- pnpm budget: exit 0; 12 routes, largest first load 136.5 KB on / (136.1 KB on the other pages, 131.8 KB on /_global-error); 3D payload within limits (docs/results/2026-11-10-budget.md)
+- Covers: REQ-ENG-01, REQ-ENG-02, REQ-ENG-07, REQ-ENG-08, REQ-TIER-01, REQ-TIER-02, REQ-TIER-03, REQ-CNT-02, REQ-CNT-10, REQ-PERF-03, REQ-PERF-04, REQ-PERF-05, REQ-PERF-07, REQ-A11Y-01, REQ-A11Y-03, and the P1 list
+
+## 2026-11-10 P2 home page on the production build, headed
+
+- Environment: as the development page entry. Command: pnpm e2e:gpu (playwright.gpu.config.ts: next start on port 3101, started and stopped by the run, on the build of gate run 1; e2e/headed and e2e/webgpu-probe.spec.ts; one worker).
+- Result: exit 0; 13 passed.
+- Frame rates on /, same method and pass lines as on the development page:
+  - Tier 1 (probe-pass), 1,000,000 particles, viewport 1280 x 800, canvas 1265 x 800: 2394 frames, median 4.20 ms, 95th percentile 4.30 ms (239.22 fps)
+  - Tier 1 (probe-pass), 1,000,000 particles, viewport 1920 x 1080, canvas 1905 x 1080: 2398 frames, median 4.20 ms, 95th percentile 4.30 ms (239.77 fps). This viewport is larger than the primary display.
+  - Tier 2 (navigator.gpu hidden by the test, reason no-webgpu), 250,000 particles, viewport 1280 x 800: 2401 frames, median 4.20 ms, 95th percentile 4.30 ms (240.01 fps)
+- Order on / (REQ-PERF-07), on localhost with no network delay: first contentful paint 72, 84 and 80 ms; three.js first requested at 157, 167 and 96 ms; the field ready at 2243 and 2251 ms on tier 1 (the 2 s probe) and at 209 ms on tier 2. The wrapper's opacity was 0 on every frame sampled before ready. The headline changed at 2240, 2251 and 159 ms; layout shift total 0.0000 in all three.
+- Text contrast over the field (REQ-A11Y-06), 12 screenshots per case with the page text hidden, measured against the brightest single pixel behind the bar links and the hero's text, with the veil at 0.7 as shipped. Muted text #9A9AAB: tier 1 at 1280 x 800 5.53 to 1; tier 1 at 375 x 812 6.09; tier 2 at 1280 x 800 5.21; tier 2 on a touch screen at 375 x 812 5.84; the tier 3 still at 1280 x 800 5.86; the tier 3 still at 375 x 812 6.33. Text #EDEDF2 was 12.36 to 1 at worst. With the veil at 0 the same cases gave muted text 2.07, 3.04, 1.72, 2.49, 2.65 and 3.79 to 1, so the veil is what keeps the text readable.
+- Tier 3 with Save-Data set by the test: the still covers the screen (field-wide.jpg, 1920 x 1080, at 1280 x 800; field-tall.jpg, 1080 x 1920, at 375 x 812), 8 scripts requested, none holding three.js, the headline never changed.
+- Leaving home for /work: no frameRate event in 2,500 ms; back on home they resume, on the same canvas element.
+- Probe facts, headed: navigator.gpu present, adapter vendor nvidia, architecture lovelace, not a fallback adapter, 22 features, WebGL2 present.
+- The two stills in public/still were captured while the engine was built, by e2e/gpu/stills.spec.ts with CAPTURE_STILLS=1 (one settled tier 1 frame at 1920 x 1080 and at 1080 x 1920). On disk: field-wide.jpg 221,324 bytes, field-tall.jpg 254,849 bytes.
+- Not measured: contrast of text in the sections below the hero while the field scrolls behind them; contrast over more than 12 frames in this run.
+- Covers: REQ-PERF-06, REQ-PERF-07, REQ-PERF-05, REQ-PERF-03, REQ-TIER-01, REQ-TIER-03, REQ-TIER-05, REQ-ENG-01, REQ-ENG-06, REQ-ENG-07, REQ-CNT-10, REQ-A11Y-06
+
+## 2026-11-10 P2 review fixes
+
+- The failed first test of the development page run: the same field, looked at in a browser pane that was not in front, also reported 1.00 fps. A window that is not being shown is drawn about once a second, so that test measured the window, not the field.
+- A calm field kept the particles of its old frame when the frame changed shape. Checked headed on the development page, calm, 500 x 800 turned to 1280 x 700, share of lit pixels in a fifth of the width at one edge, in the middle and at the other edge: with the fix switched off, tier 1 0.0000, 0.9031, 0.0000 and tier 2 0.0000, 0.7959, 0.0000; with the fix, tier 1 0.5462, 0.5383, 0.5420 and tier 2 0.4244, 0.4200, 0.4229. The new test fails without the fix and passes with it (REQ-A11Y-03).
+- A WebGPU runtime that cannot be built now gives WebGL2 its own try before tier 3; a throw inside the frame loop is reported as a loss; a tier forced from inside a tier 3 event keeps its own ready; a part that cannot be freed no longer keeps the renderer alive. Each has a unit test (controller: 2 new, 1 changed; runtime with three.js replaced by recorders: 12 new).
+- The hero headline now changes when the tier 1 or 2 field has drawn, not when the tier is chosen. On the production home page, headed: headline at 2220, 2227 and 186 ms against ready at 2221, 2229 and 185 ms, and no sampled frame showed the tier 1 and 2 line before ready (REQ-CNT-10).
+- The headed frame-rate tests now assert the tier their title names, so a forced tier 1 that fell back to WebGL2 can no longer pass as tier 2.
+
+## 2026-11-10 P2 gate rerun after the review
+
+- Environment: as gate run 1
+- pnpm typecheck: exit 0
+- pnpm lint: exit 0
+- pnpm format:check: exit 0, 131 files
+- pnpm test: exit 0, 20 files, 515 tests
+- pnpm build: exit 0, the same 13 static pages
+- pnpm e2e: exit 0, 139 passed, 4 skipped by design, as run 1. Tier choice on the desktop project with nothing forced: tier 1, reason probe-pass. Order on the home page: desktop first contentful paint 260 ms, three.js first requested 704 ms, ready 1568 ms; phone 488 ms, 795 ms, 1627 ms. Reduced motion: identical screenshots on the first pair; share of lit pixels 0.4575 and 0.7000.
+- Lab vitals, phone-vitals project: / LCP 1588 ms, CLS 0.009, the field ready (tier 2, reason phone) by 6737 ms; /work LCP 1560 ms, CLS 0.009; /work/making-of LCP 1584 ms, CLS 0.002
+- pnpm budget: exit 0; 12 routes, largest first load 136.6 KB on / (136.1 KB on the other pages, 131.8 KB on /_global-error); 3D payload within limits (docs/results/2026-11-10-budget.md)
+- Headed, production build, pnpm e2e:gpu: exit 0, 13 passed.
+  - Tier 1 (probe-pass), 1,000,000 particles: 2401 frames, median 4.20 ms, 95th percentile 4.30 ms at 1280 x 800 (239.98 fps) and at 1920 x 1080 (239.99 fps)
+  - Tier 2 (no-webgpu), 250,000 particles, 1280 x 800: 2401 frames, median 4.20 ms, 95th percentile 4.30 ms (240.01 fps)
+  - Order: first contentful paint 68, 72 and 72 ms; three.js first requested at 139, 143 and 83 ms; layout shift total 0.0000
+  - Contrast, veil 0.7, 12 frames, muted text: tier 1 at 1280 x 800 5.53 to 1; tier 1 at 375 x 812 6.21; tier 2 at 1280 x 800 5.24; tier 2 on a touch screen at 375 x 812 5.89; the tier 3 still 5.86 and 6.33
+  - Save-Data: the still covers at both sizes, no script holds three.js. /work: no frameRate event, the same canvas on return.
+- Headed, development page, pnpm e2e:engine: exit 0, 17 passed, 2 skipped (the still captures).
+  - Tier 2 forced at 100,000 and at 250,000, tier 1 forced at 1,000,000 and tier 1 through the probe at 1,000,000: each 2401 frames, median 4.20 ms, 95th percentile 4.30 ms (239.99 to 240.02 fps). No run was disturbed this time.
+  - Loss, calm, tier changes, leaving the page and resize as in the first run. Slow frames lowered the pixel ratio to 0.75 and fast frames raised it to 1 again on both tiers.
+- Covers: as gate run 1 and the two headed entries above

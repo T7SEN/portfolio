@@ -221,3 +221,94 @@ Every departure from the brief, and every technical choice a later phase needs t
 - REQ-I18N-01, REQ-I18N-02, REQ-A11Y-01. The gate commands do not change. `pnpm test` gains the class scan (scripts/class-scan.mjs), which reads string literals through the TypeScript compiler API, already pinned, and fails on any physical left or right utility or CSS property under src. `pnpm e2e` gains e2e/pages.spec.ts (content with JavaScript off, no three.js on /work, the fast path from the first frame, short studies on one screen, no CV file, axe and reflow on every route, the skip link), e2e/rtl.spec.ts (every route with dir set to rtl) and e2e/vitals.spec.ts (D-019). The vitals run in their own Playwright project, phone-vitals, after the desktop and phone projects and one test at a time, so no other browser competes for the CPU while they measure.
 - The /work check fails on three.js only, not on every deferred library, because PostHog is allowed to load after first content there from P6.
 - Tailwind 4 reads class names from every file git does not ignore, so strings in the class scan's own tests became shipped CSS rules such as text-align: right. globals.css now imports Tailwind with source(".."), so only src is read, and a browser test runs the class scan over the stylesheets the site serves. The class scan also flags arbitrary properties such as [margin-left:4px] and shorthands whose right and left values differ, such as margin: 0 1rem 0 0.
+
+## P2 Engine core, 10 Nov 2026
+
+### D-035 The engine owns its canvas inside one host element
+
+- REQ-ENG-01, REQ-ENG-08, REQ-TIER-04. A departure from the brief's wording of one persistent canvas, and from the planned `mount(canvas)` command.
+- A canvas element holds one context type for life: after it has given a WebGPU context it returns null for WebGL2, and the other way round (the HTML and WebGPU specifications, and three r187's backends, which ask for the context on the canvas they are given). So a change of backend, after a slow probe, a lost device or a forced tier, needs a new canvas element.
+- The root layout therefore renders one persistent, empty host element, and the engine creates, replaces and removes the canvas inside it. Navigation never recreates the host, the canvas or the renderer; only a change of backend replaces the canvas. A browser test visits other routes and checks that the canvas element is the same one on return.
+- `createEngine(host, options)` takes the host. React never renders children into it.
+
+### D-036 Commands, events and reasons as built
+
+- REQ-ENG-03, REQ-ENG-08. Five commands at the start: `start`, `setTier`, `setStory`, `setPointer` and `setCalm`. `on` subscribes and `dispose` tears down; neither is a feature command. The planned `ripple` waits for P6, the phase whose feature needs it.
+- Three events: `ready` with the tier that has drawn, `tierChosen` with the tier and a reason, and `frameRate` once a second while a settled tier runs. Nothing else leaves the engine.
+- `start` never rejects. Every failure becomes a lower tier and a `tierChosen` event that says why. The thirteen reasons: forced, save-data, phone, no-webgpu, no-adapter, fallback-adapter, adapter-limits, probe-pass, probe-slow, probe-failed, webgpu-init-fallback, no-backend and device-lost.
+- device-lost is also the reason when a call into the renderer throws, in a command or inside the frame loop, because the result for the visitor is the same: that renderer is finished. A reason of its own can be added if the reports at P6 need to tell the two apart.
+- Each chosen tier sends its own `ready`, so a tier change or a lost device is followed by a new `ready` once the new tier has drawn.
+- src/engine/types.ts holds the whole contract and imports nothing, so app code reads the types without pulling three.js into the first load. The controller holds no three.js; the runtime holds all of it and is loaded by a dynamic import only when a GPU tier is possible.
+
+### D-037 The tier decision and what it reads
+
+- REQ-TIER-01, REQ-TIER-02, REQ-TIER-03. The order is the order of precedence: a forced tier; Save-Data gives tier 3; a coarse primary pointer gives tier 2 (reason phone); no navigator.gpu gives tier 2; no adapter gives tier 2; a fallback adapter gives tier 2; an adapter without the core features or with limits too small for one buffer of every particle gives tier 2; anything else goes to the probe.
+- The phone test is `matchMedia('(pointer: coarse)')`, read once. Its known errors: tablets count as phones; a touch-only hybrid counts as a phone; a phone docked to a mouse counts as a desktop and goes on to the probe; it says nothing about screen size, so the layout stays driven by CSS width. All but the third land on the safer tier, and in the third the probe still protects the visitor. The user agent's mobile flag is missing on every iPhone, `hover: none` misses some real phones, and touch points exist on touch laptops, so none of those is used.
+- Save-Data is read from navigator.connection.saveData, which exists in Chromium browsers only, and from the prefers-reduced-data media feature, which no browser ships by default today. A Firefox or Safari visitor with a data saver on is not detected. The request header is visible only to a server, and reading it would make the page dynamic.
+- The adapter is not requested when Save-Data or the pointer has already decided.
+- three r187 falls back to WebGL2 by itself when WebGPU fails to start, so the engine reads the live backend after the renderer starts and reports tier 2 with reason webgpu-init-fallback. That fallback does not cover every case: a device lost as it starts, or a field that throws while it is set up, fails with WebGL2 never tried. So when the WebGPU runtime cannot be built at all, the engine gives WebGL2 one try on a new canvas, with the same reason, before it settles on tier 3.
+
+### D-038 The tier 1 probe
+
+- REQ-TIER-01. The probe runs the real field at tier 1's particle count for 2,000 ms on the canvas it will keep, with the canvas hidden and the wrapper still transparent. Frames in the first 500 ms are not counted, because shader compilation lands there. It passes at a median frame time of 20 ms or less over at least 10 counted frames; fewer frames means failed, a higher median means slow.
+- 20 ms sits between a 60 Hz frame (16.7 ms) and a frame that missed one refresh (33.3 ms), so a field that holds 60 fps passes and one that mostly misses a refresh does not.
+- A pass keeps the canvas and costs no second start. Slow or failed disposes that renderer and builds tier 2 on a new canvas. REQ-TIER-03 lists a failed probe among the causes of tier 3; as built, a failed tier 1 probe tries tier 2 first and reaches tier 3 only when WebGL2 cannot start, because a GPU that cannot hold a million particles may still hold a quarter of them. Tier 2 has no probe of its own.
+- The probe waits while the tab is hidden or the host is out of view, and starts again from nothing when the field is back in view, because frames from before a pause say nothing about the GPU.
+- The result is kept in memory only. Nothing is stored on the device, so the probe runs once per page load and no consent question arises.
+- Cost, measured on this PC: the field appears about 2.2 s after navigation on tier 1 and about 0.2 s on tier 2 (docs/test-log.md).
+
+### D-039 Failure and loss
+
+- REQ-ENG-08. A lost device or context ends that renderer for good; r187 has no way back. A loss on tier 1 rebuilds once as tier 2 on a new canvas; a loss on tier 2 ends on tier 3. The tier never climbs again during the visit.
+- When WebGL2 cannot start, or the engine's code fails to load, the result is tier 3 with reason no-backend: the canvas is removed, the still is shown and the headline stays the tier 3 line.
+- A throw from the renderer inside the frame loop is treated as a loss: the loop stops and the tier drops, so the page is never left with a chosen tier that draws nothing.
+- three.js prints one console error when a device is lost. A renderer that cannot start prints nothing, so until P6 sends these events to analytics (REQ-ENG-10) such a visit leaves no trace.
+- Not built: a time limit on the adapter request or on loading the runtime. A promise that never settles would leave the visitor on the static page with the tier 3 line, which is a true state; a limit can be added if field reports show it happens.
+
+### D-040 The simulation, the field and their numbers
+
+- REQ-ENG-04, REQ-ENG-05, REQ-ENG-06, REQ-TIER-05, REQ-PERF-06. One simulation written in TSL runs on both backends. It has three storage buffers (positions, velocities and read-only seeds), every one made with instancedArray, and it reads and writes only its own particle, so WebGL2 runs it through transform feedback unchanged. It is built with a count only, never a dispatch size.
+- Each particle has a home inside the camera's view, derived from its seed in the shader, and drifts around it on a slow noise flow. The pointer pushes nearby particles. One built-in ring stands in for the chapter formations until P3. Seeds come from a fixed number, so a still can be captured again.
+- Particle counts stay at the targets: 1,000,000 on tier 1, 250,000 on tier 2 with a fine pointer and 100,000 with a coarse one. On this PC every count held the 240 Hz display rate on the production home page, far above the pass lines of 60 and 30 fps. No phone has been measured.
+- Sprites are additive. Their opacity is set so the field adds the same share of light for every count and aspect.
+- Adaptive resolution moves the drawing buffer's pixel ratio through fixed steps (0.75, 1, 1.25, 1.5, 2, capped at the device's own ratio): down below 45 fps after 750 ms, up at 55 fps or better after 4 s, and a ratio that failed straight after a rise is not tried again.
+- The simulation step comes from three's Timer and is capped at one thirtieth of a second, so a pause never flings the field. Time spent paused is not simulated.
+- Calm mode and reduced motion settle the field without drawing it, then draw exactly one frame, which stays on screen. A frozen field cannot flow to the homes of a new frame shape, so when the frame's aspect changes by more than a tenth (a phone turned on its side, a window made much wider) the particles are put back on their homes by one step of the same simulation and settled again. Homes reach a tenth past the frame, so smaller changes, such as a phone's browser bar hiding, keep the frame that is on screen.
+- Known limits, not built: adaptive resolution keeps lowering the ratio while frames stay slow, so a browser that caps frames near 30 fps ends at the lowest ratio, and the tier 1 probe would read such a cap as slow; to be settled when phones are measured at P7. three r187 does not release a WebGL2 context when its renderer is disposed, so each tier 2 renderer's context lives until its canvas is collected, which matters once the palette can change tiers many times (P5). On WebGL2 the simulation uses three of the four transform feedback outputs the standard guarantees, so P3 has room for one more buffer there.
+- The field pauses while the tab is hidden or the host is out of view, and three.js is disposed with the awaited `dispose` when the engine is torn down.
+
+### D-041 The field on the home page
+
+- REQ-CNT-02, REQ-CNT-10, REQ-PERF-03, REQ-PERF-04, REQ-PERF-07. In P2 the field shows on / only. The wrapper sits in the root layout, fixed behind the page and hidden from assistive technology; on every other route it is hidden, so the engine pauses by itself, and a visit that starts on /work loads no engine code at all.
+- After first content means: the load event, then the first contentful paint, then an idle moment. The paint step was added after a browser test caught three.js being requested before the first paint when the load event came first. Browsers without paint timing skip that step.
+- The wrapper stays transparent until `ready`, then fades in over 700 ms.
+- The hero headline is driven by a small store that mirrors the engine's events. The tier 1 and 2 line shows only while a tier 1 or 2 field is on screen, which means the tier is chosen and it has drawn; the tier 3 line returns while a tier changes and if the tier drops to 3 (rule A14). A browser test compares the frame before the real change with the frame that shows it and finds the h1 and the sub-line in the same place. This replaces the P1 test that changed the text by hand (D-033).
+- The pointer is not yet sent to the field on the home page; that arrives with the scroll story at P3 (REQ-SCR-06).
+
+### D-042 The tier 3 stills
+
+- REQ-TIER-03, REQ-A11Y-05. Tier 3 shows one frame captured from the tier 1 field: public/still/field-wide.jpg (1920 x 1080, 221,324 bytes) and field-tall.jpg (1080 x 1920, 254,849 bytes), chosen by orientation. A kept test captures them when it is run with CAPTURE_STILLS=1, at the first JPEG quality that fits 250 KB: 32 for the wide one and 56 for the tall one, because fine grain compresses badly.
+- The still is decoration inside the hidden wrapper, so its alt is empty; the page's own text is the alternative to the scene. This replaces the earlier plan of an alt text that describes the frame.
+- The still loads only on tier 3, with low priority, and is removed if it fails to load.
+- The brief also allows a short video loop on tier 3. None was built.
+
+### D-043 The veil over the field
+
+- REQ-A11Y-06. A layer of the void colour sits above the field at 70% opacity. The figure comes from measurement: with the page text hidden, muted text against the brightest pixel behind the bar and the hero text was under 4.5 to 1 at 60% and is 5.21 to 1 at worst at 70% (docs/test-log.md). Without the veil the same text would be under 2 to 1 on tier 2.
+- Cost: the field shows at 30% of its light behind the page.
+- The check is a headed test. axe cannot see the field, so the gate's accessibility scans say nothing about it. It measures the bar and the hero only, and additive sprites have no hard cap, so it must be run again when P3 packs particles into formations and when text below the hero scrolls over the field.
+
+### D-044 Counting the engine in the budget
+
+- REQ-PERF-04, REQ-PERF-05. The build splits the engine into two lazy chunks: the three.js chunk with the runtime (221.3 KB gzip) and an entry chunk with the controller and the tier decision (2.8 KB), which holds no three.js. The entry loads on every tier on the home page, because it is what decides the tier.
+- The budget check finds the entry chunk by a marker string that the controller writes on every canvas it creates, so the string is real code and survives minification. A unit test fails if the script's copy and the controller's copy differ.
+- The check now fails when the entry is in any first load, when it shares a chunk with three.js, or when the engine has code but no built chunk holds the marker.
+- src/engine/manifest.json lists the files each tier downloads besides JavaScript: none on tiers 1 and 2, both stills on tier 3, which is the most one visit can fetch if the screen is rotated.
+- First load after P2: 136.6 KB on / and 136.1 KB on the other pages, against the 200 KB limit.
+
+### D-045 Testing the tiers
+
+- REQ-TIER-04, REQ-PERF-06. No code that forces a tier ships. Browser tests force tiers from their own side before the page loads: hiding navigator.gpu gives tier 2, setting Save-Data gives tier 3, and refusing a WebGL2 context as well gives the failure path. Tier 1 cannot be forced that way; the natural desktop path is accepted as tier 1 or tier 2. The development page, which is never built for production, takes the tier, the count and calm from its query string.
+- The wrapper carries the tier, its reason, ready and the last frame rate as data attributes, written straight to the element. The tests read them, and they ship; they force nothing.
+- The gate (`pnpm e2e`, headless, many workers) proves behaviour and asserts no frame rate. Frame rates, contrast, device loss and the stills are checked headed on this PC's GPU: `pnpm e2e:engine` runs the development page and `pnpm e2e:gpu` runs the production build. Neither is part of the gate.
+- Headed frame rates here sit on the display's 240 Hz ceiling, so they prove the pass lines and nothing about the GPU's limit. A window that is not being shown is drawn about once a second, which failed one headed test and thinned another; the test log carries every such run. What the runtime frees on dispose, and that a throw in the frame loop is reported, are checked in unit tests with three.js replaced by recorders, because a page cannot see a renderer that was left alive.

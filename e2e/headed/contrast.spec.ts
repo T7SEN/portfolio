@@ -206,6 +206,14 @@ for (const { name, viewport, tier, setup } of CASES) {
             `${result.text.toFixed(2)} to 1, muted ${colors.muted} ${result.muted.toFixed(2)} to 1` +
             (own > 0 ? `; ${own} filled elements left out` : ""),
         );
+        // The control: a screenshot with shifted colours would skew every
+        // ratio above, so the bare background must come back as its token.
+        if (veil === 1) {
+          expect(
+            brightest,
+            "the screenshot returns the page's own colours",
+          ).toBe(colors.void.toUpperCase());
+        }
       }
 
       expect(worst.get(shipped)?.text).toBeGreaterThanOrEqual(MINIMUM);

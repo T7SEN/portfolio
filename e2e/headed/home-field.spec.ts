@@ -12,6 +12,7 @@ import {
   readSurface,
   watchErrors,
 } from "../gpu/frame-times";
+import { afterTwoFrames, frameRateEvents } from "../support/tiers";
 
 // The home page of the production build, headed, on this machine's GPU: the
 // order the field arrives in, the headline swap and the frame rate.
@@ -295,6 +296,12 @@ for (const { title, viewport, hideWebGpu } of FIELD_CASES) {
       "the engine's frame rate matches the page's own count",
     ).toBeLessThanOrEqual(FPS_TOLERANCE);
     expect(summary.medianMs).toBeLessThanOrEqual(PASS_MEDIAN_MS[tier]);
+    // The median ignores gaps, so the frame count is held to it: a window
+    // that stalled for more than a twentieth of its length fails here.
+    expect(
+      summary.frames,
+      "the window holds the frames its own median promises",
+    ).toBeGreaterThanOrEqual((0.95 * WINDOW_MS) / summary.medianMs);
   });
 }
 
@@ -385,31 +392,7 @@ test("REQ-ENG-01 REQ-ENG-07 leaving home pauses the field and coming back shows 
   });
   const canvas = await page.locator(CANVAS).elementHandle();
 
-  // Each frameRate event writes data-fps, so the writes count the events.
-  const rateEvents = (waitMs: number) =>
-    page.evaluate(
-      ({ selector, wait }) =>
-        new Promise<number>((resolve, reject) => {
-          const element = document.querySelector(selector);
-          if (element === null) {
-            reject(new Error(`Nothing matches ${selector}`));
-            return;
-          }
-          let writes = 0;
-          const observer = new MutationObserver((records) => {
-            writes += records.length;
-          });
-          observer.observe(element, {
-            attributes: true,
-            attributeFilter: ["data-fps"],
-          });
-          window.setTimeout(() => {
-            observer.disconnect();
-            resolve(writes);
-          }, wait);
-        }),
-      { selector: FIELD, wait: waitMs },
-    );
+  const rateEvents = (waitMs: number) => frameRateEvents(page, waitMs);
   const running = await rateEvents(2_500);
   expect(running).toBeGreaterThan(0);
 
@@ -419,6 +402,8 @@ test("REQ-ENG-01 REQ-ENG-07 leaving home pauses the field and coming back shows 
     .click();
   await page.waitForURL("**/work");
   await expect(field).toBeHidden();
+  // The engine hears of the hidden host one frame late.
+  await afterTwoFrames(page);
   const away = await rateEvents(2_500);
   expect(
     await page

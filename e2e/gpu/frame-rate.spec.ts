@@ -128,5 +128,11 @@ for (const { title, query, count, forced } of CASES) {
       "the engine's frame rate matches the page's own count",
     ).toBeLessThanOrEqual(FPS_TOLERANCE);
     expect(summary.medianMs).toBeLessThanOrEqual(PASS_MEDIAN_MS[tier]);
+    // The median ignores gaps, so the frame count is held to it: a window
+    // that stalled for more than a twentieth of its length fails here.
+    expect(
+      summary.frames,
+      "the window holds the frames its own median promises",
+    ).toBeGreaterThanOrEqual((0.95 * WINDOW_MS) / summary.medianMs);
   });
 }

@@ -9,7 +9,14 @@ import { median, percentile } from "../../src/engine/tier/probe";
 export const WARM_UP_MS = 3_000;
 export const WINDOW_MS = 10_000;
 // 60 fps for tier 1 (REQ-PERF-06) and 30 fps for tier 2 (REQ-ENG-06).
-export const PASS_MEDIAN_MS = { 1: 16.7, 2: 33.3 } as const;
+export const PASS_FPS = { 1: 60, 2: 30 } as const;
+// The frame interval of each rate plus 0.1 ms: frame timestamps are rounded
+// to 0.1 ms, so a field that holds exactly the rate can measure a median that
+// far above its true interval and must still pass.
+export const PASS_MEDIAN_MS = {
+  1: 1000 / PASS_FPS[1] + 0.1,
+  2: 1000 / PASS_FPS[2] + 0.1,
+} as const;
 // How far the engine's own frame rate may sit from the page's count.
 export const FPS_TOLERANCE = 0.03;
 

@@ -318,9 +318,13 @@ for (const tier of [1, 2] as const) {
       raised.litShare,
       "the field is drawn at the full ratio",
     ).toBeGreaterThan(0.01);
+    // Read after the last screenshot, so the printed line and the assertion
+    // speak of the same value.
+    const restored = await ratio();
     console.log(
-      `lifecycle adaptive tier ${tier}: ratio 1, then ${(await ratio()) === 1 ? "0.75 under 30 ms frames, then 1 again" : "not restored"}`,
+      `lifecycle adaptive tier ${tier}: ratio 1, then ${restored === 1 ? "0.75 under 30 ms frames, then 1 again" : `not restored (${restored})`}`,
     );
+    expect(restored, "the ratio is 1 again after the last screenshot").toBe(1);
     expect(errors).toEqual([]);
   });
 }

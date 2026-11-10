@@ -237,4 +237,47 @@ Results are written only after the command ran, copied from its output. Failures
 - Headed, development page, pnpm e2e:engine: exit 0, 17 passed, 2 skipped (the still captures).
   - Tier 2 forced at 100,000 and at 250,000, tier 1 forced at 1,000,000 and tier 1 through the probe at 1,000,000: each 2401 frames, median 4.20 ms, 95th percentile 4.30 ms (239.99 to 240.02 fps). No run was disturbed this time.
   - Loss, calm, tier changes, leaving the page and resize as in the first run. Slow frames lowered the pixel ratio to 0.75 and fast frames raised it to 1 again on both tiers.
-- Covers: as gate run 1 and the two headed entries above
+- Covers: as gate run 1 and the two headed entries above, and REQ-ENG-03 and REQ-ENG-04, whose tests ran inside pnpm test and pnpm e2e
+
+## 2026-11-10 P2 audit, before any change
+
+- Environment: Node 26.12.1, pnpm 12.18.0, Chromium 158.0.8127.18 (Playwright 1.65.0), NVIDIA GeForce RTX 4060 Ti, driver 32.0.16.2101, 240 Hz display. The tree was clean at fce7d22.
+- pnpm typecheck, pnpm lint, pnpm format:check (131 files), pnpm test (20 files, 515 tests), pnpm build (13 static pages), pnpm e2e (139 passed, 4 skipped by design), pnpm budget (largest first load 136.6 KB, 3D payload within limits): each exit 0.
+- Headed, pnpm e2e:gpu: exit 0, 13 passed. pnpm e2e:engine: exit 0, 17 passed, 2 skipped (the still captures). Every frame-rate case: 2396 to 2401 frames in 10 s, median 4.20 ms, 95th percentile 4.30 ms.
+- pnpm install --frozen-lockfile: exit 0, "Lockfile is up to date".
+- A clean copy of the commit (git archive, unpacked outside the repo, frozen install): pnpm typecheck and pnpm build exit 0. pnpm test failed once, 514 of 515: the first test in eslint.config.test.ts took 6.0 s against the 5 s limit, because ESLint loads its plugins for the first time there. A second run passed, 515 of 515. Nothing untracked is needed to build.
+- Seen in a browser on the production build: on /work the hidden canvas's drawing buffer was 1 x 1, and on a live canvas the data-engine attribute read "three.js r187 webgpu". Both are fixed or recorded below.
+- Covers: REQ-ENG-01 to REQ-ENG-08, REQ-TIER-01 to REQ-TIER-05, REQ-PERF-05 to REQ-PERF-07, REQ-OPS-03
+
+## 2026-11-10 P2 audit fixes
+
+- A hidden canvas no longer counts as a 1 x 1 canvas: a resize to nothing keeps the drawing buffer and the particles' places, and the frame is drawn once more when the size returns. Unit tests with three.js replaced by recorders: with the guard taken out, the calm test sees a second size call ("size 1 1 1") and the paused test counts 3 renders where 1 is expected; with it, both pass (REQ-ENG-07).
+- The tier decision no longer reads the adapter's feature list (decision D-037). New unit tests: a device lost before the runtime is handed over gives tier 2 on a new canvas (REQ-ENG-08); a WebGL2 request passes forceWebGL (REQ-ENG-05); the step is capped at one thirtieth of a second and never negative (REQ-ENG-07); the story maps to the formation (REQ-ENG-03).
+- The budget check finds three.js by a second signature, "THREE.WebGPURenderer", which is in three.webgpu.js and in exactly one built chunk, and fails when the engine's runtime has code and no chunk is found to hold three.js (REQ-PERF-05).
+- Browser tests made stricter: the headed frame-rate tests also require the window to hold at least 95% of the frames its own median promises (the earlier thinned run had 1,311 where about 2,381 were due), with median pass lines of 1000 / 60 + 0.1 ms and 1000 / 30 + 0.1 ms; the gate's /work test requires the hidden canvas to keep its drawing buffer's size; the adaptive test asserts the restored ratio; the contrast test asserts its control (the veil at 1 gives the void colour); the no-GPU test samples the headline on every frame while the renderer fails; the /work test reads the loaded scripts for the engine's marker; the lab vitals gained a tier 3 case.
+- Text contrast with the veil at 0.6, which decision D-043 had cited with no recorded run. Muted text #9A9AAB against the brightest pixel, 12 frames, veil 0, 0.6, 0.7 and 1: tier 1 at 1280 x 800 2.01, 4.93, 5.60, 7.27; tier 1 at 375 x 812 3.06, 5.73, 6.11, 7.27; tier 2 at 1280 x 800 1.77, 4.72, 5.29, 7.27; tier 2 on a touch screen at 375 x 812 2.48, 5.28, 5.81, 7.27; the tier 3 still at 1280 x 800 2.65, 5.31, 5.86, 7.27 (1 frame); the still at 375 x 812 3.79, 5.96, 6.33, 7.27 (1 frame). So 0.6 passed in this run, at 4.72 to 1 in the worst case, and D-043 now says so. With the veil at 1 the brightest pixel was #07070A in all six cases.
+- Covers: REQ-ENG-03, REQ-ENG-05, REQ-ENG-07, REQ-ENG-08, REQ-TIER-01, REQ-PERF-05, REQ-PERF-06, REQ-A11Y-06
+
+## 2026-11-10 P2 audit, gate after the fixes
+
+- Environment: as the audit entry above
+- pnpm typecheck: exit 0
+- pnpm lint: exit 0
+- pnpm format:check: exit 0, 131 files
+- pnpm test: exit 0, 20 files, 522 tests
+- pnpm build: exit 0, the same 13 static pages
+- pnpm e2e: exit 0, 140 passed, 4 skipped by design. Tier choice on the desktop project with nothing forced: tier 1, reason probe-pass. Order on the home page: desktop first contentful paint 932 ms, three.js first requested 1125 ms, ready 2451 ms; phone 640 ms, 1112 ms, 2519 ms.
+- Lab vitals, phone-vitals project: / LCP 1632 ms, CLS 0.009, the field ready (tier 2, reason phone) by 7282 ms; /work LCP 1604 ms, CLS 0.009; /work/making-of LCP 1624 ms, CLS 0.002; / on tier 3 with the still (Save-Data) LCP 1636 ms, CLS 0.009, the LCP element is the h1, the still shown by 4260 ms
+- pnpm budget: exit 0; 12 routes, largest first load 136.6 KB on /; 3D payload within limits (docs/results/2026-11-10-budget.md)
+- Headed, production build, pnpm e2e:gpu with CONTRAST_VEILS=0.6: exit 0, 13 passed. Tier 1 (probe-pass), 1,000,000 particles, at 1280 x 800 and at 1920 x 1080, and tier 2 (no-webgpu), 250,000 particles: each 2401 frames, median 4.20 ms, 95th percentile 4.30 ms, mean 240.0 fps. Contrast as in the entry above.
+- Headed, development page, pnpm e2e:engine: exit 0, 17 passed, 2 skipped (the still captures). Tier 2 forced at 100,000 and at 250,000 and tier 1 forced at 1,000,000: 2401 frames each; tier 1 through the probe: 2378 frames; all median 4.20 ms, 95th percentile 4.30 ms. The pixel ratio fell to 0.75 under slow frames and was 1 again at the last read on both tiers. Calm reshape: tier 1 0.5462, 0.5383, 0.5420; tier 2 0.4244, 0.4200, 0.4229.
+- Covers: REQ-ENG-01 to REQ-ENG-08, REQ-TIER-01 to REQ-TIER-05, REQ-PERF-01, REQ-PERF-03, REQ-PERF-05 to REQ-PERF-07, REQ-A11Y-03, REQ-A11Y-06, REQ-CNT-02, REQ-CNT-10
+
+## 2026-11-10 P2 audit, review fixes and the last gate
+
+- One review of the fixes found nothing that had to change and three things worth changing. The mean-rate line was replaced by the frame-count line described above, because a mean of 60 fps would have let the thinned run through and left no room on a 60 Hz display. The gate's /work test now reads the canvas's drawing buffer before leaving the home page and on /work and requires the same size. An unseen first buffer is sized at a ratio of 1, so a ratio under 1 cannot floor it to no pixels.
+- pnpm typecheck, pnpm lint, pnpm format:check (131 files), pnpm test (20 files, 522 tests), pnpm build, pnpm e2e (140 passed, 4 skipped by design), pnpm budget (largest first load 136.6 KB, 3D payload within limits): each exit 0. The /work test passed in both projects with the buffer check.
+- Lab vitals: / LCP 1636 ms, CLS 0.009, the field ready (tier 2, reason phone) by 7870 ms; /work LCP 1628 ms, CLS 0.009; /work/making-of LCP 1652 ms, CLS 0.002; / on tier 3 with the still LCP 1668 ms, CLS 0.009, LCP element h1, the still shown by 4289 ms
+- Headed, pnpm e2e:gpu: exit 0, 13 passed; tier 1 at 1280 x 800 2398 frames and at 1920 x 1080 2396 frames, tier 2 2398 frames, all median 4.20 ms, 95th percentile 4.30 ms.
+- Headed, pnpm e2e:engine: exit 0, 17 passed, 2 skipped; 2397, 2398, 2390 and 2398 frames, all median 4.20 ms, 95th percentile 4.30 ms; the pixel ratio was 1 again at the last read on both tiers.
+- Covers: REQ-ENG-01 to REQ-ENG-08, REQ-TIER-01 to REQ-TIER-05, REQ-PERF-01, REQ-PERF-03, REQ-PERF-05 to REQ-PERF-07, REQ-CNT-02

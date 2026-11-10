@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { expectNoAxeViolations } from "./support/axe";
-import { waitForFieldShown } from "./support/tiers";
+import { ENGINE_TIMEOUT_MS, waitForFieldShown } from "./support/tiers";
 
 test.describe("without JavaScript", () => {
   test.use({ javaScriptEnabled: false });
@@ -16,6 +16,8 @@ test.describe("without JavaScript", () => {
 });
 
 test("REQ-A11Y-01 home page has zero axe violations", async ({ page }) => {
+  // Above the wait for the field, so a slow field fails on that bound.
+  test.setTimeout(ENGINE_TIMEOUT_MS + 30_000);
   await page.goto("/");
   await waitForFieldShown(page);
   await expectNoAxeViolations(page);
@@ -24,6 +26,7 @@ test("REQ-A11Y-01 home page has zero axe violations", async ({ page }) => {
 test("REQ-A11Y-01 home page reflows without horizontal scrolling", async ({
   page,
 }, testInfo) => {
+  test.setTimeout(ENGINE_TIMEOUT_MS + 30_000);
   await page.goto("/");
   await waitForFieldShown(page);
   const overflow = await page.evaluate(

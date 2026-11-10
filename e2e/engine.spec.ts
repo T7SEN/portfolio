@@ -319,13 +319,18 @@ test("REQ-CNT-02 /work loaded directly starts no engine and requests no three.js
   expect(await field.getAttribute("data-ready")).toBeNull();
 });
 
-test("REQ-CNT-02 REQ-ENG-07 coming from the home page, the field is hidden on /work and reports no frames", async ({
+test("REQ-CNT-02 REQ-ENG-07 coming from the home page, the field is hidden on /work, reports no frames and keeps its drawing buffer", async ({
   page,
 }) => {
   await asTier2(page);
   await page.goto("/");
   await waitForField(page);
   await nextFrameRateEvent(page);
+  const bufferSize = () =>
+    page
+      .locator(CANVAS)
+      .evaluate((canvas: HTMLCanvasElement) => [canvas.width, canvas.height]);
+  const shown = await bufferSize();
 
   await page
     .getByRole("navigation", { name: "Primary" })
@@ -339,6 +344,8 @@ test("REQ-CNT-02 REQ-ENG-07 coming from the home page, the field is hidden on /w
   await expect(page.locator(FIELD)).toBeHidden();
   await afterTwoFrames(page);
   expect(await frameRateEvents(page, QUIET_MS)).toBe(0);
+  // A hidden canvas is not a small one: it must not be sized down to nothing.
+  expect(await bufferSize()).toEqual(shown);
 });
 
 test("REQ-TIER-02 a phone settles on tier 2 with reason phone", async ({
@@ -446,6 +453,7 @@ test("REQ-ENG-08 with no usable GPU the page falls to tier 3 and the hero is nev
   page.on("console", (message) => {
     if (message.type() === "error") consoleErrors.push(message.text());
   });
+  await recordField(page);
   await withoutAnyGpu(page);
   await page.goto("/");
 
@@ -457,6 +465,14 @@ test("REQ-ENG-08 with no usable GPU the page falls to tier 3 and the hero is nev
   const still = await readStill(page);
   expect(still?.loaded).toBe(true);
   expect(still?.covers).toBe(true);
+
+  // Every frame while the renderer was failing, not only the settled page.
+  const log = await readFieldLog(page);
+  expect(log.samples.length).toBeGreaterThan(0);
+  expect(
+    log.samples.filter((sample) => sample.headline !== headlines.still),
+  ).toEqual([]);
+  expect(log.swaps).toEqual([]);
 
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     headlines.still,

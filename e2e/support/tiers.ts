@@ -14,7 +14,9 @@ export const STILL = `${FIELD} img[data-part="still"]`;
 
 // Many workers share one GPU in the gate, so a field can take far longer to
 // draw its first frame than it does alone. Bounded, so a field that never
-// arrives still fails.
+// arrives still fails. Playwright stops a test at 30 s by default, so a test
+// that waits for the field sets its own timeout above this one
+// (test.setTimeout(ENGINE_TIMEOUT_MS + 30_000)), or the bound is never reached.
 export const ENGINE_TIMEOUT_MS = 60_000;
 
 export type TierReport = { tier: number; reason: string | null };
@@ -90,7 +92,8 @@ export async function waitForField(page: Page): Promise<TierReport> {
 
 /**
  * Waits until the field, or the tier 3 still's wrapper, has faded in, so a
- * screenshot shows the page as a visitor ends up seeing it.
+ * screenshot shows the page as a visitor ends up seeing it. It can wait up to
+ * ENGINE_TIMEOUT_MS, so the calling test needs a timeout above that.
  */
 export async function waitForFieldShown(page: Page): Promise<TierReport> {
   const report = await waitForField(page);

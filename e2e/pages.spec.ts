@@ -1,6 +1,6 @@
 import { expect, test, type Locator } from "@playwright/test";
 
-import { findDeferredLibraries } from "../scripts/budget-lib.mjs";
+import { ENGINE_ENTRY, findDeferredLibraries } from "../scripts/budget-lib.mjs";
 import { findPhysicalInCss } from "../scripts/class-scan-lib.mjs";
 import { studyHref } from "../src/content";
 import { about } from "../src/content/about";
@@ -8,7 +8,7 @@ import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { pages } from "../src/content/pages";
 import { expectNoAxeViolations } from "./support/axe";
 import { ROUTES, SHORT_STUDIES } from "./support/routes";
-import { waitForFieldShown } from "./support/tiers";
+import { ENGINE_TIMEOUT_MS, waitForFieldShown } from "./support/tiers";
 
 const HERO = heroCopy(STATIC_TIER);
 
@@ -48,10 +48,8 @@ test.describe("without JavaScript", () => {
 test("REQ-CNT-02 /work loads no three.js and no engine code", async ({
   page,
 }) => {
-  const requested: string[] = [];
   const scripts: Promise<{ url: string; source: string }>[] = [];
 
-  page.on("request", (request) => requested.push(request.url()));
   page.on("response", (response) => {
     const type = response.headers()["content-type"] ?? "";
     if (
@@ -70,9 +68,11 @@ test("REQ-CNT-02 /work loads no three.js and no engine code", async ({
 
   expect(loaded.length).toBeGreaterThan(0);
   for (const { url, source } of loaded) {
-    expect(findDeferredLibraries(source), url).not.toContain("three.js");
+    const libraries = findDeferredLibraries(source);
+    expect(libraries, url).not.toContain("three.js");
+    // Chunk names are hashes, so the engine is found by what its code holds.
+    expect(libraries, url).not.toContain(ENGINE_ENTRY);
   }
-  expect(requested.filter((url) => /engine/i.test(url))).toEqual([]);
 });
 
 test("REQ-NAV-01 See the work is in view from the first frame and reaches /work in one click", async ({
@@ -197,6 +197,8 @@ for (const route of ROUTES) {
   test(`REQ-A11Y-01 ${route.path} has zero axe violations and no horizontal scroll`, async ({
     page,
   }, testInfo) => {
+    // Above the wait for the field, so a slow field fails on that bound.
+    if (route.hasField) test.setTimeout(ENGINE_TIMEOUT_MS + 30_000);
     await page.goto(route.path);
     // The scan and the screenshot are of the page with its field in place.
     if (route.hasField) await waitForFieldShown(page);

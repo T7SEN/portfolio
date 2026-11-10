@@ -2,7 +2,7 @@ import { expect, test, type Locator } from "@playwright/test";
 
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { ROUTES } from "./support/routes";
-import { waitForFieldShown } from "./support/tiers";
+import { ENGINE_TIMEOUT_MS, waitForFieldShown } from "./support/tiers";
 
 const HERO = heroCopy(STATIC_TIER);
 
@@ -18,6 +18,8 @@ for (const route of ROUTES) {
   test(`REQ-I18N-02 ${route.path} holds its layout with dir=rtl forced`, async ({
     page,
   }, testInfo) => {
+    // Above the wait for the field, so a slow field fails on that bound.
+    if (route.hasField) test.setTimeout(ENGINE_TIMEOUT_MS + 30_000);
     await page.goto(route.path);
     await page.evaluate(() => {
       document.documentElement.dir = "rtl";

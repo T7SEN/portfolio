@@ -1,7 +1,8 @@
 import { expect, test } from "@playwright/test";
 
 import { studyHref } from "../src/content";
-import { FIELD, waitForField } from "./support/tiers";
+import { ROUTES } from "./support/routes";
+import { asTier3, FIELD, STILL, waitForField } from "./support/tiers";
 
 // The mid-range phone profile of decision D-019: Chrome DevTools' "Slow 4G"
 // preset (front_end/core/sdk/NetworkManager.ts) and a 4x CPU slowdown.
@@ -19,13 +20,36 @@ const CLS_LIMIT = 0.05; // REQ-PERF-03
 // Time after the load event for late shifts, such as a font swap, to land.
 const SETTLE_MS = 1000;
 
-const VITALS_ROUTES = ["/", "/work", studyHref("making-of")];
+const title = (subject: string) =>
+  `REQ-PERF-01 REQ-PERF-03 ${subject} keeps LCP and CLS in budget on Slow 4G with a 4x CPU slowdown`;
+// The phone gets tier 2 by itself; the last case forces the tier 3 still,
+// the one path that puts a full-screen picture on the page.
+const VITALS_CASES = [
+  ...["/", "/work", studyHref("making-of")].map((path) => ({
+    path,
+    label: path,
+    title: title(path),
+    isTier3: false,
+  })),
+  {
+    path: "/",
+    label: "/ tier 3",
+    title: title("/ on tier 3 with the still"),
+    isTier3: true,
+  },
+];
 // The routes with the field behind them: the engine loads after first
 // content there, so the measurement waits for it and counts what it moves.
-const FIELD_ROUTES = ["/"];
+const hasField = (path: string) =>
+  ROUTES.some((route) => route.path === path && route.hasField === true);
 
 type Shift = { value: number; startTime: number; moved: string };
-type Vitals = { lcp: number | null; lcpElement: string; shifts: Shift[] };
+type Vitals = {
+  lcp: number | null;
+  lcpElement: string;
+  lcpTag: string;
+  shifts: Shift[];
+};
 type VitalsWindow = Window & { __vitals?: Vitals };
 // layout-shift entries are not in TypeScript's DOM types.
 type LayoutShiftEntry = PerformanceEntry & {
@@ -55,10 +79,8 @@ function cumulativeLayoutShift(shifts: readonly Shift[]) {
   return largest;
 }
 
-for (const path of VITALS_ROUTES) {
-  test(`REQ-PERF-01 REQ-PERF-03 ${path} keeps LCP and CLS in budget on Slow 4G with a 4x CPU slowdown`, async ({
-    page,
-  }, testInfo) => {
+for (const { path, label, title, isTier3 } of VITALS_CASES) {
+  test(title, async ({ page }, testInfo) => {
     // Only the phone-vitals project runs this file (playwright.config.ts):
     // the mid-range phone profile, after the other projects, one at a time.
     // The throttled phone needs far longer than the default for the field.
@@ -66,7 +88,12 @@ for (const path of VITALS_ROUTES) {
 
     // Runs before any page script, so no entry is missed.
     await page.addInitScript(() => {
-      const vitals: Vitals = { lcp: null, lcpElement: "", shifts: [] };
+      const vitals: Vitals = {
+        lcp: null,
+        lcpElement: "",
+        lcpTag: "",
+        shifts: [],
+      };
       (window as VitalsWindow).__vitals = vitals;
 
       new PerformanceObserver((list) => {
@@ -76,6 +103,7 @@ for (const path of VITALS_ROUTES) {
           vitals.lcpElement = entry.element
             ? `${entry.element.tagName.toLowerCase()} "${text}"`
             : "(removed from the page)";
+          vitals.lcpTag = entry.element?.tagName.toLowerCase() ?? "none";
         }
       }).observe({ type: "largest-contentful-paint", buffered: true });
 
@@ -98,6 +126,8 @@ for (const path of VITALS_ROUTES) {
       }).observe({ type: "layout-shift", buffered: true });
     });
 
+    if (isTier3) await asTier3(page);
+
     const client = await page.context().newCDPSession(page);
     await client.send("Network.enable");
     await client.send("Network.emulateNetworkConditions", SLOW_4G);
@@ -108,12 +138,15 @@ for (const path of VITALS_ROUTES) {
     const response = await page.goto(path, { waitUntil: "load" });
     expect(response?.ok()).toBe(true);
     let field = "no field on this route";
-    if (FIELD_ROUTES.includes(path)) {
+    if (hasField(path)) {
       const { tier, reason } = await waitForField(page);
       const readyMs = await page.evaluate(() => Math.round(performance.now()));
       field = `field tier ${tier} (${reason}) ready by ${readyMs} ms`;
+      if (isTier3)
+        expect({ tier, reason }).toEqual({ tier: 3, reason: "save-data" });
       // The fade is part of what the visitor sees arrive.
       await expect(page.locator(FIELD)).toHaveCSS("opacity", "1");
+      if (isTier3) await expect(page.locator(STILL)).toHaveCSS("opacity", "1");
     }
     await page.evaluate(
       (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -130,11 +163,13 @@ for (const path of VITALS_ROUTES) {
       };
     });
     if (!vitals || vitals.lcp === null) {
-      throw new Error(`${path} reported no largest-contentful-paint entry`);
+      throw new Error(`${label} reported no largest-contentful-paint entry`);
     }
 
     const cls = cumulativeLayoutShift(vitals.shifts);
-    const line = `vitals ${path} LCP ${Math.round(vitals.lcp)} ms CLS ${cls.toFixed(3)}`;
+    const line =
+      `vitals ${label} LCP ${Math.round(vitals.lcp)} ms CLS ${cls.toFixed(3)}` +
+      (isTier3 ? ` LCP element ${vitals.lcpTag}` : "");
     const shifts = vitals.shifts
       .map(
         ({ value, startTime, moved }) =>
@@ -142,7 +177,7 @@ for (const path of VITALS_ROUTES) {
       )
       .join(", ");
     console.log(line);
-    if (FIELD_ROUTES.includes(path)) console.log(`vitals ${path} ${field}`);
+    if (hasField(path)) console.log(`vitals ${label} ${field}`);
     testInfo.annotations.push({
       type: "vitals",
       description: `${line}; LCP element ${vitals.lcpElement}; response start ${Math.round(responseStart)} ms; ${field}; shifts: ${shifts || "none"}`,

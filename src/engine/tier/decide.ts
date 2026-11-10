@@ -19,6 +19,8 @@ export function decideTier(
   if (environment.coarsePointer) return { kind: "webgl2", reason: "phone" };
   if (!environment.hasWebGpu) return { kind: "webgl2", reason: "no-webgpu" };
 
+  // A default adapter request is core level, so a non-null adapter needs no
+  // feature check.
   const { adapter } = environment;
   if (adapter === null) return { kind: "webgl2", reason: "no-adapter" };
   if (adapter.isFallbackAdapter) {
@@ -29,7 +31,6 @@ export function decideTier(
   // the largest storage binding must take it whole.
   const bufferBytes = tier1Particles * BYTES_PER_PARTICLE;
   if (
-    !adapter.coreFeatures ||
     adapter.maxStorageBufferBindingSize < bufferBytes ||
     adapter.maxBufferSize < bufferBytes
   ) {

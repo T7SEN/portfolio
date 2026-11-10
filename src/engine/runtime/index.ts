@@ -84,14 +84,26 @@ function startRuntime(
   let bufferRatio = 0;
   const frameTimes: number[] = [];
   let sinceAdaptMs = 0;
+  // True while the canvas has no CSS size.
+  let unseen = false;
 
   // Sizing the drawing buffer clears the canvas and makes WebGPU configure
   // its context again, even when nothing changed (three r187, CanvasTarget),
   // so unchanged values stop here. The canvas is sized by CSS; this call
   // never writes its style.
   const applySize = (): boolean => {
+    // A canvas with no CSS size is hidden, not small: its wrapper is display
+    // none on every route but the home page. It keeps its buffer and its
+    // seat. Only the first sizing takes the clamped size, so a runtime built
+    // on a hidden host still starts.
+    unseen = canvas.clientWidth === 0 || canvas.clientHeight === 0;
+    if (unseen && bufferWidth > 0) return false;
+
     const { width, height } = cssSize();
-    const ratio = resolution.pixelRatio;
+    // An unseen first buffer is one pixel at a ratio of 1: a ratio under 1
+    // would floor it to no pixels at all. The frame loop puts the real ratio
+    // back once the canvas is shown.
+    const ratio = unseen ? 1 : resolution.pixelRatio;
     if (
       width === bufferWidth &&
       height === bufferHeight &&
@@ -200,9 +212,15 @@ function startRuntime(
 
   const observer = new ResizeObserver(() => {
     try {
+      const wasUnseen = unseen;
+      const resized = applySize();
+      // A canvas that is shown again at its old size keeps its buffer, but
+      // nothing draws on it while the loop is off.
+      const shownAgain = wasUnseen && !unseen && !running;
       // A frame that was on screen is drawn again at once, because the new
       // buffer is blank: a paused or calm field would otherwise stay empty.
-      if (!applySize() || frames === 0 || loss.message !== null) return;
+      if (!resized && !shownAgain) return;
+      if (frames === 0 || loss.message !== null) return;
       if (still) fitStill();
       draw();
     } catch (error) {

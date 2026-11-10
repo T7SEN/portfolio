@@ -9,7 +9,6 @@ const TIER1_BYTES = PARTICLES.tier1 * BYTES_PER_PARTICLE;
 // The WebGPU specification's default limits: 128 MiB and 256 MiB.
 const capableAdapter: AdapterFacts = {
   isFallbackAdapter: false,
-  coreFeatures: true,
   maxStorageBufferBindingSize: 134_217_728,
   maxBufferSize: 268_435_456,
 };
@@ -90,15 +89,6 @@ describe("decideTier, the decision table row by row", () => {
     });
   });
 
-  it("REQ-TIER-01 an adapter without the core features gives WebGL2", () => {
-    const environment = desktop({ adapter: adapter({ coreFeatures: false }) });
-
-    expect(decideTier(environment)).toEqual({
-      kind: "webgl2",
-      reason: "adapter-limits",
-    });
-  });
-
   it("REQ-TIER-01 a storage binding limit below the tier 1 buffer gives WebGL2", () => {
     const environment = desktop({
       adapter: adapter({ maxStorageBufferBindingSize: TIER1_BYTES - 1 }),
@@ -157,7 +147,7 @@ describe("decideTier, the order of precedence", () => {
   it("REQ-TIER-01 a missing navigator.gpu wins over every adapter fact", () => {
     const environment = desktop({
       hasWebGpu: false,
-      adapter: adapter({ isFallbackAdapter: true, coreFeatures: false }),
+      adapter: adapter({ isFallbackAdapter: true, maxBufferSize: 0 }),
     });
 
     expect(decideTier(environment)).toEqual({
@@ -170,7 +160,6 @@ describe("decideTier, the order of precedence", () => {
     const environment = desktop({
       adapter: {
         isFallbackAdapter: true,
-        coreFeatures: false,
         maxStorageBufferBindingSize: 0,
         maxBufferSize: 0,
       },

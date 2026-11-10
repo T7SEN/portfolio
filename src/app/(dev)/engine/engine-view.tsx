@@ -36,9 +36,10 @@ function isPressed(button: HTMLButtonElement) {
 }
 
 /**
- * The engine alone, with nothing of the site around it (REQ-ENG-04). State
- * is written straight to the readout's data attributes, where the browser
- * tests read it, so no event renders React.
+ * The engine without the site's session and store (REQ-ENG-04). The page
+ * still renders inside the root layout; ?bare=1 covers the window with the
+ * host. State is written straight to the readout's data attributes, where
+ * the browser tests read it, so no event renders React.
  */
 export function EngineView() {
   const viewRef = useRef<HTMLDivElement>(null);

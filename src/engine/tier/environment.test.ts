@@ -3,7 +3,6 @@ import { readEnvironment } from "./environment";
 
 const SAVE_DATA_QUERY = "(prefers-reduced-data: reduce)";
 const COARSE_POINTER_QUERY = "(pointer: coarse)";
-const CORE_FEATURE = "core-features-and-limits";
 
 interface FakeAdapter {
   info?: { isFallbackAdapter?: unknown };
@@ -14,7 +13,7 @@ interface FakeAdapter {
 function capableAdapter(): FakeAdapter {
   return {
     info: { isFallbackAdapter: false },
-    features: new Set([CORE_FEATURE, "timestamp-query"]),
+    features: new Set(["timestamp-query"]),
     limits: {
       maxStorageBufferBindingSize: 134_217_728,
       maxBufferSize: 268_435_456,
@@ -221,7 +220,7 @@ describe("readEnvironment, navigator.gpu", () => {
     });
   });
 
-  it("REQ-TIER-01 the adapter is mapped to its four facts", async () => {
+  it("REQ-TIER-01 the adapter is mapped to its three facts", async () => {
     stubNavigator({
       gpu: { requestAdapter: adapterRequest(capableAdapter()) },
     });
@@ -233,7 +232,6 @@ describe("readEnvironment, navigator.gpu", () => {
       hasWebGpu: true,
       adapter: {
         isFallbackAdapter: false,
-        coreFeatures: true,
         maxStorageBufferBindingSize: 134_217_728,
         maxBufferSize: 268_435_456,
       },
@@ -250,17 +248,21 @@ describe("readEnvironment, navigator.gpu", () => {
     expect(environment.adapter?.isFallbackAdapter).toBe(true);
   });
 
-  it("REQ-TIER-01 an adapter without the core features feature is reported as such", async () => {
-    const adapter = {
-      ...capableAdapter(),
-      features: new Set(["timestamp-query"]),
+  it("REQ-TIER-01 the adapter's feature list is not read", async () => {
+    const adapter: FakeAdapter = {
+      info: { isFallbackAdapter: false },
+      limits: capableAdapter().limits,
     };
     stubNavigator({ gpu: { requestAdapter: adapterRequest(adapter) } });
     stubMatchMedia();
 
     const environment = await readEnvironment();
 
-    expect(environment.adapter?.coreFeatures).toBe(false);
+    expect(environment.adapter).toEqual({
+      isFallbackAdapter: false,
+      maxStorageBufferBindingSize: 134_217_728,
+      maxBufferSize: 268_435_456,
+    });
   });
 
   it("REQ-TIER-01 limits that are missing or not numbers are read as 0", async () => {
@@ -275,7 +277,6 @@ describe("readEnvironment, navigator.gpu", () => {
 
     expect(environment.adapter).toEqual({
       isFallbackAdapter: false,
-      coreFeatures: true,
       maxStorageBufferBindingSize: 0,
       maxBufferSize: 0,
     });
@@ -333,12 +334,8 @@ describe("readEnvironment, adapter failures", () => {
   });
 
   it.each([
-    ["info", { features: new Set([CORE_FEATURE]), limits: {} }],
-    ["features", { info: { isFallbackAdapter: false }, limits: {} }],
-    [
-      "limits",
-      { info: { isFallbackAdapter: false }, features: new Set([CORE_FEATURE]) },
-    ],
+    ["info", { limits: {} }],
+    ["limits", { info: { isFallbackAdapter: false } }],
   ] satisfies [string, FakeAdapter][])(
     "REQ-TIER-01 an adapter without %s gives no adapter",
     async (_part, adapter) => {

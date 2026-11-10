@@ -53,7 +53,6 @@ async function readAdapter(gpu: GPU): Promise<AdapterFacts | null> {
 
     return {
       isFallbackAdapter: adapter.info.isFallbackAdapter === true,
-      coreFeatures: adapter.features.has("core-features-and-limits") === true,
       maxStorageBufferBindingSize: limitOrZero(
         adapter.limits.maxStorageBufferBindingSize,
       ),

@@ -20,7 +20,6 @@ const DESKTOP: Environment = {
   hasWebGpu: true,
   adapter: {
     isFallbackAdapter: false,
-    coreFeatures: true,
     maxStorageBufferBindingSize: 2 ** 30,
     maxBufferSize: 2 ** 30,
   },
@@ -473,7 +472,6 @@ describe("tier flow", () => {
     const smallAdapter: Partial<Environment> = {
       adapter: {
         isFallbackAdapter: false,
-        coreFeatures: true,
         maxStorageBufferBindingSize: 80_000,
         maxBufferSize: 80_000,
       },
@@ -1170,6 +1168,38 @@ describe("lost device", () => {
       { type: "ready", tier: 3 },
     ]);
     expect(canvas()).toBeNull();
+  });
+
+  test("REQ-ENG-08 a device lost before the runtime is handed over gives tier 2 on a new canvas", async () => {
+    const stubs = stubRuntimes();
+    const factory: RuntimeFactory = (options) => {
+      const isFirst = stubs.requests.length === 0;
+      const pending = stubs.factory(options);
+      if (isFirst) options.onLost("lost while it was built");
+      return pending;
+    };
+    const { engine, events, host, canvas } = mount({
+      environment: facts(),
+      loadRuntime: () => Promise.resolve(factory),
+    });
+
+    void engine.start();
+    await settle();
+
+    expect(nth(stubs.built, 0).isDisposed).toBe(true);
+    expect(stubs.requests.map((request) => request.backend)).toEqual([
+      "webgpu",
+      "webgl2",
+    ]);
+    expect(nth(stubs.requests, 1).canvas).not.toBe(
+      nth(stubs.requests, 0).canvas,
+    );
+    expect(host.querySelectorAll("canvas")).toHaveLength(1);
+    expect(canvas()).toBe(nth(stubs.requests, 1).canvas);
+    expect(nth(stubs.built, 1).isDisposed).toBe(false);
+    expect(events).toEqual([
+      { type: "tierChosen", tier: 2, reason: "webgpu-init-fallback" },
+    ]);
   });
 
   test("REQ-ENG-08 a loss reported by a runtime that was already replaced is ignored", async () => {

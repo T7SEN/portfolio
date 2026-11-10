@@ -1,6 +1,6 @@
-// Numbers the controller, the tier decision and the runtime share. Particle
-// counts are targets until a headed run on a real GPU has measured them
-// (REQ-TIER-05); the measured results live in docs/test-log.md.
+// Numbers the controller, the tier decision and the runtime share. The
+// desktop particle counts were measured in headed runs on a real GPU on
+// 10 Nov 2026 (REQ-TIER-05, docs/test-log.md); phones are measured at P7.
 
 export const PARTICLES = {
   tier1: 1_000_000,
@@ -17,7 +17,8 @@ export const PROBE = {
   // Tier 1 promises 60 fps (REQ-PERF-06). A median above 20 ms means most
   // frames missed a 60 Hz refresh, so the field belongs on tier 2.
   passMedianMs: 20,
-  // Fewer counted frames than this means the backend never really drew.
+  // Fewer counted frames than this is too few to judge: the field drew at
+  // under about 7 fps, or nothing was drawn.
   minFrames: 10,
 } as const;
 

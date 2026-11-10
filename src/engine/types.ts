@@ -73,8 +73,6 @@ export interface Environment {
 
 export interface AdapterFacts {
   isFallbackAdapter: boolean;
-  /** The adapter reports the core-features-and-limits feature. */
-  coreFeatures: boolean;
   maxStorageBufferBindingSize: number;
   maxBufferSize: number;
 }

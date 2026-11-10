@@ -2,6 +2,7 @@ import { expect, test, type Locator } from "@playwright/test";
 
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { ROUTES } from "./support/routes";
+import { waitForFieldShown } from "./support/tiers";
 
 const HERO = heroCopy(STATIC_TIER);
 
@@ -22,6 +23,8 @@ for (const route of ROUTES) {
       document.documentElement.dir = "rtl";
     });
     await expect(page.locator("html")).toHaveAttribute("dir", "rtl");
+    // The screenshot is of the page with its field in place.
+    if (route.hasField) await waitForFieldShown(page);
 
     const { overflow, width } = await page.evaluate(() => ({
       overflow:
@@ -42,7 +45,8 @@ for (const route of ROUTES) {
     expect(logo.x + logo.width / 2).toBeGreaterThan(width / 2);
 
     if (route.path === "/") {
-      const hero = page.getByRole("region", { name: HERO.headline });
+      // Found by its heading's id: the headline's text depends on the tier.
+      const hero = page.locator('section[aria-labelledby="hero-headline"]');
       for (const name of [HERO.primaryAction, HERO.secondaryAction]) {
         const action = await boxOf(
           hero.getByRole("link", { name, exact: true }),

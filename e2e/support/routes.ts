@@ -10,14 +10,22 @@ export type SiteRoute = {
   h1: string;
   // One paragraph of the route's main text, as it appears in the static HTML.
   body: string;
+  // The engine draws its field behind this route.
+  hasField?: boolean;
 };
 
 const HERO = heroCopy(STATIC_TIER);
 
-// The P1 routes. Study routes come from the content index, so a new study is
+// The site's routes. Study routes come from the content index, so a new study is
 // checked without editing this list.
 export const ROUTES: readonly SiteRoute[] = [
-  { path: "/", name: "home", h1: HERO.headline, body: HERO.subLine },
+  {
+    path: "/",
+    name: "home",
+    h1: HERO.headline,
+    body: HERO.subLine,
+    hasField: true,
+  },
   {
     path: "/work",
     name: "work",

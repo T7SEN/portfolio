@@ -4,10 +4,11 @@ import { findDeferredLibraries } from "../scripts/budget-lib.mjs";
 import { findPhysicalInCss } from "../scripts/class-scan-lib.mjs";
 import { studyHref } from "../src/content";
 import { about } from "../src/content/about";
-import { headlines, heroCopy, STATIC_TIER } from "../src/content/hero";
+import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { pages } from "../src/content/pages";
 import { expectNoAxeViolations } from "./support/axe";
 import { ROUTES, SHORT_STUDIES } from "./support/routes";
+import { waitForFieldShown } from "./support/tiers";
 
 const HERO = heroCopy(STATIC_TIER);
 
@@ -197,6 +198,8 @@ for (const route of ROUTES) {
     page,
   }, testInfo) => {
     await page.goto(route.path);
+    // The scan and the screenshot are of the page with its field in place.
+    if (route.hasField) await waitForFieldShown(page);
     await expectNoAxeViolations(page);
 
     const overflow = await page.evaluate(
@@ -228,31 +231,6 @@ for (const route of ROUTES) {
     await expect(page.locator("main#main")).toBeFocused();
   });
 }
-
-test("REQ-PERF-03 swapping the hero headline to the tier 1 and 2 line moves nothing", async ({
-  page,
-}) => {
-  await page.goto("/");
-  await page.evaluate(() => document.fonts.ready);
-  const h1 = page.getByRole("heading", { level: 1 });
-  const subLine = page.getByText(HERO.subLine, { exact: true }).first();
-  const before = { h1: await boxOf(h1), subLine: await boxOf(subLine) };
-
-  // What the engine's tierChosen will do from P2: show the other line and
-  // reserve the tier 3 line in its place.
-  await h1.evaluate(
-    (element, lines) => {
-      element.textContent = lines.gpu;
-      element.parentElement?.setAttribute("data-reserve", lines.still);
-    },
-    { gpu: headlines.gpu, still: headlines.still },
-  );
-  await expect(h1).toHaveText(headlines.gpu);
-  const after = { h1: await boxOf(h1), subLine: await boxOf(subLine) };
-
-  expect(after.h1.y).toBe(before.h1.y);
-  expect(after.subLine.y).toBe(before.subLine.y);
-});
 
 test("REQ-I18N-01 the shipped CSS has no physical left or right rules", async ({
   page,

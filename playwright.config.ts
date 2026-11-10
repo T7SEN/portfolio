@@ -2,6 +2,11 @@ import { defineConfig, devices } from "@playwright/test";
 
 const PORT = 3100;
 
+// The specs in e2e/gpu and e2e/headed need a headed browser on a real GPU,
+// so they run only through playwright.engine.config.ts (the development
+// server) and playwright.gpu.config.ts (the production build).
+const GPU_SPECS = /[\\/]e2e[\\/](?:gpu|headed)[\\/]/;
+
 // Gates run against a production build: run `pnpm build` first.
 // channel "chromium" is the full browser in new headless mode. Never pass
 // --disable-gpu: it turns off WebGL and WebGPU.
@@ -18,7 +23,7 @@ export default defineConfig({
   projects: [
     {
       name: "desktop",
-      testIgnore: /vitals\.spec\.ts/,
+      testIgnore: [/vitals\.spec\.ts/, GPU_SPECS],
       use: {
         ...devices["Desktop Chrome"],
         channel: "chromium",
@@ -27,7 +32,7 @@ export default defineConfig({
     },
     {
       name: "phone",
-      testIgnore: /vitals\.spec\.ts/,
+      testIgnore: [/vitals\.spec\.ts/, GPU_SPECS],
       use: {
         ...devices["Pixel 5"],
         channel: "chromium",

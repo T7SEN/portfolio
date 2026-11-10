@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 
 import { studyHref } from "../src/content";
+import { FIELD, waitForField } from "./support/tiers";
 
 // The mid-range phone profile of decision D-019: Chrome DevTools' "Slow 4G"
 // preset (front_end/core/sdk/NetworkManager.ts) and a 4x CPU slowdown.
@@ -19,6 +20,9 @@ const CLS_LIMIT = 0.05; // REQ-PERF-03
 const SETTLE_MS = 1000;
 
 const VITALS_ROUTES = ["/", "/work", studyHref("making-of")];
+// The routes with the field behind them: the engine loads after first
+// content there, so the measurement waits for it and counts what it moves.
+const FIELD_ROUTES = ["/"];
 
 type Shift = { value: number; startTime: number; moved: string };
 type Vitals = { lcp: number | null; lcpElement: string; shifts: Shift[] };
@@ -57,6 +61,8 @@ for (const path of VITALS_ROUTES) {
   }, testInfo) => {
     // Only the phone-vitals project runs this file (playwright.config.ts):
     // the mid-range phone profile, after the other projects, one at a time.
+    // The throttled phone needs far longer than the default for the field.
+    test.setTimeout(120_000);
 
     // Runs before any page script, so no entry is missed.
     await page.addInitScript(() => {
@@ -101,6 +107,14 @@ for (const path of VITALS_ROUTES) {
 
     const response = await page.goto(path, { waitUntil: "load" });
     expect(response?.ok()).toBe(true);
+    let field = "no field on this route";
+    if (FIELD_ROUTES.includes(path)) {
+      const { tier, reason } = await waitForField(page);
+      const readyMs = await page.evaluate(() => Math.round(performance.now()));
+      field = `field tier ${tier} (${reason}) ready by ${readyMs} ms`;
+      // The fade is part of what the visitor sees arrive.
+      await expect(page.locator(FIELD)).toHaveCSS("opacity", "1");
+    }
     await page.evaluate(
       (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
       SETTLE_MS,
@@ -128,9 +142,10 @@ for (const path of VITALS_ROUTES) {
       )
       .join(", ");
     console.log(line);
+    if (FIELD_ROUTES.includes(path)) console.log(`vitals ${path} ${field}`);
     testInfo.annotations.push({
       type: "vitals",
-      description: `${line}; LCP element ${vitals.lcpElement}; response start ${Math.round(responseStart)} ms; shifts: ${shifts || "none"}`,
+      description: `${line}; LCP element ${vitals.lcpElement}; response start ${Math.round(responseStart)} ms; ${field}; shifts: ${shifts || "none"}`,
     });
 
     // Without the throttle the numbers would mean nothing.

@@ -5,11 +5,18 @@ import { gzipSync } from "node:zlib";
 // REQ-PERF-04: about 200 KB gzip of JavaScript before any 3D, counted in KiB.
 export const FIRST_LOAD_LIMIT_BYTES = 200 * 1024;
 
+// The engine's entry (the controller that decides the tier) builds into a
+// chunk with no three.js in it, so it is found by a string of its own: the
+// value src/engine/controller.ts writes on its canvas.
+export const ENGINE_MARKER = "portfolio-field";
+export const ENGINE_ENTRY = "engine entry";
+
 // Strings that survive minification in each library that must load after
 // first content. Each one was checked against the pinned package source and
 // against a Turbopack production build that imported the library.
 export const DEFERRED_LIBRARIES = [
   { name: "three.js", signatures: ["__THREE__"] },
+  { name: ENGINE_ENTRY, signatures: [ENGINE_MARKER] },
   { name: "GSAP", signatures: ["GSAP target"] },
   { name: "ScrollTrigger", signatures: ["ScrollTrigger"] },
   { name: "SplitText", signatures: ["autoSplit", "deepSlice"] },
@@ -95,11 +102,44 @@ export const PAYLOAD_LIMIT_BYTES = {
   phone: 3 * 1024 * 1024,
 };
 
+// Sorts the built chunks into the 3D payload's JavaScript. chunks is a list
+// of { bytes, libraries }, with libraries from findDeferredLibraries. Chunks
+// with three.js load on tiers 1 and 2 only. The engine's entry loads on every
+// tier, because it is the code that decides the tier; it must never share a
+// chunk with three.js, or tier 3 would download three.js with it.
+export function engineChunkBytes(chunks) {
+  const totals = {
+    three: { count: 0, bytes: 0 },
+    entry: { count: 0, bytes: 0 },
+    shared: 0,
+  };
+  for (const { bytes, libraries } of chunks) {
+    const hasThree = libraries.includes("three.js");
+    const hasEntry = libraries.includes(ENGINE_ENTRY);
+    if (hasThree) {
+      totals.three.count += 1;
+      totals.three.bytes += bytes;
+      if (hasEntry) totals.shared += 1;
+    } else if (hasEntry) {
+      totals.entry.count += 1;
+      totals.entry.bytes += bytes;
+    }
+  }
+  return totals;
+}
+
 // manifest: { payloads: [{ tier, device, files: ["public/..."] }] }, written
 // by the engine from P2. sizeOf returns a file's size in bytes, or null when
 // the file is missing. engineJsBytes is the gzip size of the built chunks
-// that hold three.js and the engine; tiers 1 and 2 download them, tier 3 does not.
-export function payloadFailures(manifest, sizeOf, engineJsBytes = 0) {
+// that hold three.js and the runtime; tiers 1 and 2 download them, tier 3
+// does not. entryJsBytes is the gzip size of the engine's entry chunks, which
+// every tier downloads.
+export function payloadFailures(
+  manifest,
+  sizeOf,
+  engineJsBytes = 0,
+  entryJsBytes = 0,
+) {
   const failures = [];
   const totals = [];
   const payloads = Array.isArray(manifest?.payloads) ? manifest.payloads : [];
@@ -111,7 +151,7 @@ export function payloadFailures(manifest, sizeOf, engineJsBytes = 0) {
       failures.push(`tier ${tier}: unknown device "${device}"`);
       continue;
     }
-    let bytes = tier === 1 || tier === 2 ? engineJsBytes : 0;
+    let bytes = entryJsBytes + (tier === 1 || tier === 2 ? engineJsBytes : 0);
     for (const file of Array.isArray(files) ? files : []) {
       const size = sizeOf(file);
       if (size === null)

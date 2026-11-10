@@ -1,0 +1,17 @@
+{
+  "payloads": [
+    { "tier": 1, "device": "desktop", "files": [] },
+    { "tier": 2, "device": "desktop", "files": [] },
+    { "tier": 2, "device": "phone", "files": [] },
+    {
+      "tier": 3,
+      "device": "desktop",
+      "files": ["public/still/field-wide.jpg", "public/still/field-tall.jpg"]
+    },
+    {
+      "tier": 3,
+      "device": "phone",
+      "files": ["public/still/field-wide.jpg", "public/still/field-tall.jpg"]
+    }
+  ]
+}

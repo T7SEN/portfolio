@@ -14,8 +14,10 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import {
+  ENGINE_MARKER,
   FIRST_LOAD_LIMIT_BYTES,
   chunkFiles,
+  engineChunkBytes,
   findDeferredLibraries,
   firstLoadScripts,
   formatKb,
@@ -116,16 +118,16 @@ for (const [route, entry] of Object.entries(prerenderRoutes)) {
 }
 if (rows.length === 0) failures.push("no prerendered page was measured");
 
-// Chunks that hold three.js count toward the 3D payload of tiers 1 and 2.
-const engineChunks = existsSync(CHUNKS_DIR)
-  ? chunkFiles(CHUNKS_DIR).filter((path) =>
-      measureFile(path).libraries.includes("three.js"),
-    )
-  : [];
-const engineJsBytes = engineChunks.reduce(
-  (sum, path) => sum + measureFile(path).bytes,
-  0,
+// Chunks that hold three.js count toward the 3D payload of tiers 1 and 2;
+// the engine's entry chunk counts toward every tier.
+const engineJs = engineChunkBytes(
+  existsSync(CHUNKS_DIR) ? chunkFiles(CHUNKS_DIR).map(measureFile) : [],
 );
+if (engineJs.shared > 0) {
+  failures.push(
+    "the engine entry shares a chunk with three.js, so tier 3 would download three.js",
+  );
+}
 
 let payloadLines = [];
 const engineHasCode =
@@ -133,16 +135,30 @@ const engineHasCode =
   readdirSync("src/engine", { recursive: true }).some(
     (file) => SCRIPT_FILE.test(file) && !/\.test\./.test(file),
   );
+if (engineHasCode && engineJs.entry.count === 0 && engineJs.shared === 0) {
+  failures.push(
+    `src/engine has code but no built chunk holds its marker "${ENGINE_MARKER}", so the engine entry is uncounted`,
+  );
+}
 if (existsSync(MANIFEST_PATH)) {
   const manifest = readJson(MANIFEST_PATH);
   const sizeOf = (file) => (existsSync(file) ? statSync(file).size : null);
-  const result = payloadFailures(manifest, sizeOf, engineJsBytes);
+  const result = payloadFailures(
+    manifest,
+    sizeOf,
+    engineJs.three.bytes,
+    engineJs.entry.bytes,
+  );
   failures.push(...result.failures);
   payloadLines = result.totals.map(
     ({ tier, device, bytes, limit }) =>
       `| ${tier} | ${device} | ${formatKb(bytes)} | ${formatKb(limit)} |`,
   );
-} else if (engineHasCode || engineChunks.length > 0) {
+} else if (
+  engineHasCode ||
+  engineJs.three.count > 0 ||
+  engineJs.entry.count > 0
+) {
   failures.push(
     `the engine or three.js is in the build but no ${MANIFEST_PATH} lists its 3D payload`,
   );
@@ -169,7 +185,9 @@ const report = [
   "",
   "## 3D payload (REQ-PERF-05)",
   "",
-  `Built chunks holding three.js: ${engineChunks.length}, ${formatKb(engineJsBytes)} gzip, counted in tiers 1 and 2.`,
+  `Built chunks holding three.js: ${engineJs.three.count}, ${formatKb(engineJs.three.bytes)} gzip, counted in tiers 1 and 2.`,
+  "",
+  `Built chunks holding the engine entry and no three.js: ${engineJs.entry.count}, ${formatKb(engineJs.entry.bytes)} gzip, counted in every tier.`,
   "",
   ...(payloadLines.length > 0
     ? [

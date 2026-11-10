@@ -10,8 +10,11 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  ENGINE_ENTRY,
+  ENGINE_MARKER,
   FIRST_LOAD_LIMIT_BYTES,
   chunkFiles,
+  engineChunkBytes,
   findDeferredLibraries,
   firstLoadScripts,
   gzipBytes,
@@ -79,6 +82,40 @@ describe("deferred library signatures", () => {
         read("react-dom/cjs/react-dom-client.production.js"),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("engine entry", () => {
+  it("REQ-PERF-04 REQ-PERF-05 finds the engine entry by the string the controller writes on its canvas", () => {
+    expect(readFileSync("src/engine/controller.ts", "utf8")).toContain(
+      `const CANVAS_MARK = "${ENGINE_MARKER}";`,
+    );
+    expect(
+      findDeferredLibraries(`n.dataset.engine="${ENGINE_MARKER}"`),
+    ).toEqual([ENGINE_ENTRY]);
+  });
+
+  it("REQ-PERF-05 counts three.js chunks and entry chunks apart and flags a chunk that holds both", () => {
+    expect(
+      engineChunkBytes([
+        { bytes: 300, libraries: ["three.js"] },
+        { bytes: 200, libraries: ["three.js"] },
+        { bytes: 7, libraries: [ENGINE_ENTRY] },
+        { bytes: 90, libraries: ["GSAP"] },
+        { bytes: 50, libraries: [] },
+      ]),
+    ).toEqual({
+      three: { count: 2, bytes: 500 },
+      entry: { count: 1, bytes: 7 },
+      shared: 0,
+    });
+    expect(
+      engineChunkBytes([{ bytes: 300, libraries: ["three.js", ENGINE_ENTRY] }]),
+    ).toEqual({
+      three: { count: 1, bytes: 300 },
+      entry: { count: 0, bytes: 0 },
+      shared: 1,
+    });
   });
 });
 
@@ -189,6 +226,29 @@ describe("3D payload", () => {
       2 * 1024 * 1024 + engineJs,
       2 * 1024 * 1024 + engineJs,
       2 * 1024 * 1024,
+    ]);
+  });
+
+  it("REQ-PERF-05 adds the engine entry chunks to every tier", () => {
+    const engineJs = 500 * 1024;
+    const entryJs = 3 * 1024;
+    const result = payloadFailures(
+      {
+        payloads: [
+          { tier: 1, device: "desktop", files: [] },
+          { tier: 2, device: "phone", files: [] },
+          { tier: 3, device: "phone", files: ["public/a.bin"] },
+        ],
+      },
+      sizeOf,
+      engineJs,
+      entryJs,
+    );
+    expect(result.failures).toEqual([]);
+    expect(result.totals.map((total) => total.bytes)).toEqual([
+      engineJs + entryJs,
+      engineJs + entryJs,
+      2 * 1024 * 1024 + entryJs,
     ]);
   });
 });

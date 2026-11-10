@@ -14,8 +14,11 @@ export const ENGINE_ENTRY = "engine entry";
 // Strings that survive minification in each library that must load after
 // first content. Each one was checked against the pinned package source and
 // against a Turbopack production build that imported the library.
+// three.js has one per build file, so a build that splits three.core.js from
+// three.webgpu.js still counts both: "__THREE__" is in the core alone and the
+// renderer's message prefix in the WebGPU build alone.
 export const DEFERRED_LIBRARIES = [
-  { name: "three.js", signatures: ["__THREE__"] },
+  { name: "three.js", signatures: ["__THREE__", "THREE.WebGPURenderer"] },
   { name: ENGINE_ENTRY, signatures: [ENGINE_MARKER] },
   { name: "GSAP", signatures: ["GSAP target"] },
   { name: "ScrollTrigger", signatures: ["ScrollTrigger"] },

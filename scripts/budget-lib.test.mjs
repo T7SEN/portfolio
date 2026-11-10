@@ -65,6 +65,7 @@ describe("first-load scripts", () => {
 describe("deferred library signatures", () => {
   it.each([
     ["three/build/three.core.js", "three.js"],
+    ["three/build/three.webgpu.js", "three.js"],
     ["gsap/dist/gsap.min.js", "GSAP"],
     ["gsap/dist/ScrollTrigger.min.js", "ScrollTrigger"],
     ["gsap/dist/SplitText.min.js", "SplitText"],

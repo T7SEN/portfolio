@@ -32,6 +32,7 @@ import {
 const NEXT_DIR = ".next";
 const CHUNKS_DIR = join(NEXT_DIR, "static", "chunks");
 const MANIFEST_PATH = "src/engine/manifest.json";
+const RUNTIME_DIR = "src/engine/runtime";
 const SCRIPT_FILE = /\.(?:js|jsx|mjs|cjs|ts|tsx|mts|cts)$/;
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -138,6 +139,18 @@ const engineHasCode =
 if (engineHasCode && engineJs.entry.count === 0 && engineJs.shared === 0) {
   failures.push(
     `src/engine has code but no built chunk holds its marker "${ENGINE_MARKER}", so the engine entry is uncounted`,
+  );
+}
+// The runtime folder is the only code that imports three.js, so with code
+// there and no chunk found, tiers 1 and 2 would be summed without it.
+const runtimeHasCode =
+  existsSync(RUNTIME_DIR) &&
+  readdirSync(RUNTIME_DIR, { recursive: true }).some(
+    (file) => SCRIPT_FILE.test(file) && !/\.test\./.test(file),
+  );
+if (runtimeHasCode && engineJs.three.count === 0) {
+  failures.push(
+    `${RUNTIME_DIR} has code but no built chunk is detected as three.js, so the three.js chunk is uncounted`,
   );
 }
 if (existsSync(MANIFEST_PATH)) {

@@ -1,10 +1,13 @@
-import type { ReactElement } from "react";
+import { act, type ReactElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { headlines } from "@/content/hero";
 import { studies, studyHref } from "@/content";
 import { services } from "@/content/services";
+import type { EngineEvent } from "@/engine/types";
+import { tierStore } from "@/lib/tier-store";
 
 import { Hero } from "./hero";
 import { HeroHeadline } from "./hero-headline";
@@ -89,6 +92,106 @@ describe("Hero", () => {
     for (const link of render(<Hero />).querySelectorAll("a")) {
       expect(link.className).toContain("min-h-11");
     }
+  });
+});
+
+describe("HeroHeadline with the tier store", () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  async function report(event: EngineEvent) {
+    await act(async () => {
+      tierStore.apply(event);
+    });
+  }
+
+  function cell() {
+    const h1 = container.querySelector("h1");
+    return { h1, text: h1?.textContent, reserve: h1?.parentElement?.dataset };
+  }
+
+  beforeEach(async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    container = document.createElement("div");
+    document.body.append(container);
+    root = createRoot(container);
+    await act(async () => {
+      root.render(<HeroHeadline id="x" text={headlines.still} />);
+    });
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+    tierStore.reset();
+    vi.unstubAllGlobals();
+  });
+
+  it("REQ-CNT-10 A14 before the engine reports, the h1 holds the tier 3 line", () => {
+    expect(cell().text).toBe(headlines.still);
+    expect(cell().reserve?.reserve).toBe(headlines.gpu);
+  });
+
+  it.each([
+    [1, "probe-pass"],
+    [2, "no-webgpu"],
+  ] as const)(
+    "REQ-CNT-10 A14 tier %i switches the h1 to the tiers 1 and 2 line once it has drawn, and reserves the tier 3 line",
+    async (tier, reason) => {
+      const before = cell().h1;
+      await report({ type: "tierChosen", tier, reason });
+      expect(cell().text).toBe(headlines.still);
+
+      await report({ type: "ready", tier });
+      expect(cell().text).toBe(headlines.gpu);
+      expect(cell().reserve?.reserve).toBe(headlines.still);
+      expect(cell().h1).toBe(before);
+    },
+  );
+
+  it("REQ-CNT-10 A14 tier 3 keeps the tier 3 line", async () => {
+    await report({ type: "tierChosen", tier: 3, reason: "save-data" });
+    await report({ type: "ready", tier: 3 });
+    expect(cell().text).toBe(headlines.still);
+    expect(cell().reserve?.reserve).toBe(headlines.gpu);
+  });
+
+  it("REQ-CNT-10 A14 the tier 3 line returns when the tier drops to 3", async () => {
+    await report({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    await report({ type: "ready", tier: 1 });
+    expect(cell().text).toBe(headlines.gpu);
+
+    await report({ type: "tierChosen", tier: 3, reason: "device-lost" });
+    expect(cell().text).toBe(headlines.still);
+    expect(cell().reserve?.reserve).toBe(headlines.gpu);
+  });
+
+  it("REQ-CNT-10 A14 the tier 3 line shows while a lost tier 1 is rebuilt as tier 2", async () => {
+    await report({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    await report({ type: "ready", tier: 1 });
+
+    await report({ type: "tierChosen", tier: 2, reason: "device-lost" });
+    expect(cell().text).toBe(headlines.still);
+
+    await report({ type: "ready", tier: 2 });
+    expect(cell().text).toBe(headlines.gpu);
+  });
+
+  it("REQ-CNT-10 frame rate reports leave the headline alone", async () => {
+    await report({ type: "tierChosen", tier: 2, reason: "phone" });
+    await report({ type: "ready", tier: 2 });
+    await report({ type: "frameRate", fps: 30 });
+    expect(cell().text).toBe(headlines.gpu);
+  });
+
+  it("REQ-CNT-01 A14 a server render keeps the tier 3 line whatever the store holds", async () => {
+    await report({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    await report({ type: "ready", tier: 1 });
+    const host = render(<Hero />);
+    expect(host.querySelector("h1")?.textContent).toBe(headlines.still);
+    expect(host.textContent).not.toContain(headlines.gpu);
   });
 });
 

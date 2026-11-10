@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 
+import { EngineHost } from "@/components/engine/engine-host";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
 import { SkipLink } from "@/components/site/skip-link";
@@ -37,6 +38,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
           {children}
         </main>
         <SiteFooter />
+        {/* Last in body, so the skip link stays the first focus stop. It is
+            mounted once here and never recreated on navigation. */}
+        <EngineHost />
       </body>
     </html>
   );

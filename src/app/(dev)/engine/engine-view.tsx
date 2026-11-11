@@ -3,10 +3,24 @@
 import { useEffect, useRef } from "react";
 
 import { loadEngine } from "@/components/engine/load-engine";
-import type { Engine, EngineEvent, EngineOptions, Tier } from "@/engine/types";
+import type {
+  ChapterId,
+  Engine,
+  EngineEvent,
+  EngineOptions,
+  Tier,
+} from "@/engine/types";
 
 const TIERS = [1, 2, 3] as const satisfies readonly Tier[];
 const MAX_COUNT = 2_000_000;
+const CHAPTERS = [
+  "hero",
+  "bloom",
+  "work",
+  "making-of",
+  "about",
+  "contact",
+] as const satisfies readonly ChapterId[];
 
 const BUTTON =
   "inline-flex min-h-11 items-center rounded-md border border-edge px-4 font-mono text-sm hover:border-glow hover:text-glow aria-pressed:border-glow aria-pressed:text-glow";
@@ -24,15 +38,45 @@ function readOptions(search: string) {
     options.particleCount = count;
   }
 
+  const chapter = CHAPTERS.find((value) => value === params.get("chapter"));
+  const progress = Number(params.get("progress") ?? 0);
+
   return {
     options,
     isCalm: params.get("calm") === "1",
     isBare: params.get("bare") === "1",
+    chapter: chapter ?? null,
+    progress: Number.isFinite(progress)
+      ? Math.min(Math.max(progress, 0), 1)
+      : 0,
   };
 }
 
 function isPressed(button: HTMLButtonElement) {
   return button.getAttribute("aria-pressed") === "true";
+}
+
+function chosenChapter(select: HTMLSelectElement): ChapterId | null {
+  return CHAPTERS.find((value) => value === select.value) ?? null;
+}
+
+/**
+ * Sends the chapter and progress the controls hold, and mirrors them on the
+ * view as data-chapter and data-progress. Nothing is sent while no chapter
+ * is chosen, so the field stays the ambient one.
+ */
+function sendStory(
+  engine: Engine | null,
+  view: HTMLElement,
+  select: HTMLSelectElement,
+  range: HTMLInputElement,
+) {
+  const chapter = chosenChapter(select);
+  if (chapter === null) return;
+  const progress = Number(range.value);
+  view.dataset.chapter = chapter;
+  view.dataset.progress = String(progress);
+  engine?.setStory(chapter, progress);
 }
 
 /**
@@ -46,18 +90,39 @@ export function EngineView() {
   const hostRef = useRef<HTMLDivElement>(null);
   const readoutRef = useRef<HTMLParagraphElement>(null);
   const calmRef = useRef<HTMLButtonElement>(null);
+  const chapterRef = useRef<HTMLSelectElement>(null);
+  const progressRef = useRef<HTMLInputElement>(null);
   const engineRef = useRef<Engine | null>(null);
+
+  const sendStoryNow = () => {
+    const view = viewRef.current;
+    const select = chapterRef.current;
+    const range = progressRef.current;
+    if (view === null || select === null || range === null) return;
+    sendStory(engineRef.current, view, select, range);
+  };
 
   useEffect(() => {
     const view = viewRef.current;
     const host = hostRef.current;
     const readout = readoutRef.current;
     const calm = calmRef.current;
-    if (view === null || host === null || readout === null || calm === null) {
+    const select = chapterRef.current;
+    const range = progressRef.current;
+    if (
+      view === null ||
+      host === null ||
+      readout === null ||
+      calm === null ||
+      select === null ||
+      range === null
+    ) {
       return;
     }
 
-    const { options, isCalm, isBare } = readOptions(window.location.search);
+    const { options, isCalm, isBare, chapter, progress } = readOptions(
+      window.location.search,
+    );
     let engine: Engine | null = null;
     let isCancelled = false;
     let events = 0;
@@ -70,8 +135,12 @@ export function EngineView() {
       fps: "",
       events: "0",
       error: "",
+      chapter: "",
+      progress: "",
     });
     if (isBare) view.dataset.bare = "true";
+    select.value = chapter ?? "";
+    range.value = String(progress);
     calm.setAttribute("aria-pressed", String(isCalm));
     readout.textContent = "Loading the engine.";
 
@@ -104,6 +173,8 @@ export function EngineView() {
       engine = createEngine(host, { ...options, calm: isPressed(calm) });
       engineRef.current = engine;
       engine.on(onEvent);
+      // The controls may have changed while the engine was loading too.
+      sendStory(engine, view, select, range);
       await engine.start();
     })().catch((error: unknown) => {
       if (isCancelled) return;
@@ -134,6 +205,8 @@ export function EngineView() {
       data-fps=""
       data-events="0"
       data-error=""
+      data-chapter=""
+      data-progress=""
       className="group mt-4"
     >
       <div className="flex flex-wrap gap-3 group-data-[bare=true]:hidden">
@@ -160,6 +233,34 @@ export function EngineView() {
         >
           Calm
         </button>
+        <label className="inline-flex min-h-11 items-center gap-2 font-mono text-sm">
+          Chapter
+          <select
+            ref={chapterRef}
+            defaultValue=""
+            className="min-h-11 rounded-md border border-edge bg-void px-2"
+            onChange={() => sendStoryNow()}
+          >
+            <option value="">None</option>
+            {CHAPTERS.map((chapter) => (
+              <option key={chapter} value={chapter}>
+                {chapter}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="inline-flex min-h-11 items-center gap-2 font-mono text-sm">
+          Progress
+          <input
+            ref={progressRef}
+            type="range"
+            min="0"
+            max="1"
+            step="0.01"
+            defaultValue="0"
+            onChange={() => sendStoryNow()}
+          />
+        </label>
       </div>
       <p
         ref={readoutRef}

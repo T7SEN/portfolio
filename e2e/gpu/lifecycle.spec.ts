@@ -118,7 +118,9 @@ for (const tier of [1, 2] as const) {
     await expect(settled(page, tier)).toBeVisible({ timeout: 90_000 });
     const canvas = page.locator(CANVAS);
     await canvas.scrollIntoViewIfNeeded();
-    const calm = page.getByRole("button", { name: "Calm" });
+    // The site bar carries its own Calm toggle from P3; the development
+    // page's engine listens only to the page's own button.
+    const calm = page.locator(VIEW).getByRole("button", { name: "Calm" });
 
     await calm.click();
     await expect(calm).toHaveAttribute("aria-pressed", "true");

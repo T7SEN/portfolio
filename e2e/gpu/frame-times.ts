@@ -44,6 +44,8 @@ export interface FrameSummary {
   /** The page's own frame rate over the same intervals. */
   pageFps: number;
   readouts: number;
+  /** The longest frame interval in the window: a stall shows here. */
+  longestMs: number;
 }
 
 /** Page errors and console errors, collected from the moment of the call. */
@@ -139,6 +141,7 @@ export async function measureFrames(
     engineFps: mean(engineRates),
     pageFps: mean(pageRates),
     readouts: sample.readouts.length,
+    longestMs: Math.max(...sample.deltas),
   };
 }
 

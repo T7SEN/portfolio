@@ -16,6 +16,7 @@ import { join } from "node:path";
 import {
   ENGINE_MARKER,
   FIRST_LOAD_LIMIT_BYTES,
+  MOTION_LIBRARIES,
   chunkFiles,
   engineChunkBytes,
   findDeferredLibraries,
@@ -23,6 +24,7 @@ import {
   formatKb,
   gzipBytes,
   htmlPathFor,
+  missingDeferred,
   pageRoutes,
   payloadFailures,
   staticFilePath,
@@ -33,6 +35,7 @@ const NEXT_DIR = ".next";
 const CHUNKS_DIR = join(NEXT_DIR, "static", "chunks");
 const MANIFEST_PATH = "src/engine/manifest.json";
 const RUNTIME_DIR = "src/engine/runtime";
+const MOTION_LOADER = "src/lib/load-motion.ts";
 const SCRIPT_FILE = /\.(?:js|jsx|mjs|cjs|ts|tsx|mts|cts)$/;
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -119,11 +122,28 @@ for (const [route, entry] of Object.entries(prerenderRoutes)) {
 }
 if (rows.length === 0) failures.push("no prerendered page was measured");
 
+const builtChunks = existsSync(CHUNKS_DIR)
+  ? chunkFiles(CHUNKS_DIR).map(measureFile)
+  : [];
+
+// The loader brings these libraries in after first content. When no chunk is
+// detected as one of them, its signature no longer matches the build, and the
+// first-load check above could not have found it either.
+const motionHasCode =
+  existsSync(MOTION_LOADER) &&
+  readFileSync(MOTION_LOADER, "utf8").trim() !== "";
+const motionMissing = motionHasCode
+  ? missingDeferred(builtChunks, MOTION_LIBRARIES)
+  : [];
+if (motionMissing.length > 0) {
+  failures.push(
+    `${MOTION_LOADER} has code but no built chunk is detected as ${motionMissing.join(", ")}, so the first-load check cannot find ${motionMissing.length === 1 ? "it" : "them"}`,
+  );
+}
+
 // Chunks that hold three.js count toward the 3D payload of tiers 1 and 2;
 // the engine's entry chunk counts toward every tier.
-const engineJs = engineChunkBytes(
-  existsSync(CHUNKS_DIR) ? chunkFiles(CHUNKS_DIR).map(measureFile) : [],
-);
+const engineJs = engineChunkBytes(builtChunks);
 if (engineJs.shared > 0) {
   failures.push(
     "the engine entry shares a chunk with three.js, so tier 3 would download three.js",

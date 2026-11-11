@@ -10,15 +10,18 @@ import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  DEFERRED_LIBRARIES,
   ENGINE_ENTRY,
   ENGINE_MARKER,
   FIRST_LOAD_LIMIT_BYTES,
+  MOTION_LIBRARIES,
   chunkFiles,
   engineChunkBytes,
   findDeferredLibraries,
   firstLoadScripts,
   gzipBytes,
   htmlPathFor,
+  missingDeferred,
   pageRoutes,
   payloadFailures,
   staticFilePath,
@@ -67,8 +70,10 @@ describe("deferred library signatures", () => {
     ["three/build/three.core.js", "three.js"],
     ["three/build/three.webgpu.js", "three.js"],
     ["gsap/dist/gsap.min.js", "GSAP"],
+    ["gsap/gsap-core.js", "GSAP"],
     ["gsap/dist/ScrollTrigger.min.js", "ScrollTrigger"],
     ["gsap/dist/SplitText.min.js", "SplitText"],
+    ["gsap/SplitText.js", "SplitText"],
     ["lenis/dist/lenis.mjs", "Lenis"],
     ["posthog-js/dist/module.js", "PostHog"],
     ["@radix-ui/react-dialog/dist/index.mjs", "Radix Dialog"],
@@ -92,12 +97,76 @@ describe("deferred library signatures", () => {
     ).toEqual([]);
   });
 
+  it("REQ-PERF-04 does not take app code that registers ScrollTrigger for the plugin", () => {
+    expect(
+      findDeferredLibraries("gsap.registerPlugin(ScrollTrigger);"),
+    ).toEqual([]);
+    expect(
+      findDeferredLibraries(readFileSync("src/lib/load-motion.ts", "utf8")),
+    ).toEqual([]);
+  });
+
   it("REQ-PERF-04 finds nothing in React DOM, which may load first", () => {
     expect(
       findDeferredLibraries(
         read("react-dom/cjs/react-dom-client.production.js"),
       ),
     ).toEqual([]);
+  });
+});
+
+describe("libraries loaded after first content", () => {
+  it("REQ-PERF-04 names every library the motion loader imports", () => {
+    const loader = readFileSync("src/lib/load-motion.ts", "utf8");
+    for (const specifier of [
+      "gsap",
+      "gsap/ScrollTrigger",
+      "gsap/SplitText",
+      "lenis",
+    ]) {
+      expect(loader).toContain(`import("${specifier}")`);
+    }
+    expect(MOTION_LIBRARIES).toEqual([
+      "GSAP",
+      "ScrollTrigger",
+      "SplitText",
+      "Lenis",
+    ]);
+    const known = DEFERRED_LIBRARIES.map(({ name }) => name);
+    for (const name of MOTION_LIBRARIES) expect(known).toContain(name);
+  });
+
+  it("REQ-PERF-04 names the expected libraries no chunk was detected as", () => {
+    const chunks = [
+      { libraries: ["GSAP", "ScrollTrigger"] },
+      { libraries: [] },
+      { libraries: ["Lenis"] },
+    ];
+    expect(missingDeferred(chunks, MOTION_LIBRARIES)).toEqual(["SplitText"]);
+    expect(missingDeferred([], MOTION_LIBRARIES)).toEqual(MOTION_LIBRARIES);
+    expect(
+      missingDeferred(
+        [...chunks, { libraries: ["SplitText"] }],
+        MOTION_LIBRARIES,
+      ),
+    ).toEqual([]);
+  });
+
+  it("REQ-PERF-04 detects each motion library in the module build the bundler takes", () => {
+    const builds = {
+      GSAP: "gsap/gsap-core.js",
+      ScrollTrigger: "gsap/ScrollTrigger.js",
+      SplitText: "gsap/SplitText.js",
+      Lenis: "lenis/dist/lenis.mjs",
+    };
+    const chunksWithout = (left) =>
+      Object.entries(builds)
+        .filter(([name]) => name !== left)
+        .map(([, path]) => ({ libraries: findDeferredLibraries(read(path)) }));
+    expect(missingDeferred(chunksWithout(null), MOTION_LIBRARIES)).toEqual([]);
+    expect(
+      missingDeferred(chunksWithout("ScrollTrigger"), MOTION_LIBRARIES),
+    ).toEqual(["ScrollTrigger"]);
   });
 });
 

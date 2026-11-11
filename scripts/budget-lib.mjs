@@ -17,17 +17,18 @@ export const ENGINE_ENTRY = "engine entry";
 // three.js has one per build file, so a build that splits three.core.js from
 // three.webgpu.js still counts both: "__THREE__" is in the core alone and the
 // renderer's message prefix in the WebGPU build alone.
-// ScrollTrigger is found by its pin spacer class and its registration
-// warning, not by its name: app code that receives the plugin from a dynamic
-// import keeps the property name "ScrollTrigger" through minification, and
-// matching the name flagged every route at P3 with no library in the chunk.
+// ScrollTrigger is found by its pin spacer class and the whole text of its
+// registration warning, never by its name or the bare call: app code that
+// receives the plugin from a dynamic import keeps the property name
+// "ScrollTrigger" through minification, and app code that registers it holds
+// "gsap.registerPlugin(ScrollTrigger)" in any build that keeps local names.
 export const DEFERRED_LIBRARIES = [
   { name: "three.js", signatures: ["__THREE__", "THREE.WebGPURenderer"] },
   { name: ENGINE_ENTRY, signatures: [ENGINE_MARKER] },
   { name: "GSAP", signatures: ["GSAP target"] },
   {
     name: "ScrollTrigger",
-    signatures: ["pin-spacer", "registerPlugin(ScrollTrigger)"],
+    signatures: ["pin-spacer", "Please gsap.registerPlugin(ScrollTrigger)"],
   },
   { name: "SplitText", signatures: ["autoSplit", "deepSlice"] },
   { name: "Lenis", signatures: ["lenis-smooth"] },
@@ -73,6 +74,19 @@ export function findDeferredLibraries(source) {
   return DEFERRED_LIBRARIES.filter(({ signatures }) =>
     signatures.some((signature) => source.includes(signature)),
   ).map(({ name }) => name);
+}
+
+// What src/lib/load-motion.ts loads after first content. Each must be found
+// in some built chunk, or a signature that stopped matching would let the
+// first-load check pass without testing anything.
+export const MOTION_LIBRARIES = ["GSAP", "ScrollTrigger", "SplitText", "Lenis"];
+
+// The names no chunk was detected as. chunks is a list of { libraries }, with
+// libraries from findDeferredLibraries.
+export function missingDeferred(chunks, names) {
+  return names.filter(
+    (name) => !chunks.some(({ libraries }) => libraries.includes(name)),
+  );
 }
 
 // Page routes come from app-path-routes-manifest.json ("/work/[slug]/page" to
@@ -139,7 +153,7 @@ export function engineChunkBytes(chunks) {
 }
 
 // manifest: { payloads: [{ tier, device, files: ["public/..."] }] }, written
-// by the engine from P2. sizeOf returns a file's size in bytes, or null when
+// by the engine. sizeOf returns a file's size in bytes, or null when
 // the file is missing. engineJsBytes is the gzip size of the built chunks
 // that hold three.js and the runtime; tiers 1 and 2 download them, tier 3
 // does not. entryJsBytes is the gzip size of the engine's entry chunks, which

@@ -1,7 +1,9 @@
 import {
+  abs,
   color,
   float,
   instanceIndex,
+  max,
   mix,
   smoothstep,
   step,
@@ -20,7 +22,7 @@ import {
 
 import { colors } from "@/tokens/colors";
 
-import { DOT_RADIUS, homeFor, releasedFor } from "./simulation";
+import { DOT_RADIUS, homeFor, releasedFor, shapeTexel } from "./simulation";
 import type { Simulation, View } from "./simulation";
 
 const CAMERA_DISTANCE = 5;
@@ -63,16 +65,30 @@ const DOT_FADE = 0.5;
 // it has come from the dot toward its home. Particles a share g of the way
 // out are packed into g squared of the area their homes cover, so the light
 // per pixel stays the field's own and never piles up near the dot. The rule
-// lifts as the release completes. Homes closer than ARRIVAL_NEAR to the
-// centre count from that distance.
+// lifts as the release completes. A home nearer the dot than ARRIVAL_NEAR
+// counts from that distance, which only keeps the division sound: it is less
+// than the dot's radius, so a particle resting at a home beside the dot is
+// fully lit. (At 0.15 it left a dark hole around the dot early in the bloom.)
 const BLOOM_LIFTS = 0.8;
-const ARRIVAL_NEAR = 0.15;
+const ARRIVAL_NEAR = 0.02;
 // Particles crossing the frame fast, between two formations, are dimmed
 // for the same reason. The ambient flow and a stirred field move slower
 // than FLIGHT_SLOW.
 const FLIGHT_SLOW = 1.2;
 const FLIGHT_FAST = 3;
 const FLIGHT_DIM = 0.8;
+
+// The rim light: a formed particle on its shape's outline adds up to
+// 1 + RIM_GAIN times the light of one inside, and its colour leans toward
+// glow, so a formation reads as a lit edge around a quieter fill rather than
+// a flat silhouette. Shapes carry their edge weight in the atlas (atlas.ts);
+// the sheet lights the outer SHEET_RIM of its half size, and the wave the
+// outer WAVE_RIM of its band's half thickness on each side. Every value is
+// the particle's own, so WebGL2 runs it as WebGPU does (REQ-ENG-05).
+const RIM_GAIN = 1.8;
+const RIM_GLOW = 0.6;
+const SHEET_RIM = 0.06;
+const WAVE_RIM = 0.4;
 
 /** The frame at the camera's focus plane, where the pointer and shapes live. */
 export function viewFor(aspect: number): View {
@@ -97,26 +113,52 @@ export function createField(simulation: Simulation) {
   const position = simulation.positions.toAttribute();
   const speed = simulation.velocities.toAttribute().length();
   const seed = simulation.seeds.toAttribute();
-  const { release, pulse } = simulation;
+  const {
+    release,
+    pulse,
+    dotCentre,
+    dotSeed,
+    rankScale,
+    shapeFrom,
+    shapeTo,
+    shapeMix,
+    shapeWeight,
+    sheetWeight,
+    waveWeight,
+  } = simulation;
 
-  const released = releasedFor(seed, release);
+  const released = releasedFor(seed, release, dotSeed, rankScale);
   const isDot = step(float(instanceIndex), DOT_PARTICLES - 0.5);
   const dotness = isDot.mul(smoothstep(0, DOT_FADE, release).oneMinus());
   const blooming = smoothstep(BLOOM_LIFTS, 1, release).oneMinus();
   const home = homeFor(seed, simulation.frame, CAMERA_DISTANCE);
   const arrival = position.xy
+    .sub(dotCentre)
     .length()
-    .div(home.xy.length().max(ARRIVAL_NEAR))
+    .div(home.xy.sub(dotCentre).length().max(ARRIVAL_NEAR))
     .min(1);
   const arrived = mix(float(1), arrival.mul(arrival), blooming);
   const flight = smoothstep(FLIGHT_SLOW, FLIGHT_FAST, speed)
     .mul(FLIGHT_DIM)
     .oneMinus();
+  const shapeEdge = mix(
+    shapeTexel(simulation.atlas, shapeFrom).z,
+    shapeTexel(simulation.atlas, shapeTo).z,
+    shapeMix,
+  );
+  const sheetEdge = smoothstep(1 - SHEET_RIM, 1, max(abs(seed.x), abs(seed.y)));
+  const waveEdge = smoothstep(1 - WAVE_RIM, 1, abs(seed.y));
+  const rim = shapeEdge
+    .mul(shapeWeight)
+    .add(sheetEdge.mul(sheetWeight))
+    .add(waveEdge.mul(waveWeight))
+    .min(1);
   const fieldAlpha = spriteOpacity
     .mul(light)
     .mul(released)
     .mul(arrived)
-    .mul(flight);
+    .mul(flight)
+    .mul(rim.mul(RIM_GAIN).add(1));
   const dotAlpha = pulse.mul(DOT_PULSE_LIGHT).add(1).mul(DOT_OPACITY);
   const shown = step(1e-3, released.max(dotness));
 
@@ -125,7 +167,9 @@ export function createField(simulation: Simulation) {
   material.colorNode = mix(
     color(new Color(colors.violet)),
     color(new Color(colors.glow)),
-    smoothstep(0, SPEED_FOR_GLOW, speed),
+    // The rim reads the atlas by the instance index, so it is worked out per
+    // particle in the vertex stage and carried to the fragments.
+    max(smoothstep(0, SPEED_FOR_GLOW, speed), vertexStage(rim).mul(RIM_GLOW)),
   );
   material.opacityNode = smoothstep(0.1, 0.5, uv().sub(0.5).length())
     .oneMinus()

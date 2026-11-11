@@ -4,7 +4,7 @@
 // the runtime turns these numbers into uniforms.
 
 import { WORK_SHAPES, workStep, type ShapeId } from "../story";
-import type { ChapterId } from "../types";
+import type { ChapterId, Stage, Stages } from "../types";
 
 export interface StoryTargets {
   /**
@@ -233,17 +233,23 @@ export function fitScale(extent: ShapeExtent, frame: Frame): number {
 export const FORMED_GAIN = 1.6;
 const MIN_LIGHT = 0.04;
 
+/**
+ * The share of the frame a formation covers. shapeFrame is the part of the
+ * frame the shapes are fitted to: the work chapter's stage, or the whole
+ * frame.
+ */
 export function formedArea(
   targets: StoryTargets,
   extents: Readonly<Record<ShapeId, ShapeExtent>>,
   frame: Frame,
+  shapeFrame: Frame = frame,
 ): number {
   const frameArea = 4 * frame.halfWidth * frame.halfHeight;
   const from = extents[targets.shapeFrom];
   const to = extents[targets.shapeTo];
   const shapeArea =
-    (1 - targets.shapeMix) * from.area * fitScale(from, frame) ** 2 +
-    targets.shapeMix * to.area * fitScale(to, frame) ** 2;
+    (1 - targets.shapeMix) * from.area * fitScale(from, shapeFrame) ** 2 +
+    targets.shapeMix * to.area * fitScale(to, shapeFrame) ** 2;
   const sheetArea = SHEET_FIT * SHEET_FIT * frameArea;
   // The band runs the whole reach of the wave at twice its half thickness.
   const waveArea =
@@ -264,13 +270,87 @@ export function formedLight(
   targets: StoryTargets,
   extents: Readonly<Record<ShapeId, ShapeExtent>>,
   frame: Frame,
+  shapeFrame: Frame = frame,
 ): number {
   const form = Math.min(targets.shape + targets.sheet + targets.wave, 1);
   const packed = Math.min(
-    Math.max(formedArea(targets, extents, frame) * FORMED_GAIN, MIN_LIGHT),
+    Math.max(
+      formedArea(targets, extents, frame, shapeFrame) * FORMED_GAIN,
+      MIN_LIGHT,
+    ),
     1,
   );
   return 1 + (packed - 1) * form;
+}
+
+/** The whole screen: the stage of a chapter the page gave none. */
+export const FULL_STAGE: Stage = { x: 0, y: 0, halfWidth: 1, halfHeight: 1 };
+
+function finiteIn(value: number, low: number, high: number, fallback: number) {
+  return Number.isFinite(value)
+    ? Math.min(Math.max(value, low), high)
+    : fallback;
+}
+
+/**
+ * A stage the page sent, kept on the screen: its centre inside -1 to 1 and
+ * its halves inside 0 to 1. Anything not a number falls back to the whole
+ * screen's value, so a broken measure never throws a shape off screen.
+ */
+export function cleanStage(stage: Stage | undefined): Stage {
+  if (stage === undefined) return FULL_STAGE;
+  return {
+    x: finiteIn(stage.x, -1, 1, 0),
+    y: finiteIn(stage.y, -1, 1, 0),
+    halfWidth: finiteIn(stage.halfWidth, 0, 1, 1),
+    halfHeight: finiteIn(stage.halfHeight, 0, 1, 1),
+  };
+}
+
+export interface StagedFrame {
+  /** The stage's centre at the focus plane, in world units. */
+  centreX: number;
+  centreY: number;
+  /** The stage's own half sizes at the focus plane, for fitting a shape. */
+  frame: Frame;
+}
+
+/** A stage in world units at the camera's focus plane, where shapes form. */
+export function stagedFrame(
+  stage: Stage | undefined,
+  frame: Frame,
+): StagedFrame {
+  const clean = cleanStage(stage);
+  return {
+    centreX: clean.x * frame.halfWidth,
+    centreY: clean.y * frame.halfHeight,
+    frame: {
+      halfWidth: clean.halfWidth * frame.halfWidth,
+      halfHeight: clean.halfHeight * frame.halfHeight,
+    },
+  };
+}
+
+/**
+ * Which stage a chapter's formation uses. The dot always sits at the hero's
+ * stage, the place the visitor first saw it, through the bloom too; study
+ * shapes form inside the work stage; everything else uses the whole screen.
+ */
+export function formationStage(chapter: ChapterId | null, stages: Stages) {
+  return chapter === "work" ? stages.work : undefined;
+}
+
+/**
+ * The bloom lets particles go in order of how far their home is from the
+ * dot, so the field grows out of the dot wherever it sits. Homes span -1 to
+ * 1 on both axes of the seed square; this is 1 over the distance from the
+ * dot to the square's farthest corner, so the last particle to leave has a
+ * rank of 1. With the dot at the centre it is the square root of a half.
+ */
+export function releaseRankScale(dotX: number, dotY: number): number {
+  const reachX = 1 + Math.min(Math.abs(dotX), 1);
+  const reachY = 1 + Math.min(Math.abs(dotY), 1);
+  return 1 / Math.hypot(reachX, reachY);
 }
 
 /** One step of an exponential follow: no overshoot, and frame-rate free. */

@@ -14,6 +14,7 @@ import type {
   ProbeVerdict,
   Runtime,
   RuntimeFactory,
+  Stages,
   Tier,
   TierReason,
 } from "./types";
@@ -71,6 +72,7 @@ export function createEngine(
   let calm = options.calm === true;
   let story: readonly [ChapterId, number] | null = null;
   let pointer: readonly [number, number, boolean] | null = null;
+  let stages: Stages | null = null;
   let facts: Promise<Environment> | null = null;
 
   let canvas: HTMLCanvasElement | null = null;
@@ -298,8 +300,11 @@ export function createEngine(
     // The story and pointer reach a field only from here, so the tier 1
     // probe times the whole ambient field at the real count, whatever
     // chapter the page is on (REQ-TIER-01). A first story is seated at the
-    // runtime's next step, before its canvas is shown.
+    // runtime's next step, before its canvas is shown. The stage goes first,
+    // so that seat already puts the dot and the shapes where the page wants
+    // them.
     const heard = attempt(target, (live) => {
+      if (stages !== null) live.setStage(stages);
       if (story !== null) live.setStory(...story);
       if (pointer !== null) live.setPointer(...pointer);
     });
@@ -536,6 +541,15 @@ export function createEngine(
       const target = listening();
       if (target !== null) {
         attempt(target, (runtime) => runtime.setStory(chapter, progress));
+      }
+    },
+
+    setStage(next) {
+      if (disposed) return;
+      stages = next;
+      const target = listening();
+      if (target !== null) {
+        attempt(target, (runtime) => runtime.setStage(next));
       }
     },
 

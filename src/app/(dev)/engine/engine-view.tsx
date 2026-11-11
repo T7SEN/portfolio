@@ -8,6 +8,7 @@ import type {
   Engine,
   EngineEvent,
   EngineOptions,
+  Stages,
   Tier,
 } from "@/engine/types";
 
@@ -21,6 +22,14 @@ const CHAPTERS = [
   "about",
   "contact",
 ] as const satisfies readonly ChapterId[];
+
+// ?stage=split: the stages the home page sends at a wide desktop size, the
+// dot low in the frame and the study shapes in the inline-end half, so the
+// headed specs can check off-centre formations on both backends.
+const SPLIT_STAGES: Stages = {
+  hero: { x: 0, y: -0.6, halfWidth: 0, halfHeight: 0 },
+  work: { x: 0.45, y: 0, halfWidth: 0.45, halfHeight: 0.9 },
+};
 
 const BUTTON =
   "inline-flex min-h-11 items-center rounded-md border border-edge px-4 font-mono text-sm hover:border-glow hover:text-glow aria-pressed:border-glow aria-pressed:text-glow";
@@ -45,6 +54,7 @@ function readOptions(search: string) {
     options,
     isCalm: params.get("calm") === "1",
     isBare: params.get("bare") === "1",
+    stages: params.get("stage") === "split" ? SPLIT_STAGES : null,
     chapter: chapter ?? null,
     progress: Number.isFinite(progress)
       ? Math.min(Math.max(progress, 0), 1)
@@ -125,7 +135,7 @@ export function EngineView() {
       return;
     }
 
-    const { options, isCalm, isBare, chapter, progress } = readOptions(
+    const { options, isCalm, isBare, stages, chapter, progress } = readOptions(
       window.location.search,
     );
     let engine: Engine | null = null;
@@ -142,6 +152,7 @@ export function EngineView() {
       error: "",
       chapter: "",
       progress: "",
+      stage: stages === null ? "" : "split",
     });
     if (isBare) view.dataset.bare = "true";
     select.value = chapter ?? "";
@@ -178,6 +189,7 @@ export function EngineView() {
       engine = createEngine(host, { ...options, calm: isPressed(calm) });
       engineRef.current = engine;
       engine.on(onEvent);
+      if (stages !== null) engine.setStage(stages);
       // The controls may have changed while the engine was loading too.
       sendStory(engine, view, select, range);
       await engine.start();
@@ -212,6 +224,7 @@ export function EngineView() {
       data-error=""
       data-chapter=""
       data-progress=""
+      data-stage=""
       className="group mt-4"
     >
       <div className="flex flex-wrap gap-3 group-data-[bare=true]:hidden">

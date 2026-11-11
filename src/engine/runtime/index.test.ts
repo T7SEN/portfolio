@@ -38,6 +38,10 @@ const fakes = vi.hoisted(() => {
       waveWeight: { value: 0 },
       noiseLevel: { value: 1 },
       pulse: { value: 0 },
+      dotCentre: { value: vector() },
+      dotSeed: { value: vector() },
+      rankScale: { value: Math.SQRT1_2 },
+      shapeCentre: { value: vector() },
     },
     /** Every depth the field's focus plane was moved to. */
     focus: [] as number[],
@@ -61,6 +65,17 @@ const fakes = vi.hoisted(() => {
     },
     resize: (): void => undefined,
   };
+
+  function vector() {
+    return {
+      x: 0,
+      y: 0,
+      set(x: number, y: number) {
+        this.x = x;
+        this.y = y;
+      },
+    };
+  }
 
   const part = (name: string) => ({
     dispose() {
@@ -213,6 +228,7 @@ vi.mock("./atlas", async () => {
 });
 
 vi.mock("./simulation", () => ({
+  FIELD_MARGIN: 1.1,
   createSimulation: (count: number, view: unknown, atlas: unknown) => {
     void view;
     fakes.state.simulationAtlas.push(atlas);
@@ -307,8 +323,12 @@ afterEach(() => {
   state.pointerAt = [0, 0];
   state.reseat.value = 0;
   state.stepSeconds.value = 0;
-  for (const entry of Object.values(story)) entry.value = 0;
+  for (const entry of Object.values(story)) {
+    if (typeof entry.value === "number") entry.value = 0;
+    else entry.value.set(0, 0);
+  }
   story.release.value = 1;
+  story.rankScale.value = Math.SQRT1_2;
   story.noiseLevel.value = 1;
   story.shapeScaleFrom.value = 1;
   story.shapeScaleTo.value = 1;
@@ -927,5 +947,67 @@ describe("a canvas with no size", () => {
     resizeTo(1000, 500);
     expect(sizeCalls()).toEqual(["size 1 1 1", "size 1000 500 1"]);
     expect(count("render")).toBe(0);
+  });
+});
+
+describe("the stage", () => {
+  // At 1000 by 500 the fake view is a half frame of 2 by 1.
+  const stages = {
+    hero: { x: 0, y: -0.5, halfWidth: 0, halfHeight: 0 },
+    work: { x: 0.5, y: 0, halfWidth: 0.5, halfHeight: 0.5 },
+  };
+
+  test("REQ-SCR-01 REQ-SCR-07 the dot sits at the hero's stage and study shapes form inside the work stage, from the first story", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage(stages);
+    runtime.setStory("work", 0.1);
+
+    expect(story.dotCentre.value.x).toBeCloseTo(0);
+    expect(story.dotCentre.value.y).toBeCloseTo(-0.5);
+    expect(story.shapeCentre.value.x).toBeCloseTo(1);
+    expect(story.shapeCentre.value.y).toBeCloseTo(0);
+    // A stage of half 1 by 0.5 and a square box of half side 1.
+    expect(story.shapeScaleFrom.value).toBeCloseTo(0.4);
+    // The bloom ranks homes from the dot in the seeds' square.
+    expect(story.dotSeed.value.y).toBeCloseTo(-0.5 / 1.1);
+    expect(story.rankScale.value).toBeCloseTo(1 / Math.hypot(1, 1 + 0.5 / 1.1));
+
+    // Other chapters form in the whole frame, around its middle.
+    runtime.setStory("bloom", 0.6);
+    expect(story.shapeScaleFrom.value).toBeCloseTo(0.8);
+  });
+
+  test("REQ-SCR-05 a new stage on a running field glides there over a few frames", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage(stages);
+    runtime.setStory("work", 0.5);
+    runtime.run();
+    state.loop?.(0);
+    state.loop?.(16);
+    expect(story.shapeCentre.value.x).toBeCloseTo(1);
+
+    runtime.setStage({ ...stages, work: { ...stages.work, x: -0.5 } });
+    state.loop?.(32);
+    const moved = story.shapeCentre.value.x;
+    expect(moved).toBeLessThan(1);
+    expect(moved).toBeGreaterThan(-1);
+    for (let frame = 3; frame < 300; frame += 1) state.loop?.(16 * frame);
+    expect(story.shapeCentre.value.x).toBeCloseTo(-1, 2);
+  });
+
+  test("REQ-A11Y-03 a calm field is put on its new stage and drawn again once", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStory("work", 0.5);
+    await runtime.drawStill();
+    const renders = count("render");
+    state.computes.length = 0;
+
+    runtime.setStage(stages);
+    expect(count("render")).toBe(renders + 1);
+    expect(state.computes).toEqual(settle([1]));
+    expect(story.shapeCentre.value.x).toBeCloseTo(1);
   });
 });

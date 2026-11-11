@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { Stages } from "@/engine/types";
+
 import { createStoryBridge, type StoryTarget } from "./story-bridge";
 
 /** A target that records every command in one list, so order shows. */
@@ -11,6 +13,12 @@ function recorder() {
     }),
     setPointer: vi.fn((x: number, y: number, active: boolean) => {
       calls.push(`pointer ${x} ${y} ${active}`);
+    }),
+    setStage: vi.fn((stages: Stages) => {
+      calls.push(`stage ${Object.keys(stages).join(",")}`);
+    }),
+    setVeil: vi.fn((veil: number | null) => {
+      calls.push(`veil ${veil}`);
     }),
   } satisfies StoryTarget;
   return { calls, target };
@@ -96,6 +104,39 @@ describe("story bridge", () => {
     expect(calls).toEqual(["story bloom 0.3", "pointer 0.2 -0.4 false"]);
   });
 
+  it("REQ-SCR-01 a late target gets the stage before the story, and the veil last", () => {
+    const bridge = createStoryBridge();
+    const hero = { x: 0, y: -0.6, halfWidth: 0, halfHeight: 0 };
+    bridge.setVeil(0.5);
+    bridge.setStory("hero", 0.2);
+    bridge.setStage({ hero });
+    bridge.setPointer(0, 0, false);
+
+    const { calls, target } = recorder();
+    bridge.connect(target);
+    expect(calls).toEqual([
+      "stage hero",
+      "story hero 0.2",
+      "pointer 0 0 false",
+      "veil 0.5",
+    ]);
+    expect(target.setStage).toHaveBeenCalledWith({ hero });
+  });
+
+  it.each([
+    [0.35, 0.35],
+    [-1, 0],
+    [3, 1],
+    [Number.NaN, 0],
+    [null, null],
+  ])("REQ-A11Y-06 a veil of %s reaches the target as %s", (sent, expected) => {
+    const bridge = createStoryBridge();
+    const { target } = recorder();
+    bridge.connect(target);
+    bridge.setVeil(sent);
+    expect(target.setVeil).toHaveBeenLastCalledWith(expected);
+  });
+
   it("REQ-SCR-01 the replay carries the clamped values", () => {
     const bridge = createStoryBridge();
     bridge.setStory("work", 7);
@@ -162,6 +203,8 @@ describe("story bridge", () => {
     bridge.connect(first.target);
     bridge.setStory("making-of", 0.5);
     bridge.setPointer(0.3, 0.3, true);
+    bridge.setStage({});
+    bridge.setVeil(0.4);
     first.calls.length = 0;
 
     bridge.reset();

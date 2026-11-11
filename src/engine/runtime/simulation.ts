@@ -27,7 +27,7 @@ import { SHEET_FIT, WAVE_AMPLITUDE, WAVE_REACH, WAVE_THICKNESS } from "./story";
 // wanders around it on a slow noise flow.
 const FIELD_DEPTH = 1.5;
 // Homes reach a little past the frame, so the flow never bares an edge.
-const FIELD_MARGIN = 1.1;
+export const FIELD_MARGIN = 1.1;
 const HOME_PULL = 0.35;
 const NOISE_FREQUENCY = 0.9;
 const NOISE_SPEED = 0.12;
@@ -136,12 +136,35 @@ export function homeFor(
 /**
  * How far one particle has been let go of the dot, 0 to 1, from its seed and
  * the release. The compute node and the material both read it, so a particle
- * is seen exactly while it is free.
+ * is seen exactly while it is free. Particles leave in order of how far their
+ * home is from the dot (dotSeed, the dot in the seeds' own -1 to 1 square),
+ * and rankScale makes the farthest corner 1 (story.ts, releaseRankScale).
  */
-export function releasedFor(seed: Node<"vec3">, release: Node<"float">) {
-  const rank = seed.xy.length().mul(Math.SQRT1_2).min(1);
+export function releasedFor(
+  seed: Node<"vec3">,
+  release: Node<"float">,
+  dotSeed: Node<"vec2">,
+  rankScale: Node<"float">,
+) {
+  const rank = seed.xy.sub(dotSeed).length().mul(rankScale).min(1);
   const start = rank.mul(1 - RELEASE_SOFTNESS);
   return smoothstep(start, start.add(RELEASE_SOFTNESS), release);
+}
+
+/**
+ * A particle's point in one shape of the atlas: x and y in the sample space,
+ * and its edge weight for the rim light. The point comes from the particle's
+ * own index, so a few thousand points serve every particle; the compute node
+ * and the material read the same texel.
+ */
+export function shapeTexel(atlas: DataTexture, shape: Node<"float">) {
+  const point = int(instanceIndex).mod(int(POINTS_PER_SHAPE));
+  const column = point.mod(int(ATLAS_WIDTH));
+  const row = point.div(int(ATLAS_WIDTH));
+  return textureLoad(
+    atlas,
+    ivec2(column, row.add(int(shape).mul(int(ROWS_PER_SHAPE)))),
+  );
 }
 
 export function createSimulation(
@@ -185,6 +208,13 @@ export function createSimulation(
   const focusZ = uniform(0);
   // -1 to 1 from the elapsed time; 0 while the field is a still.
   const pulse = uniform(0);
+  // Where the page puts the dot and the work chapter's shapes (types.ts,
+  // Stage), in world units at the focus plane; the dot also in the seeds'
+  // square, for the order in which the bloom lets particles go.
+  const dotCentre = uniform(new Vector2());
+  const dotSeed = uniform(new Vector2());
+  const rankScale = uniform(Math.SQRT1_2);
+  const shapeCentre = uniform(new Vector2());
 
   // WebGL2 runs this through transform feedback, so every read and write
   // stays on the particle's own index (REQ-ENG-05); the atlas is a read-only
@@ -197,17 +227,9 @@ export function createSimulation(
 
     const home = homeFor(seed, frame, view.cameraDistance);
 
-    // A particle's point in each shape comes from its own index, so a few
-    // thousand points serve every particle, and its seed scatters it
-    // between them.
-    const point = int(instanceIndex).mod(int(POINTS_PER_SHAPE));
-    const column = point.mod(int(ATLAS_WIDTH));
-    const row = point.div(int(ATLAS_WIDTH));
-    const pointIn = (shape: Node<"float">) =>
-      textureLoad(
-        atlas,
-        ivec2(column, row.add(int(shape).mul(int(ROWS_PER_SHAPE)))),
-      ).xy;
+    // A particle's point in each shape comes from its own index, and its
+    // seed scatters it between the points.
+    const pointIn = (shape: Node<"float">) => shapeTexel(atlas, shape).xy;
     const jitter = fract(seed.xy.mul(vec2(97.13, 61.71)))
       .mul(2)
       .sub(1)
@@ -217,7 +239,10 @@ export function createSimulation(
       pointIn(shapeTo).add(jitter).mul(shapeScaleTo),
       shapeMix,
     );
-    const shape = vec3(shapePoint, focusZ.add(seed.z.mul(SHAPE_DEPTH)));
+    const shape = vec3(
+      shapePoint.add(shapeCentre),
+      focusZ.add(seed.z.mul(SHAPE_DEPTH)),
+    );
 
     const sheet = vec3(
       seed.xy.mul(frame).mul(SHEET_FIT),
@@ -249,8 +274,8 @@ export function createSimulation(
       pulse.mul(DOT_PULSE_RADIUS).add(1).mul(DOT_RADIUS),
     );
     const dot = vec3(
-      cos(dotAngle).mul(dotRadius),
-      sin(dotAngle).mul(dotRadius),
+      cos(dotAngle).mul(dotRadius).add(dotCentre.x),
+      sin(dotAngle).mul(dotRadius).add(dotCentre.y),
       focusZ,
     );
 
@@ -258,7 +283,7 @@ export function createSimulation(
     // begins, and only its light fades in. Aiming partway between the dot
     // and the home instead folds many particles onto one radius, a ring that
     // piles light to white.
-    const released = releasedFor(seed, release);
+    const released = releasedFor(seed, release, dotSeed, rankScale);
     const leaving = step(1e-4, released);
     const target = mix(dot, formed, leaving);
 
@@ -324,6 +349,11 @@ export function createSimulation(
     noiseLevel,
     focusZ,
     pulse,
+    dotCentre,
+    dotSeed,
+    rankScale,
+    shapeCentre,
+    atlas,
     update,
   };
 }

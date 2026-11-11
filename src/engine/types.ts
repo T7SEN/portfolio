@@ -38,6 +38,27 @@ export type EngineEvent =
 
 export type EngineListener = (event: EngineEvent) => void;
 
+/**
+ * A part of the screen a chapter's focus sits in, in normalised device
+ * coordinates: x and y are its centre, -1 to 1 with y up, and the halves are
+ * its half width and height on the same scale (the whole screen is 1 and 1).
+ * The page measures it from its own layout, so it follows the text in either
+ * reading direction.
+ */
+export interface Stage {
+  x: number;
+  y: number;
+  halfWidth: number;
+  halfHeight: number;
+}
+
+/**
+ * The stages the page has measured. hero places the dot at the stage's
+ * centre and grows the bloom from there; work fits each study's shape inside
+ * its stage. A chapter with no stage uses the whole screen.
+ */
+export type Stages = Partial<Record<ChapterId, Stage>>;
+
 export interface Engine {
   /**
    * Picks the tier and starts the field inside the host. Resolves once
@@ -49,6 +70,12 @@ export interface Engine {
   setTier(tier: Tier): void;
   /** Scroll position: the chapter in view and how far through it, 0 to 1. */
   setStory(chapter: ChapterId, progress: number): void;
+  /**
+   * Where the hero's dot sits and where the work chapter's shapes form, from
+   * the page's layout. Sent again when the layout changes; each call
+   * replaces the last.
+   */
+  setStage(stages: Stages): void;
   /** Pointer in normalised device coordinates: -1 to 1 on both axes, y up. */
   setPointer(x: number, y: number, active: boolean): void;
   /** Calm mode and reduced motion: the field freezes to one still frame. */
@@ -128,6 +155,7 @@ export interface Runtime {
   drawStill(): Promise<void>;
   setPointer(x: number, y: number, active: boolean): void;
   setStory(chapter: ChapterId, progress: number): void;
+  setStage(stages: Stages): void;
   dispose(): Promise<void>;
 }
 

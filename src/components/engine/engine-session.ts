@@ -51,6 +51,25 @@ export function createEngineSession(
   let disposing: Promise<void> | null = null;
   let isCalm: boolean | null = null;
   let unsubscribeCalm: (() => void) | null = null;
+  // The veil the page asks for (story-veil.ts), null for the wrapper's own.
+  let pageVeil: number | null = null;
+
+  // Only a live field takes the page's veil. Tier 3's still is one picture
+  // behind every chapter and keeps the measured 0.7 of the wrapper's class.
+  function applyVeil() {
+    const tier = wrapper.dataset.tier;
+    if (!isDisposed && pageVeil !== null && (tier === "1" || tier === "2")) {
+      wrapper.style.setProperty("--field-veil", String(pageVeil));
+    } else {
+      wrapper.style.removeProperty("--field-veil");
+    }
+  }
+
+  function setVeil(veil: number | null) {
+    if (veil === pageVeil) return;
+    pageVeil = veil;
+    applyVeil();
+  }
 
   function report(event: EngineEvent) {
     if (isDisposed) return;
@@ -64,6 +83,7 @@ export function createEngineSession(
     if (event.type === "tierChosen") {
       wrapper.dataset.tier = String(event.tier);
       wrapper.dataset.tierReason = event.reason;
+      applyVeil();
     }
     wrapper.dataset.ready = String(tierStore.getSnapshot().ready);
   }
@@ -80,18 +100,22 @@ export function createEngineSession(
   // mirrored, so the wrapper says where the story is on every tier.
   const mirrorOnly: StoryTarget = {
     setStory: (chapter) => mirrorChapter(chapter),
+    setStage: () => undefined,
     setPointer: () => undefined,
+    setVeil,
   };
 
-  // The engine keeps the latest story and pointer itself, tier 3 included,
-  // and hands them to a GPU tier that a later setTier brings back.
+  // The engine keeps the latest story, stage and pointer itself, tier 3
+  // included, and hands them to a GPU tier that a later setTier brings back.
   function forwardTo(live: Engine): StoryTarget {
     return {
       setStory(chapter, progress) {
         mirrorChapter(chapter);
         live.setStory(chapter, progress);
       },
+      setStage: (stages) => live.setStage(stages),
       setPointer: (x, y, active) => live.setPointer(x, y, active),
+      setVeil,
     };
   }
 
@@ -150,6 +174,7 @@ export function createEngineSession(
     delete wrapper.dataset.ready;
     delete wrapper.dataset.fps;
     delete wrapper.dataset.chapter;
+    wrapper.style.removeProperty("--field-veil");
 
     try {
       await engine?.dispose();

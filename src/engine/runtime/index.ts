@@ -15,12 +15,13 @@ import type {
   Runtime,
   RuntimeFactory,
   RuntimeOptions,
+  Stages,
 } from "../types";
 import { nextResolution, startResolution } from "./adaptive";
 import { packAtlas, type Atlas } from "./atlas";
 import { liveBackend } from "./backend";
 import { createField, viewFor } from "./field";
-import { createSimulation } from "./simulation";
+import { FIELD_MARGIN, createSimulation } from "./simulation";
 import {
   AMBIENT,
   calmKey,
@@ -28,7 +29,10 @@ import {
   chapterTargets,
   fitScale,
   follow,
+  formationStage,
   formedLight,
+  releaseRankScale,
+  stagedFrame,
   type StoryTargets,
 } from "./story";
 
@@ -142,8 +146,20 @@ function startRuntime(
   // puts every particle straight on its target, so the page never shows the
   // ambient field gathering into, say, the hero's dot.
   let seatPending = false;
-  const followed = { release: 1, push: 0, light: 1 };
+  const followed = {
+    release: 1,
+    push: 0,
+    light: 1,
+    dotX: 0,
+    dotY: 0,
+    shapeX: 0,
+    shapeY: 0,
+  };
   let lightTarget = 1;
+  // Where the page puts the dot and the work chapter's shapes (types.ts,
+  // Stage); none until the page has measured its layout.
+  let stages: Stages = {};
+  const centre = { dotX: 0, dotY: 0, shapeX: 0, shapeY: 0 };
   // The last pointer the page sent. It pushes the particles only while the
   // field runs: the page lets go of the pointer only after calm has frozen
   // the field, and a settle with the push on would press a hole at the
@@ -159,24 +175,50 @@ function startRuntime(
   // True while the canvas has no CSS size.
   let unseen = false;
 
-  // Shapes are sized for the frame they are in, so a new frame or new
-  // targets size them again.
+  // Shapes are sized for the stage they form in, inside the frame, so a new
+  // frame, a new stage or new targets size them again and move the centres
+  // they are pulled to.
   const refit = () => {
+    const dot = stagedFrame(stages.hero, view);
+    const shapes = stagedFrame(
+      formationStage(story?.chapter ?? null, stages),
+      view,
+    );
+    centre.dotX = dot.centreX;
+    centre.dotY = dot.centreY;
+    centre.shapeX = shapes.centreX;
+    centre.shapeY = shapes.centreY;
     simulation.shapeScaleFrom.value = fitScale(
       atlas.extents[targets.shapeFrom],
-      view,
+      shapes.frame,
     );
     simulation.shapeScaleTo.value = fitScale(
       atlas.extents[targets.shapeTo],
-      view,
+      shapes.frame,
     );
-    lightTarget = formedLight(targets, atlas.extents, view);
+    lightTarget = formedLight(targets, atlas.extents, view, shapes.frame);
   };
 
   const showFollowed = () => {
     simulation.release.value = followed.release;
     field.light.value = followed.light;
     field.setFocus(-followed.push * PUSH_DEPTH);
+    simulation.dotCentre.value.set(followed.dotX, followed.dotY);
+    simulation.shapeCentre.value.set(followed.shapeX, followed.shapeY);
+    // The dot in the seeds' square, where homes span -1 to 1 at the frame
+    // and FIELD_MARGIN past it, for the order of the bloom.
+    const seedX = followed.dotX / (view.halfWidth * FIELD_MARGIN);
+    const seedY = followed.dotY / (view.halfHeight * FIELD_MARGIN);
+    simulation.dotSeed.value.set(seedX, seedY);
+    simulation.rankScale.value = releaseRankScale(seedX, seedY);
+  };
+
+  /** Puts the followed centres on their targets at once. */
+  const jumpCentres = () => {
+    followed.dotX = centre.dotX;
+    followed.dotY = centre.dotY;
+    followed.shapeX = centre.shapeX;
+    followed.shapeY = centre.shapeY;
   };
 
   /** Points the field at new targets; `now` skips the follow. */
@@ -194,6 +236,7 @@ function startRuntime(
       followed.release = next.release;
       followed.push = next.push;
       followed.light = lightTarget;
+      jumpCentres();
       showFollowed();
     }
   };
@@ -270,6 +313,16 @@ function startRuntime(
       seconds,
       LIGHT_FOLLOW_SECONDS,
     );
+    // The centres move like the camera, so a new layout or the change from
+    // the work chapter's stage to the whole frame glides (REQ-SCR-05).
+    for (const key of ["dotX", "dotY", "shapeX", "shapeY"] as const) {
+      followed[key] = follow(
+        followed[key],
+        centre[key],
+        seconds,
+        PUSH_FOLLOW_SECONDS,
+      );
+    }
     showFollowed();
     // A still holds the dot at rest (REQ-A11Y-03).
     simulation.pulse.value = still
@@ -503,6 +556,29 @@ function startRuntime(
         if (!aimStill()) return;
         fitStill();
         // A hidden canvas is drawn when it is shown again (the observer).
+        if (!unseen) draw();
+      } catch (error) {
+        fail(error);
+      }
+    },
+    setStage(next) {
+      if (disposal !== null || loss.message !== null) return;
+      stages = next;
+      refit();
+      // Before its first story a field has nothing on screen to glide from.
+      if (story === null || seatPending) {
+        jumpCentres();
+        showFollowed();
+        return;
+      }
+      if (!still) return;
+      // A calm field cannot glide: it is put where the new stage wants it
+      // and drawn again once (REQ-A11Y-03).
+      try {
+        jumpCentres();
+        showFollowed();
+        seat();
+        fitStill();
         if (!unseen) draw();
       } catch (error) {
         fail(error);

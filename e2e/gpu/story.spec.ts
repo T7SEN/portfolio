@@ -232,6 +232,78 @@ async function shortFrames(page: Page) {
   };
 }
 
+// ?stage=split sends the stages a wide home page sends (engine-view.tsx,
+// SPLIT_STAGES): the dot at y -0.6, the work stage at x 0.45 with halves
+// 0.45 and 0.9, in normalised device coordinates (D-065).
+function splitCases(width: number, height: number): Case[] {
+  const px = (x: number, y: number) => ({
+    x: ((x + 1) / 2) * width,
+    y: ((1 - y) / 2) * height,
+  });
+  const dot = px(0, -0.6);
+  const stage = px(0.45, 0);
+  const margin = MARGIN_SHARE * (Math.min(width, height) / 2) + MARGIN_PX;
+  const halfWidth = 0.45 * (width / 2) + margin;
+  const halfHeight = 0.9 * (height / 2) + margin;
+  return [
+    {
+      name: "hero, staged: the dot low in the frame",
+      chapter: "hero",
+      progress: 0,
+      inside: { x: dot.x - 16, y: dot.y - 16, width: 32, height: 32 },
+      insideLit: 0.15,
+      share: 0.97,
+      inFrame: true,
+    },
+    {
+      name: "work step 1, staged: coup-online in the inline-end half",
+      chapter: "work",
+      progress: 1.5 / WORK_SHAPES.length,
+      inside: {
+        x: stage.x - halfWidth,
+        y: stage.y - halfHeight,
+        width: halfWidth * 2,
+        height: halfHeight * 2,
+      },
+      insideLit: 0.05,
+      share: 0.85,
+      inFrame: true,
+    },
+  ];
+}
+
+for (const { tier, count } of TIERS) {
+  test(`REQ-SCR-01 REQ-SCR-07 REQ-ENG-05 a staged dot and a staged study shape draw inside their stages on forced tier ${tier}, ${count} particles`, async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    const { errors } = watchErrors(page);
+    for (const [index, entry] of splitCases(WIDTH, HEIGHT).entries()) {
+      await open(
+        page,
+        `tier=${tier}&count=${count}&bare=1&stage=split&chapter=${entry.chapter}&progress=${entry.progress}`,
+      );
+      await expect(settled(page, tier)).toHaveCount(1, { timeout: 90_000 });
+      await expect(page.locator(VIEW)).toHaveAttribute("data-stage", "split");
+      await page.waitForTimeout(SETTLE_MS);
+      const measured = await frameOf(
+        page,
+        entry,
+        WIDTH,
+        HEIGHT,
+        testInfo.outputPath(`staged-tier-${tier}-${index}.png`),
+      );
+      console.log(
+        `story staged tier ${tier} ${entry.name}: lit pixels ${measured.litWhole}, ` +
+          `${(measured.share * 100).toFixed(1)}% inside the box, lit share inside ` +
+          `${measured.inside.litShare.toFixed(4)}, brightest ${measured.whole.brightest}`,
+      );
+      expectFrame(entry, measured);
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
 for (const { tier, count, backend } of TIERS) {
   test(`REQ-SCR-01 REQ-SCR-05 REQ-SCR-07 REQ-ENG-05 every chapter state draws where it should on forced tier ${tier}, ${count} particles`, async ({
     page,

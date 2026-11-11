@@ -95,6 +95,7 @@ function createFakeEngine(host: HTMLElement, options?: EngineOptions) {
     }),
     setTier: vi.fn(),
     setStory: vi.fn(),
+    setStage: vi.fn(),
     setPointer: vi.fn(),
     setCalm: vi.fn(),
     on: (listener) => {
@@ -273,6 +274,52 @@ describe("engine session", () => {
 
     expect(engines[0]?.options).toEqual({ calm: true });
     expect(engines[0]?.setCalm).not.toHaveBeenCalled();
+  });
+
+  it("REQ-SCR-01 the page's stages reach the engine ahead of the story, and later ones follow", async () => {
+    const { bridge, session } = setUp();
+    const hero = { x: 0, y: -0.6, halfWidth: 0, halfHeight: 0 };
+    bridge.setStage({ hero });
+    bridge.setStory("hero", 0.2);
+    session.request();
+    await passFirstContent();
+
+    const engine = engines[0];
+    if (engine === undefined) throw new Error("No engine was created");
+    expect(engine.setStage).toHaveBeenCalledExactlyOnceWith({ hero });
+    const [stageOrder] = vi.mocked(engine.setStage).mock.invocationCallOrder;
+    const [storyOrder] = vi.mocked(engine.setStory).mock.invocationCallOrder;
+    expect(stageOrder).toBeLessThan(storyOrder ?? 0);
+
+    bridge.setStage({});
+    expect(engine.setStage).toHaveBeenLastCalledWith({});
+  });
+
+  it("REQ-A11Y-06 the page's veil lies over a live field only; tier 3's still and a closed session keep the measured one", async () => {
+    const { bridge, session, wrapper } = setUp();
+    const veil = () => wrapper.style.getPropertyValue("--field-veil");
+    bridge.setVeil(0.35);
+    expect(veil()).toBe("");
+
+    session.request();
+    await passFirstContent();
+    const engine = engines[0];
+    if (engine === undefined) throw new Error("No engine was created");
+    engine.emit({ type: "tierChosen", tier: 2, reason: "no-webgpu" });
+    expect(veil()).toBe("0.35");
+    bridge.setVeil(0.5);
+    expect(veil()).toBe("0.5");
+    bridge.setVeil(null);
+    expect(veil()).toBe("");
+    bridge.setVeil(0.4);
+
+    engine.emit({ type: "tierChosen", tier: 3, reason: "device-lost" });
+    expect(veil()).toBe("");
+    engine.emit({ type: "tierChosen", tier: 1, reason: "forced" });
+    expect(veil()).toBe("0.4");
+
+    await session.dispose();
+    expect(veil()).toBe("");
   });
 
   it("REQ-SCR-01 the latest story and pointer reach the engine before it starts, and later ones follow", async () => {

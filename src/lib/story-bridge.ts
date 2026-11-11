@@ -1,7 +1,16 @@
-import type { ChapterId, Engine } from "@/engine/types";
+import type { ChapterId, Engine, Stages } from "@/engine/types";
 
-/** The two engine commands the page drives. */
-export type StoryTarget = Pick<Engine, "setStory" | "setPointer">;
+/**
+ * What the page drives: the engine's story, stage and pointer commands, and
+ * the veil, which the engine session lays over the field (it never reaches
+ * the engine). A veil of null is the session's own default.
+ */
+export type StoryTarget = Pick<
+  Engine,
+  "setStory" | "setStage" | "setPointer"
+> & {
+  setVeil(veil: number | null): void;
+};
 
 export type StoryState = { chapter: ChapterId; progress: number };
 export type PointerState = { x: number; y: number; active: boolean };
@@ -9,8 +18,12 @@ export type PointerState = { x: number; y: number; active: boolean };
 export type StoryBridge = {
   /** The chapter in view and how far through it, clamped to 0 to 1. */
   setStory(chapter: ChapterId, progress: number): void;
+  /** Where the dot and the work chapter's shapes sit, from the layout. */
+  setStage(stages: Stages): void;
   /** Normalised device coordinates, -1 to 1 on both axes, y up. */
   setPointer(x: number, y: number, active: boolean): void;
+  /** The veil's strength over the field, 0 to 1; null for the default. */
+  setVeil(veil: number | null): void;
   /** The latest story sent, null before any. */
   getStory(): StoryState | null;
   /**
@@ -37,7 +50,10 @@ function signedUnit(value: number): number {
 // keeps them (engine-webgpu-tsl.md section 7).
 export function createStoryBridge(): StoryBridge {
   let story: StoryState | null = null;
+  let stages: Stages | null = null;
   let pointer: PointerState | null = null;
+  // Undefined until the page sends one; null is a sent default.
+  let veil: number | null | undefined;
   let target: StoryTarget | null = null;
 
   return {
@@ -46,18 +62,31 @@ export function createStoryBridge(): StoryBridge {
       target?.setStory(story.chapter, story.progress);
     },
 
+    setStage(next) {
+      stages = next;
+      target?.setStage(next);
+    },
+
     setPointer(x, y, active) {
       pointer = { x: signedUnit(x), y: signedUnit(y), active };
       target?.setPointer(pointer.x, pointer.y, pointer.active);
+    },
+
+    setVeil(next) {
+      veil = next === null ? null : unit(next);
+      target?.setVeil(veil);
     },
 
     getStory: () => story,
 
     connect(next) {
       target = next;
+      // The stage first, so the first story already seats the field in it.
+      if (stages !== null) next.setStage(stages);
       if (story !== null) next.setStory(story.chapter, story.progress);
       if (pointer !== null)
         next.setPointer(pointer.x, pointer.y, pointer.active);
+      if (veil !== undefined) next.setVeil(veil);
       return () => {
         if (target === next) target = null;
       };
@@ -65,7 +94,9 @@ export function createStoryBridge(): StoryBridge {
 
     reset() {
       story = null;
+      stages = null;
       pointer = null;
+      veil = undefined;
       target = null;
     },
   };

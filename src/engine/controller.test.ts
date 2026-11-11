@@ -80,6 +80,9 @@ function stubRuntimes(outcomes: readonly Outcome[] = []) {
       setStory(chapter, progress) {
         stub.log.push(`story ${chapter} ${progress}`);
       },
+      setStage(stages) {
+        stub.log.push(`stage ${JSON.stringify(stages)}`);
+      },
       dispose() {
         stub.isDisposed = true;
         stub.log.push("dispose");
@@ -220,7 +223,7 @@ afterEach(async () => {
 });
 
 describe("commands and events", () => {
-  test("REQ-ENG-03 the engine offers five commands, on and dispose", () => {
+  test("REQ-ENG-03 the engine offers six commands, on and dispose", () => {
     const { engine } = mount({});
 
     expect(Object.keys(engine).sort()).toEqual([
@@ -228,6 +231,7 @@ describe("commands and events", () => {
       "on",
       "setCalm",
       "setPointer",
+      "setStage",
       "setStory",
       "setTier",
       "start",
@@ -374,6 +378,38 @@ describe("commands and events", () => {
     expect(nth(stubs.built, 1).log.slice(0, 2)).toEqual([
       "story about 1",
       "pointer -1 1 false",
+    ]);
+  });
+
+  test("REQ-ENG-03 REQ-SCR-01 setStage sent before the runtime exists reaches it ahead of the story, and again after a tier change", async () => {
+    const stubs = stubRuntimes();
+    const { engine } = mount({
+      environment: facts(NO_WEBGPU),
+      loadRuntime: stubs.loadRuntime,
+    });
+    const hero = { x: 0, y: -0.6, halfWidth: 0, halfHeight: 0 };
+    const work = { x: 0.4, y: 0, halfWidth: 0.5, halfHeight: 1 };
+
+    engine.setStage({ hero });
+    engine.setStage({ hero, work });
+    engine.setStory("work", 0.25);
+    void engine.start();
+    await settle();
+
+    const first = nth(stubs.built, 0);
+    expect(first.log.slice(0, 2)).toEqual([
+      `stage ${JSON.stringify({ hero, work })}`,
+      "story work 0.25",
+    ]);
+
+    engine.setStage({ hero });
+    expect(first.log.at(-1)).toBe(`stage ${JSON.stringify({ hero })}`);
+
+    engine.setTier(2);
+    await settle();
+    expect(nth(stubs.built, 1).log.slice(0, 2)).toEqual([
+      `stage ${JSON.stringify({ hero })}`,
+      "story work 0.25",
     ]);
   });
 

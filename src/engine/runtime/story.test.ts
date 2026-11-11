@@ -5,14 +5,19 @@ import type { ChapterId } from "../types";
 import {
   AMBIENT,
   FORMED_GAIN,
+  FULL_STAGE,
   SHAPE_FIT,
   calmKey,
   calmProgress,
   chapterTargets,
+  cleanStage,
   fitScale,
   follow,
+  formationStage,
   formedArea,
   formedLight,
+  releaseRankScale,
+  stagedFrame,
   type ShapeExtent,
   type StoryTargets,
 } from "./story";
@@ -344,5 +349,68 @@ describe("fit and light", () => {
     expect(follow(0, 1, 100, 0.4)).toBeLessThanOrEqual(1);
     expect(follow(0.3, 1, 0, 0.4)).toBe(0.3);
     expect(follow(0.3, 1, Number.NaN, 0.4)).toBe(0.3);
+  });
+});
+
+describe("stages", () => {
+  const frame = { halfWidth: 3, halfHeight: 2 };
+
+  test("REQ-SCR-01 a chapter with no stage forms in the middle of the whole frame", () => {
+    expect(cleanStage(undefined)).toEqual(FULL_STAGE);
+    expect(stagedFrame(undefined, frame)).toEqual({
+      centreX: 0,
+      centreY: 0,
+      frame,
+    });
+    expect(formationStage("bloom", { work: FULL_STAGE })).toBeUndefined();
+    expect(formationStage(null, { work: FULL_STAGE })).toBeUndefined();
+  });
+
+  test("REQ-SCR-01 REQ-I18N-01 a stage turns into a centre and halves at the focus plane, on either side", () => {
+    const end = { x: 0.5, y: -0.25, halfWidth: 0.4, halfHeight: 0.9 };
+    const staged = stagedFrame(end, frame);
+    expect(staged.centreX).toBeCloseTo(1.5, 12);
+    expect(staged.centreY).toBeCloseTo(-0.5, 12);
+    expect(staged.frame.halfWidth).toBeCloseTo(1.2, 12);
+    expect(staged.frame.halfHeight).toBeCloseTo(1.8, 12);
+    // A right to left page measures its free half on the other side.
+    expect(stagedFrame({ ...end, x: -0.5 }, frame).centreX).toBe(-1.5);
+    expect(formationStage("work", { work: end })).toBe(end);
+  });
+
+  test("REQ-SCR-01 a broken measure falls back to the screen and never leaves it", () => {
+    expect(
+      cleanStage({
+        x: Number.NaN,
+        y: 4,
+        halfWidth: Number.POSITIVE_INFINITY,
+        halfHeight: -1,
+      }),
+    ).toEqual({ x: 0, y: 1, halfWidth: 1, halfHeight: 0 });
+  });
+
+  test("REQ-SCR-01 a shape fitted to a stage stays inside SHAPE_FIT of that stage", () => {
+    const extent = { halfWidth: 1, halfHeight: 0.5, area: 1 };
+    const staged = stagedFrame(
+      { x: 0.5, y: 0, halfWidth: 0.4, halfHeight: 1 },
+      frame,
+    );
+    const scale = fitScale(extent, staged.frame);
+    expect(extent.halfWidth * scale).toBeCloseTo(
+      staged.frame.halfWidth * SHAPE_FIT,
+      12,
+    );
+    expect(extent.halfHeight * scale).toBeLessThanOrEqual(
+      staged.frame.halfHeight * SHAPE_FIT,
+    );
+  });
+
+  test("REQ-SCR-07 the bloom ranks every home from the dot, the farthest corner at 1", () => {
+    expect(releaseRankScale(0, 0)).toBeCloseTo(Math.SQRT1_2, 12);
+    const scale = releaseRankScale(0, -0.6);
+    // The corner farthest from a dot low on the screen is a top corner.
+    expect(Math.hypot(1, 1.6) * scale).toBeCloseTo(1, 12);
+    expect(Math.hypot(1, 0.4) * scale).toBeLessThan(1);
+    expect(releaseRankScale(5, 5)).toBeCloseTo(releaseRankScale(1, 1), 12);
   });
 });

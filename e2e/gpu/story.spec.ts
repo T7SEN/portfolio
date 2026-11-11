@@ -27,7 +27,10 @@ const HOST = `${VIEW} [data-part="host"]`;
 const CANVAS = `${HOST} > canvas`;
 const WIDTH = 1280;
 const HEIGHT = 800;
-// Formations take about a second and a half to gather; this leaves room.
+// The page sends the story before start(), so each formation is seated on
+// its targets at the first frame. The wait lets the noise carry the
+// particles into their flow around those targets, the three seconds a calm
+// still is settled for (runtime/index.ts, SETTLE_STEPS).
 const SETTLE_MS = 3_000;
 const FRAMES_WARM_UP_MS = 500;
 const FRAMES_WINDOW_MS = 3_000;

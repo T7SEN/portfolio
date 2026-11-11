@@ -62,8 +62,9 @@ function chosenChapter(select: HTMLSelectElement): ChapterId | null {
 
 /**
  * Sends the chapter and progress the controls hold, and mirrors them on the
- * view as data-chapter and data-progress. Nothing is sent while no chapter
- * is chosen, so the field stays the ambient one.
+ * view as data-chapter and data-progress. None sends nothing new and empties
+ * both: the engine keeps the last story it was sent, so the field is the
+ * ambient one only until a chapter is first chosen.
  */
 function sendStory(
   engine: Engine | null,
@@ -72,7 +73,11 @@ function sendStory(
   range: HTMLInputElement,
 ) {
   const chapter = chosenChapter(select);
-  if (chapter === null) return;
+  if (chapter === null) {
+    view.dataset.chapter = "";
+    view.dataset.progress = "";
+    return;
+  }
   const progress = Number(range.value);
   view.dataset.chapter = chapter;
   view.dataset.progress = String(progress);
@@ -251,12 +256,14 @@ export function EngineView() {
         </label>
         <label className="inline-flex min-h-11 items-center gap-2 font-mono text-sm">
           Progress
+          {/* No step: a range input rounds its value to the step, and
+              ?progress must reach the engine as given. */}
           <input
             ref={progressRef}
             type="range"
             min="0"
             max="1"
-            step="0.01"
+            step="any"
             defaultValue="0"
             onChange={() => sendStoryNow()}
           />

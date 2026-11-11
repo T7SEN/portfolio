@@ -118,8 +118,8 @@ for (const tier of [1, 2] as const) {
     await expect(settled(page, tier)).toBeVisible({ timeout: 90_000 });
     const canvas = page.locator(CANVAS);
     await canvas.scrollIntoViewIfNeeded();
-    // The site bar carries its own Calm toggle from P3; the development
-    // page's engine listens only to the page's own button.
+    // The site bar carries its own Calm toggle; the development page's
+    // engine listens only to the page's own button.
     const calm = page.locator(VIEW).getByRole("button", { name: "Calm" });
 
     await calm.click();

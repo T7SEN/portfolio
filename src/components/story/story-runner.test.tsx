@@ -10,7 +10,7 @@ import {
 } from "vitest";
 
 import HomePage from "@/app/page";
-import type { ChapterId } from "@/engine/types";
+import type { ChapterId, Stages } from "@/engine/types";
 import type { CalmSnapshot } from "@/lib/calm-store";
 
 import { REVEAL_START } from "./motion-timing";
@@ -251,7 +251,11 @@ const VIEW = { innerHeight: 800 };
 
 let root: HTMLElement;
 let page: { position: number; spans: Map<Element, Span> };
-let bridge: { setStory: Mock<(chapter: ChapterId, progress: number) => void> };
+let bridge: {
+  setStory: Mock<(chapter: ChapterId, progress: number) => void>;
+  setStage: Mock<(stages: Stages) => void>;
+  setVeil: Mock<(veil: number | null) => void>;
+};
 
 function chapterSections() {
   return [...root.querySelectorAll<HTMLElement>("section[data-chapter]")];
@@ -259,6 +263,19 @@ function chapterSections() {
 
 function titles() {
   return [...root.querySelectorAll<HTMLElement>("[data-story-title]")];
+}
+
+function intros() {
+  return [...root.querySelectorAll<HTMLElement>("[data-story-intro]")];
+}
+
+/** The tweens on titles or their words, not on the lines under them. */
+function titleTweens<Tween extends { elements: HTMLElement[] }>(fake: {
+  tweens: Tween[];
+}): Tween[] {
+  return fake.tweens.filter(
+    (tween) => !tween.elements[0]?.hasAttribute("data-story-intro"),
+  );
 }
 
 /** Puts every chapter title at a viewport top, in px. */
@@ -301,12 +318,18 @@ beforeEach(() => {
   });
   bridge = {
     setStory: vi.fn<(chapter: ChapterId, progress: number) => void>(),
+    setStage: vi.fn<(stages: Stages) => void>(),
+    setVeil: vi.fn<(veil: number | null) => void>(),
   };
   placeTitles(3000);
 });
 
 afterEach(() => {
   root.remove();
+  // Tests that never stop the story leave its plate layer behind.
+  for (const layer of document.querySelectorAll("[data-part='veil-plates']")) {
+    layer.remove();
+  }
 });
 
 describe("story triggers", () => {
@@ -459,7 +482,7 @@ describe("chapter title reveals", () => {
     for (const [, vars] of fake.SplitText.create.mock.calls) {
       expect(vars).toMatchObject({ type: "words", mask: "words" });
     }
-    for (const tween of fake.tweens) {
+    for (const tween of titleTweens(fake)) {
       expect(tween.from).toMatchObject({ yPercent: 100, opacity: 0 });
       expect(tween.to).toMatchObject({ yPercent: 0, opacity: 1, paused: true });
       expect(tween.to.duration).toBeGreaterThanOrEqual(0.6);
@@ -474,8 +497,39 @@ describe("chapter title reveals", () => {
     }
 
     reveals[0]?.vars.onEnter?.();
-    expect(fake.tweens[0]?.isPlaying).toBe(true);
-    expect(fake.tweens[1]?.isPlaying).toBe(false);
+    expect(titleTweens(fake)[0]?.isPlaying).toBe(true);
+    expect(titleTweens(fake)[1]?.isPlaying).toBe(false);
+  });
+
+  it("REQ-SCR-05 the line under a title waits hidden with it and fades in on the same trigger, trailing its words", () => {
+    const fake = createFakeMotion(page);
+    start(fake);
+    expect(intros()).toHaveLength(3);
+    for (const intro of intros()) expect(intro.style.opacity).toBe("0");
+
+    const following = fake.tweens.filter((tween) =>
+      tween.elements[0]?.hasAttribute("data-story-intro"),
+    );
+    expect(following.map((tween) => tween.elements[0])).toEqual(intros());
+    for (const tween of following) {
+      expect(tween.from).toEqual({ opacity: 0 });
+      expect(tween.to).not.toHaveProperty("yPercent");
+      // Slower than the title's 0.8 s and easing in, so it arrives after.
+      expect(tween.to.duration).toBeGreaterThan(0.8);
+      expect(tween.to.duration).toBeLessThanOrEqual(0.9);
+      expect(String(tween.to.ease)).toMatch(/.inOut$/);
+    }
+
+    const reveals = fake.triggers.filter((trigger) => trigger.vars.once);
+    reveals[0]?.vars.onEnter?.();
+    expect(following[0]?.isPlaying).toBe(true);
+    expect(following[1]?.isPlaying).toBe(false);
+  });
+
+  it("REQ-CNT-01 the static HTML hides no line under a title", () => {
+    for (const intro of intros()) {
+      expect(intro.getAttribute("style")).toBeNull();
+    }
   });
 
   it("REQ-SCR-05 REQ-CNT-01 a title already on screen or above is left as it is", () => {
@@ -504,7 +558,7 @@ describe("chapter title reveals", () => {
     start(fake, createCalm(true));
 
     expect(fake.SplitText.create).not.toHaveBeenCalled();
-    expect(fake.tweens.map((tween) => tween.elements)).toEqual(
+    expect(titleTweens(fake).map((tween) => tween.elements)).toEqual(
       titles().map((title) => [title]),
     );
     for (const tween of fake.tweens) {
@@ -534,7 +588,7 @@ describe("chapter title reveals", () => {
     expect(work?.textContent).toBe("Work");
     expect(work?.style.opacity).toBe("");
     expect(fake.SplitText.create).toHaveBeenCalledTimes(3);
-    const fades = fake.tweens.slice(3);
+    const fades = titleTweens(fake).slice(3);
     expect(fades.map((tween) => tween.elements[0]?.textContent)).toEqual([
       "About",
       "Contact",
@@ -622,12 +676,101 @@ describe("teardown", () => {
 
     expect(() => start(fake, calm)).toThrow("split failed");
     expect(fake.splits).toHaveLength(1);
-    expect(fake.tweens).toHaveLength(1);
+    // The first title's rise and the fade of the line under it.
+    expect(fake.tweens).toHaveLength(2);
     expect(titles().map((title) => title.outerHTML)).toEqual(before);
+    for (const intro of intros()) expect(intro.style.opacity).toBe("");
     for (const split of fake.splits) expect(split.isReverted).toBe(true);
     for (const trigger of fake.triggers) expect(trigger.isKilled).toBe(true);
     for (const context of fake.contexts) expect(context.isReverted).toBe(true);
     expect(calm.listeners.size).toBe(0);
     expect(bridge.setStory).not.toHaveBeenCalled();
+  });
+});
+
+describe("the field's layout", () => {
+  const hero = { x: 0, y: -0.6, halfWidth: 0, halfHeight: 0 };
+  const work = { x: 0.45, y: 0, halfWidth: 0.4, halfHeight: 0.85 };
+
+  function fakeTier(live: 1 | 2 | 3) {
+    const listeners = new Set<() => void>();
+    let snapshot = {
+      tier: live as 1 | 2 | 3 | null,
+      reason: null,
+      ready: true,
+    };
+    return {
+      store: {
+        getSnapshot: () => snapshot,
+        subscribe(listener: () => void) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
+      set(next: 1 | 2 | 3) {
+        snapshot = { ...snapshot, tier: next };
+        for (const listener of listeners) listener();
+      },
+      listeners,
+    };
+  }
+
+  const layer = () =>
+    document.querySelector<HTMLElement>('[data-part="veil-plates"]');
+
+  it("REQ-SCR-01 REQ-A11Y-06 the stages go to the field once per layout; plates are laid behind the text before the veil opens", () => {
+    const fake = createFakeMotion(page);
+    const tier = fakeTier(2);
+    let stages: Stages = { hero };
+    let lines = [
+      { top: 100, bottom: 140, left: 88, right: 400 },
+      { top: 2000, bottom: 2040, left: 88, right: 300 },
+    ];
+    const order: string[] = [];
+    bridge.setVeil.mockImplementation((veil) => {
+      order.push(
+        `veil ${veil} with ${layer()?.childElementCount ?? "no"} plates`,
+      );
+    });
+    const stop = startStory(fake.motion, {
+      root,
+      bridge,
+      calm: createCalm(false).store,
+      view: VIEW,
+      fonts: null,
+      tier: tier.store,
+      measure: () => ({ stages, lines }),
+    });
+
+    expect(bridge.setStage.mock.calls).toEqual([[{ hero }]]);
+    expect(order).toEqual(["veil 0.35 with 2 plates"]);
+    // Outside header, main and footer, which the contrast spec hides.
+    expect(layer()?.parentElement).toBe(document.body);
+    expect(layer()?.getAttribute("aria-hidden")).toBe("true");
+    expect(layer()?.hidden).toBe(false);
+    const first = layer()?.firstElementChild as HTMLElement | null;
+    expect(first?.style.top).toBe("84px");
+
+    // The same layout again sends no stage; a new one sends its stages and
+    // lays its plates again, with the veil left open.
+    fake.ScrollTrigger.refresh();
+    expect(bridge.setStage).toHaveBeenCalledTimes(1);
+    stages = { hero, work };
+    lines = [{ top: 100, bottom: 140, left: 88, right: 400 }];
+    fake.ScrollTrigger.refresh();
+    expect(bridge.setStage).toHaveBeenLastCalledWith({ hero, work });
+    expect(layer()?.childElementCount).toBe(1);
+    expect(bridge.setVeil).toHaveBeenCalledTimes(1);
+
+    // Tier 3 keeps its own veil and shows no plates.
+    tier.set(3);
+    expect(layer()?.hidden).toBe(true);
+    tier.set(1);
+    expect(layer()?.hidden).toBe(false);
+
+    stop();
+    expect(bridge.setVeil).toHaveBeenLastCalledWith(null);
+    expect(layer()).toBeNull();
+    expect(tier.listeners.size).toBe(0);
   });
 });

@@ -13,6 +13,8 @@ import { StoryScene } from "./story-scene";
 // its bars is about 548 px tall) get tighter spacing so Skip intro stays
 // above the fold. Below 22rem and under about 559 px tall the content is
 // taller than this minimum, so Skip intro still ends below the fold (D-063).
+// The empty band between the actions and Skip intro is where the field's
+// dot sits (story-stage.ts), clear of every word.
 export function Hero() {
   const copy = heroCopy(STATIC_TIER);
 
@@ -24,7 +26,7 @@ export function Hero() {
           <HeroHeadline id="hero-headline" text={copy.headline} />
           <StoryScene chapter="hero" />
           <p className="max-w-measure text-lead text-muted">{copy.subLine}</p>
-          <div className="flex flex-wrap gap-3 pt-2">
+          <div className="flex flex-wrap gap-3 pt-2" data-stage="dot-above">
             <ActionLink href="/work">{copy.primaryAction}</ActionLink>
             <ActionLink href="/contact" variant="secondary">
               {copy.secondaryAction}
@@ -34,6 +36,7 @@ export function Hero() {
         <TextLink
           href="#work"
           className="inline-flex min-h-11 items-center self-start font-mono text-sm"
+          data-stage="dot-below"
         >
           {copy.cornerControl}
         </TextLink>

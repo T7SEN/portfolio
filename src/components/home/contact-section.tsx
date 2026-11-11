@@ -16,7 +16,9 @@ export function ContactSection() {
       chapter="contact"
       className="flex min-h-[120svh] flex-col justify-end"
     >
-      <p className="max-w-measure text-lead">{pages.contact.intro}</p>
+      <p className="max-w-measure text-lead" data-story-intro="">
+        {pages.contact.intro}
+      </p>
       <div className="mt-6">
         <ActionLink href="/contact" variant="secondary">
           {heroCopy(STATIC_TIER).secondaryAction}

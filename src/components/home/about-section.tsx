@@ -14,7 +14,9 @@ export function AboutSection() {
       chapter="about"
       className="min-h-[140svh]"
     >
-      <p className="max-w-measure text-lead">{pages.about.intro}</p>
+      <p className="max-w-measure text-lead" data-story-intro="">
+        {pages.about.intro}
+      </p>
       <ul className="mt-4 flex flex-wrap gap-2">
         {about.thread.map((point) => (
           <li

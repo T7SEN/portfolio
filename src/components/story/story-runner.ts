@@ -1,5 +1,6 @@
-import type { ChapterId } from "@/engine/types";
+import type { ChapterId, Stages } from "@/engine/types";
 import { calmStore, type CalmStore } from "@/lib/calm-store";
+import { tierStore, type TierStore } from "@/lib/tier-store";
 import type { Motion } from "@/lib/load-motion";
 import {
   storyBridge,
@@ -7,9 +8,68 @@ import {
   type StoryState,
 } from "@/lib/story-bridge";
 
-import { REVEAL_START, TITLE_FADE, TITLE_REVEAL } from "./motion-timing";
+import {
+  INTRO_REVEAL,
+  REVEAL_START,
+  TITLE_FADE,
+  TITLE_REVEAL,
+} from "./motion-timing";
 import { readStoryElements } from "./story-dom";
 import { isReached, resolveStory, sameStory } from "./story-progress";
+import { measureLayout, sameStages, type PageLayout } from "./story-stage";
+import {
+  PLATE_SOFT,
+  VEIL_OPEN,
+  plateColour,
+  plates,
+  type PageRect,
+} from "./story-veil";
+
+/**
+ * The layer that holds the veil's plates (story-veil.ts): positioned at the
+ * top of the page, so the plates scroll with the text, and stacked between
+ * the field (-z-10) and the page. It is a child of body, outside header,
+ * main and footer.
+ */
+function createPlateLayer(doc: Document): HTMLElement {
+  const layer = doc.createElement("div");
+  layer.dataset.part = "veil-plates";
+  layer.setAttribute("aria-hidden", "true");
+  Object.assign(layer.style, {
+    position: "absolute",
+    top: "0",
+    left: "0",
+    width: "100%",
+    height: "0",
+    zIndex: "-5",
+    pointerEvents: "none",
+    // Its own compositing layer: the plates' soft shadows are drawn once,
+    // not again with every repaint of the page around them.
+    willChange: "transform",
+  });
+  doc.body.append(layer);
+  return layer;
+}
+
+function drawPlates(layer: HTMLElement, blocks: readonly PageRect[]) {
+  const colour = plateColour();
+  layer.replaceChildren(
+    ...blocks.map((block) => {
+      const plate = layer.ownerDocument.createElement("div");
+      Object.assign(plate.style, {
+        position: "absolute",
+        top: `${block.top}px`,
+        left: `${block.left}px`,
+        width: `${block.right - block.left}px`,
+        height: `${block.bottom - block.top}px`,
+        background: colour,
+        borderRadius: `${PLATE_SOFT / 2}px`,
+        boxShadow: `0 0 ${PLATE_SOFT}px ${PLATE_SOFT / 2}px ${colour}`,
+      });
+      return plate;
+    }),
+  );
+}
 
 /** The parts of GSAP the story uses. */
 export type StoryMotion = {
@@ -24,10 +84,14 @@ export type StoryMotion = {
 export type StoryOptions = {
   /** The page's main element: every chapter and title sits inside it. */
   root: HTMLElement;
-  bridge?: Pick<StoryBridge, "setStory">;
+  bridge?: Pick<StoryBridge, "setStory" | "setStage" | "setVeil">;
   calm?: Pick<CalmStore, "getSnapshot" | "subscribe">;
   view?: Pick<Window, "innerHeight">;
   fonts?: Pick<FontFaceSet, "ready"> | null;
+  /** The page's layout for the field: stages and text (story-stage.ts). */
+  measure?: () => PageLayout;
+  /** The tier the field runs on: plates and the open veil need a live one. */
+  tier?: Pick<TierStore, "getSnapshot" | "subscribe">;
 };
 
 type Trigger = ReturnType<StoryMotion["ScrollTrigger"]["create"]>;
@@ -80,6 +144,8 @@ export function startStory(
     calm = calmStore,
     view = window,
     fonts = "fonts" in document ? document.fonts : null,
+    measure = () => measureLayout(root, window),
+    tier = tierStore,
   } = options;
   const { chapters, steps, titles } = readStoryElements(root);
 
@@ -98,6 +164,9 @@ export function startStory(
   // every chapter has its trigger.
   let isReady = false;
   let isStopped = false;
+  let sentStages: Stages | null = null;
+  let plateLayer: HTMLElement | null = null;
+  let unsubscribeTier: (() => void) | null = null;
 
   // Reads every trigger at once, so the order in which ScrollTrigger calls
   // them never matters. ScrollTrigger refreshes every trigger before it
@@ -120,6 +189,43 @@ export function startStory(
     bridge.setStory(next.chapter, next.progress);
   }
 
+  // Tier 3's still keeps its own veil, so it shows no plates either.
+  function showPlates() {
+    const { tier: live } = tier.getSnapshot();
+    if (plateLayer !== null) plateLayer.hidden = live !== 1 && live !== 2;
+  }
+
+  // A new layout moves the dot, the work stage and the page's text. The
+  // plates are laid before the veil opens, and again for each new layout.
+  function remeasure() {
+    if (isStopped) return;
+    const layout = measure();
+    if (!sameStages(sentStages, layout.stages)) {
+      sentStages = layout.stages;
+      bridge.setStage(layout.stages);
+    }
+    if (plateLayer === null) {
+      plateLayer = createPlateLayer(root.ownerDocument);
+      showPlates();
+      drawPlates(
+        plateLayer,
+        plates(layout.lines, root.ownerDocument.documentElement.clientWidth),
+      );
+      bridge.setVeil(VEIL_OPEN);
+    } else {
+      drawPlates(
+        plateLayer,
+        plates(layout.lines, root.ownerDocument.documentElement.clientWidth),
+      );
+    }
+  }
+
+  // After every refresh the layout is read again, then the story sent.
+  function onRefresh() {
+    remeasure();
+    report();
+  }
+
   // Both start hidden at once (lazy: false), not on GSAP's next tick, so a
   // reveal set up while calm changes can never miss its start.
   function rise(title: HTMLElement) {
@@ -137,6 +243,29 @@ export function startStory(
       title,
       { opacity: 0 },
       { opacity: 1, ...TITLE_FADE, paused: true, lazy: false },
+    );
+  }
+
+  // The line under a title, marked data-story-intro in the same section. It
+  // stays hidden while its title is, so it never shows first.
+  function introOf(title: HTMLElement): HTMLElement | null {
+    return (
+      title
+        .closest("section")
+        ?.querySelector<HTMLElement>("[data-story-intro]") ?? null
+    );
+  }
+
+  function introFade(intro: HTMLElement) {
+    return gsap.fromTo(
+      intro,
+      { opacity: 0 },
+      {
+        opacity: 1,
+        ...(isCalm ? TITLE_FADE : INTRO_REVEAL),
+        paused: true,
+        lazy: false,
+      },
     );
   }
 
@@ -166,6 +295,8 @@ export function startStory(
     const reveals = contained(() => {
       for (const title of pending) {
         const reveal = isCalm ? fade(title) : rise(title);
+        const intro = introOf(title);
+        const trailing = intro === null ? null : introFade(intro);
         revealTriggers.push(
           ScrollTrigger.create({
             trigger: title,
@@ -174,6 +305,7 @@ export function startStory(
             onEnter: () => {
               settled.add(title);
               reveal.play();
+              trailing?.play();
             },
           }),
         );
@@ -191,7 +323,16 @@ export function startStory(
     isStopped = true;
     unsubscribeCalm?.();
     unsubscribeCalm = null;
-    ScrollTrigger.removeEventListener("refresh", report);
+    ScrollTrigger.removeEventListener("refresh", onRefresh);
+    unsubscribeTier?.();
+    unsubscribeTier = null;
+    // The field outside the story keeps its own veil, closed before the
+    // plates go.
+    if (plateLayer !== null) {
+      bridge.setVeil(null);
+      plateLayer.remove();
+      plateLayer = null;
+    }
     clearReveals();
     context?.revert();
     context = null;
@@ -241,10 +382,12 @@ export function startStory(
     isCalm = calm.getSnapshot().calm;
     buildReveals();
 
-    ScrollTrigger.addEventListener("refresh", report);
+    ScrollTrigger.addEventListener("refresh", onRefresh);
+    unsubscribeTier = tier.subscribe(showPlates);
     isReady = true;
     ScrollTrigger.refresh();
     // Whatever is in view now, sent at once.
+    remeasure();
     report();
   } catch (error) {
     stop();

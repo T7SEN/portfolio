@@ -61,7 +61,11 @@ describe("story with the pinned GSAP", () => {
       const before = [
         ...root.querySelectorAll<HTMLElement>("[data-story-title]"),
       ].map((title) => title.innerHTML);
-      const bridge = { setStory: vi.fn() };
+      const bridge = {
+        setStory: vi.fn(),
+        setStage: vi.fn(),
+        setVeil: vi.fn(),
+      };
 
       const stop = startStory(motion, {
         root,

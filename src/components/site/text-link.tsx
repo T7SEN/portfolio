@@ -10,6 +10,8 @@ type TextLinkProps = {
   children: ReactNode;
   variant?: TextLinkVariant;
   className?: string;
+  /** Marks a link the scroll story measures its layout by (story-stage.ts). */
+  "data-stage"?: string;
 };
 
 function isOnSite(href: string) {
@@ -23,6 +25,7 @@ export function TextLink({
   children,
   variant = "inline",
   className,
+  "data-stage": stage,
 }: TextLinkProps) {
   const onSite = isOnSite(href);
   const isFooter = variant === "footer";
@@ -50,7 +53,7 @@ export function TextLink({
 
   if (href.startsWith("/") && onSite) {
     return (
-      <Link href={href} className={classes}>
+      <Link href={href} className={classes} data-stage={stage}>
         {children}
         {arrow}
       </Link>
@@ -58,7 +61,7 @@ export function TextLink({
   }
 
   return (
-    <a href={href} className={classes}>
+    <a href={href} className={classes} data-stage={stage}>
       {children}
       {arrow}
     </a>

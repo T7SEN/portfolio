@@ -158,6 +158,27 @@ describe("StudyList", () => {
     },
   );
 
+  it("REQ-SCR-01 each item carries its place in study order as data-work-step", () => {
+    const host = render(<StudyList headingLevel="h3" />);
+    const items = [...host.querySelectorAll("ol > li")];
+    expect(items.map((item) => item.getAttribute("data-work-step"))).toEqual(
+      studies.map((_study, index) => String(index)),
+    );
+    expect(
+      items.map((item) => item.querySelector("h3 a")?.getAttribute("href")),
+    ).toEqual(studies.map((study) => studyHref(study.slug)));
+  });
+
+  it("REQ-SCR-01 item classes reach every item and nothing else", () => {
+    const host = render(
+      <StudyList headingLevel="h3" itemClassName="pb-[20svh]" />,
+    );
+    const items = [...host.querySelectorAll("ol > li")];
+    expect(items).toHaveLength(studies.length);
+    for (const item of items) expect(item.className).toBe("pb-[20svh]");
+    expect(host.querySelector("ol")?.className).toBe("grid gap-4");
+  });
+
   it("REQ-CNT-04 only SystemSeven carries the In progress label in the list", () => {
     const items = [
       ...render(<StudyList headingLevel="h2" />).querySelectorAll("ol > li"),

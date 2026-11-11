@@ -1,8 +1,13 @@
 export { AboutSection } from "./about-section";
 export { ActionLink } from "./action-link";
+export { BloomLine } from "./bloom-line";
+export { BloomSection } from "./bloom-section";
+export { ChapterHeading } from "./chapter-heading";
 export { ContactSection } from "./contact-section";
 export { Hero } from "./hero";
 export { HeroHeadline } from "./hero-headline";
 export { HomeSection } from "./home-section";
+export { MakingOfSection } from "./making-of-section";
 export { ServicesSection } from "./services-section";
+export { StoryScene } from "./story-scene";
 export { WorkSection } from "./work-section";

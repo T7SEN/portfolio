@@ -19,7 +19,8 @@ type HomeSectionProps = {
 
 // Each block of the home page is a section with its own heading. A chapter
 // also carries its scene description, and its title is the one the story
-// reveals when it scrolls into view.
+// reveals when it scrolls into view: a big title, so it is set like a page's
+// own (Unbounded at the title size), where the cinematic tone belongs.
 export function HomeSection({
   id,
   title,
@@ -32,7 +33,9 @@ export function HomeSection({
       <Container className={cx("py-16 sm:py-20", className)}>
         <h2
           id={`${id}-heading`}
-          className="text-heading"
+          className={
+            chapter === undefined ? "text-heading" : "font-display text-title"
+          }
           data-story-title={chapter === undefined ? undefined : ""}
         >
           {title}

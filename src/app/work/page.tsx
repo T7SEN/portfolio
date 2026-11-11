@@ -17,7 +17,7 @@ export default function WorkPage() {
         {pages.work.intro}
       </p>
       <div className="mt-10">
-        <StudyList headingLevel="h2" />
+        <StudyList headingLevel="h2" columns={2} />
       </div>
     </Container>
   );

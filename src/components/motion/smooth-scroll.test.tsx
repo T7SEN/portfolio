@@ -84,6 +84,7 @@ type FakeLenis = {
   readonly scrollCallbacks: Array<() => void>;
   /** True while a wheel glide runs. */
   isSmooth: boolean;
+  animatedScroll: number;
   raf: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
@@ -98,6 +99,7 @@ function fakeModules() {
     readonly args: unknown[];
     readonly scrollCallbacks: Array<() => void> = [];
     isSmooth = false;
+    animatedScroll = 0;
     raf = vi.fn();
     stop = vi.fn();
     start = vi.fn();
@@ -577,6 +579,32 @@ describe("smooth scroll session", () => {
       expect(glideEnds(lenis)).toBe(1);
       second.focus();
       expect(glideEnds(lenis)).toBe(2);
+    });
+
+    it("REQ-SCR-02 a scroll Lenis did not write, such as a scrollbar drag, ends the glide; its own writes do not", async () => {
+      const { lenis } = await withLenis();
+      const scrollTo = (y: number) => {
+        Object.defineProperty(window, "scrollY", {
+          configurable: true,
+          value: y,
+        });
+        window.dispatchEvent(new Event("scroll"));
+      };
+      try {
+        lenis.animatedScroll = 1000.4;
+        scrollTo(1000);
+        scrollTo(1001.5);
+        expect(glideEnds(lenis)).toBe(0);
+
+        scrollTo(2400);
+        expect(glideEnds(lenis)).toBe(1);
+
+        lenis.isSmooth = false;
+        scrollTo(3000);
+        expect(glideEnds(lenis)).toBe(1);
+      } finally {
+        Reflect.deleteProperty(window, "scrollY");
+      }
     });
 
     it("REQ-SCR-02 with no glide running, a click, key or focus leaves Lenis alone", async () => {

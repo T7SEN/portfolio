@@ -16,6 +16,8 @@ type TickerCallback = (time: number) => void;
 export type SmoothScrollModules = {
   Lenis: new (options: { stopInertiaOnNavigate: boolean }) => {
     readonly isSmooth: boolean;
+    /** The position Lenis last wrote while it glides. */
+    readonly animatedScroll: number;
     on(event: "scroll", callback: () => void): unknown;
     raf(time: number): void;
     stop(): void;
@@ -94,6 +96,11 @@ function isSamePageJump(target: EventTarget | null): boolean {
   );
 }
 
+// A glide writes positions to the page that are fractions of a pixel; the
+// browser may round them. A position further than this from Lenis's own was
+// written by something else.
+const STRAY_PX = 2;
+
 // In a form field these keys act on the field, not the page.
 function isEditable(target: EventTarget | null): boolean {
   return (
@@ -127,13 +134,23 @@ function stopGlideBeforeNativeScroll(
   const onKeyDown = (event: KeyboardEvent) => {
     if (SCROLL_KEYS.has(event.key) && !isEditable(event.target)) endGlide();
   };
+  // A drag of the scrollbar, find in page or a script moves the page with
+  // no key, click or focus first. Lenis would write its own position back
+  // on its next frame; a position it did not write ends the glide instead,
+  // and Lenis follows the native scroll from there (lines 655 to 678).
+  const onScroll = () => {
+    if (!lenis.isSmooth) return;
+    if (Math.abs(window.scrollY - lenis.animatedScroll) > STRAY_PX) endGlide();
+  };
   window.addEventListener("click", onClick, true);
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("focusin", endGlide, true);
+  window.addEventListener("scroll", onScroll, { passive: true });
   return () => {
     window.removeEventListener("click", onClick, true);
     window.removeEventListener("keydown", onKeyDown, true);
     window.removeEventListener("focusin", endGlide, true);
+    window.removeEventListener("scroll", onScroll);
   };
 }
 
@@ -144,9 +161,9 @@ function stopGlideBeforeNativeScroll(
  * REQ-A11Y-04). Lenis moves the native scroll position, so the wheel keeps
  * its distance (REQ-SCR-02). The keyboard, a link to a place on the page
  * and a focus change stay native even during a glide, because each one
- * stops the glide before the browser scrolls (REQ-SCR-02, REQ-NAV-01). The
- * scrollbar is native once no glide runs; a drag of it during a glide is
- * overridden until the glide ends.
+ * stops the glide before the browser scrolls (REQ-SCR-02, REQ-NAV-01). A
+ * scroll that Lenis did not write, such as a drag of the scrollbar, ends the
+ * glide as it happens, so it is never overridden.
  */
 export function createSmoothScroll({
   calm,

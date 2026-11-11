@@ -82,7 +82,11 @@ async function settle() {
 type FakeLenis = {
   readonly args: unknown[];
   readonly scrollCallbacks: Array<() => void>;
+  /** True while a wheel glide runs. */
+  isSmooth: boolean;
   raf: ReturnType<typeof vi.fn>;
+  stop: ReturnType<typeof vi.fn>;
+  start: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
 };
 
@@ -93,7 +97,10 @@ function fakeModules() {
   class Lenis implements FakeLenis {
     readonly args: unknown[];
     readonly scrollCallbacks: Array<() => void> = [];
+    isSmooth = false;
     raf = vi.fn();
+    stop = vi.fn();
+    start = vi.fn();
     destroy = vi.fn();
     constructor(...args: unknown[]) {
       this.args = args;
@@ -193,6 +200,8 @@ afterEach(() => {
 });
 
 describe("smooth scroll session", () => {
+  const sessions: Array<{ dispose(): void }> = [];
+
   function setUp(device = fakeDevice()) {
     const fake = fakeModules();
     const load = vi.fn(async () => fake.modules);
@@ -202,8 +211,13 @@ describe("smooth scroll session", () => {
       load,
       schedule,
     });
+    sessions.push(session);
     return { device, fake, load, session };
   }
+
+  afterEach(() => {
+    for (const session of sessions.splice(0)) session.dispose();
+  });
 
   it("REQ-PERF-04 loads nothing before first content", async () => {
     const { load } = setUp();
@@ -417,6 +431,181 @@ describe("smooth scroll session", () => {
     await settle();
     expect(load).toHaveBeenCalledTimes(2);
     expect(fake.instances).toHaveLength(1);
+  });
+
+  describe("a native scroll during a wheel glide", () => {
+    const SCROLL_KEYS = [
+      " ",
+      "PageUp",
+      "PageDown",
+      "ArrowUp",
+      "ArrowDown",
+      "Home",
+      "End",
+    ];
+
+    /** A link with an arrow inside it, as TextLink draws one. */
+    function addLink(href: string) {
+      const link = document.createElement("a");
+      link.setAttribute("href", href);
+      const arrow = document.createElement("span");
+      arrow.textContent = "→";
+      link.append("Skip intro", arrow);
+      document.body.append(link);
+      return { link, arrow };
+    }
+
+    // jsdom would follow the link; only the order of the listeners matters.
+    function clickOn(element: Element) {
+      element.addEventListener("click", (event) => event.preventDefault(), {
+        once: true,
+      });
+      element.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+    }
+
+    function press(target: EventTarget, key: string) {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+    }
+
+    /** A Lenis with a wheel glide running. */
+    async function withLenis() {
+      const set = setUp();
+      await passFirstContent();
+      await settle();
+      const lenis = set.fake.instances[0];
+      if (lenis === undefined) throw new Error("No Lenis was made");
+      lenis.isSmooth = true;
+      return { ...set, lenis };
+    }
+
+    /**
+     * How many times the glide was ended: stop() and then start(), the
+     * public way to Lenis's private reset().
+     */
+    function glideEnds(lenis: FakeLenis | undefined): number {
+      const stops = lenis?.stop.mock.invocationCallOrder ?? [];
+      const starts = lenis?.start.mock.invocationCallOrder ?? [];
+      expect(starts).toHaveLength(stops.length);
+      stops.forEach((order, index) => {
+        expect(order).toBeLessThan(starts[index] ?? 0);
+      });
+      return stops.length;
+    }
+
+    /** A same-page link click, a Page Down and a focus change. */
+    function scrollNatively() {
+      clickOn(addLink("#work").arrow);
+      press(document.body, "PageDown");
+      const button = document.createElement("button");
+      document.body.append(button);
+      button.focus();
+    }
+
+    it("REQ-NAV-01 REQ-SCR-02 a click on a link to a place on this page stops the glide before the link acts", async () => {
+      const { lenis } = await withLenis();
+
+      for (const href of ["#work", "#main", "/#work", "?view=all#work", "#"]) {
+        const { link, arrow } = addLink(href);
+        let endsAtLink = 0;
+        link.addEventListener("click", () => {
+          endsAtLink = glideEnds(lenis);
+        });
+        const before = glideEnds(lenis);
+        clickOn(arrow);
+        expect(glideEnds(lenis), href).toBe(before + 1);
+        expect(endsAtLink, `${href}: ended before the link's own click`).toBe(
+          before + 1,
+        );
+      }
+    });
+
+    it("REQ-SCR-02 a click on a link to another page or site, or off any link, leaves the glide alone", async () => {
+      const { lenis } = await withLenis();
+
+      for (const href of [
+        "/work",
+        "/work#coup-online",
+        "/about?view=all",
+        "https://example.com/#work",
+      ]) {
+        clickOn(addLink(href).arrow);
+      }
+      const text = document.createElement("p");
+      document.body.append(text);
+      clickOn(text);
+      expect(glideEnds(lenis)).toBe(0);
+    });
+
+    it("REQ-SCR-02 each scroll key stops the glide before the browser scrolls; other keys and keys in a text field do not", async () => {
+      const { lenis } = await withLenis();
+      let endsAtBody = 0;
+      document.body.addEventListener("keydown", () => {
+        endsAtBody = glideEnds(lenis);
+      });
+
+      for (const [index, key] of SCROLL_KEYS.entries()) {
+        press(document.body, key);
+        expect(glideEnds(lenis), JSON.stringify(key)).toBe(index + 1);
+        expect(endsAtBody, JSON.stringify(key)).toBe(index + 1);
+      }
+
+      for (const key of ["a", "Enter", "Tab", "Escape", "ArrowLeft"]) {
+        press(document.body, key);
+      }
+      const input = document.createElement("input");
+      const area = document.createElement("textarea");
+      document.body.append(input, area);
+      for (const key of SCROLL_KEYS) {
+        press(input, key);
+        press(area, key);
+      }
+      expect(glideEnds(lenis)).toBe(SCROLL_KEYS.length);
+    });
+
+    it("REQ-NAV-01 REQ-SCR-02 a focus change stops the glide, so the scroll that brings the focused element into view stands", async () => {
+      const { lenis } = await withLenis();
+      const first = document.createElement("button");
+      const second = document.createElement("a");
+      second.setAttribute("href", "/work");
+      document.body.append(first, second);
+
+      first.focus();
+      expect(glideEnds(lenis)).toBe(1);
+      second.focus();
+      expect(glideEnds(lenis)).toBe(2);
+    });
+
+    it("REQ-SCR-02 with no glide running, a click, key or focus leaves Lenis alone", async () => {
+      const { lenis } = await withLenis();
+      lenis.isSmooth = false;
+      scrollNatively();
+      expect(glideEnds(lenis)).toBe(0);
+    });
+
+    it("REQ-SCR-02 REQ-SCR-04 REQ-A11Y-04 no click, key or focus reaches a Lenis that calm or a dispose removed", async () => {
+      const { device, fake, session, lenis } = await withLenis();
+
+      device.calm.setChosen(true);
+      scrollNatively();
+      expect(glideEnds(lenis)).toBe(0);
+
+      device.calm.setChosen(false);
+      await settle();
+      const next = fake.instances[1];
+      if (next !== undefined) next.isSmooth = true;
+      scrollNatively();
+      expect(glideEnds(next)).toBe(3);
+      expect(glideEnds(lenis)).toBe(0);
+
+      session.dispose();
+      scrollNatively();
+      expect(glideEnds(next)).toBe(3);
+      expect(glideEnds(lenis)).toBe(0);
+    });
   });
 });
 

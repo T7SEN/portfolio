@@ -100,8 +100,9 @@ export function startStory(
   let isStopped = false;
 
   // Reads every trigger at once, so the order in which ScrollTrigger calls
-  // them never matters. ScrollTrigger calls no onUpdate while it refreshes,
-  // and announces the end of a refresh, so positions are never half updated.
+  // them never matters. ScrollTrigger refreshes every trigger before it
+  // updates any, and announces the end of a refresh, so positions are never
+  // half updated.
   function report() {
     const first = chapterTriggers[0];
     if (!isReady || isStopped || first === undefined) return;

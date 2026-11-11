@@ -9,16 +9,49 @@ import type {
   EngineListener,
   EngineOptions,
 } from "@/engine/types";
+import { calmStore, createCalmStore } from "@/lib/calm-store";
+import { createStoryBridge, storyBridge } from "@/lib/story-bridge";
 import { tierStore } from "@/lib/tier-store";
 
 import { EngineHost } from "./engine-host";
 import { createEngineSession } from "./engine-session";
 
-const mocks = vi.hoisted(() => ({
-  pathname: "/",
-  scheduled: [] as Array<{ run: () => void; isCancelled: boolean }>,
-  loadEngine: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  // The OS reduced motion setting that the host's calm store reads.
+  const motionListeners = new Set<() => void>();
+  const reducedMotion = {
+    matches: false,
+    addEventListener: (_type: string, listener: () => void) => {
+      motionListeners.add(listener);
+    },
+    removeEventListener: (_type: string, listener: () => void) => {
+      motionListeners.delete(listener);
+    },
+  };
+  const stored = new Map<string, string>();
+
+  return {
+    pathname: "/",
+    scheduled: [] as Array<{ run: () => void; isCancelled: boolean }>,
+    loadEngine: vi.fn(),
+    calmWindow: {
+      matchMedia: () => reducedMotion,
+      sessionStorage: {
+        getItem: (key: string) => stored.get(key) ?? null,
+        setItem: (key: string, value: string) => {
+          stored.set(key, value);
+        },
+        removeItem: (key: string) => {
+          stored.delete(key);
+        },
+      },
+    },
+    setSystemCalm(next: boolean) {
+      reducedMotion.matches = next;
+      motionListeners.forEach((listener) => listener());
+    },
+  };
+});
 
 vi.mock("next/navigation", () => ({ usePathname: () => mocks.pathname }));
 vi.mock("./load-engine", () => ({ loadEngine: mocks.loadEngine }));
@@ -31,6 +64,14 @@ vi.mock("./after-first-content", () => ({
     };
   },
 }));
+// The real calm store, over a window whose OS setting the tests control.
+vi.mock("@/lib/calm-store", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/calm-store")>();
+  return {
+    ...actual,
+    calmStore: actual.createCalmStore(mocks.calmWindow as unknown as Window),
+  };
+});
 
 type FakeEngine = Engine & {
   host: HTMLElement;
@@ -69,22 +110,33 @@ function createFakeEngine(host: HTMLElement, options?: EngineOptions) {
   return engine;
 }
 
-function stubReducedMotion(matches: boolean) {
+/** A calm store of its own for one session, with the OS setting in hand. */
+function fakeCalm({ system = false } = {}) {
   const listeners = new Set<() => void>();
   const query = {
-    matches,
-    addEventListener: (_type: string, listener: () => void) =>
-      listeners.add(listener),
-    removeEventListener: (_type: string, listener: () => void) =>
-      listeners.delete(listener),
+    matches: system,
+    addEventListener: (_type: string, listener: () => void) => {
+      listeners.add(listener);
+    },
+    removeEventListener: (_type: string, listener: () => void) => {
+      listeners.delete(listener);
+    },
   };
   const matchMedia = vi.fn(() => query);
-  vi.stubGlobal("matchMedia", matchMedia);
+  const store = createCalmStore({
+    matchMedia,
+    sessionStorage: {
+      getItem: () => null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    },
+  } as unknown as Window);
 
   return {
+    store,
     matchMedia,
     listeners,
-    set(next: boolean) {
+    setSystem(next: boolean) {
       query.matches = next;
       listeners.forEach((listener) => listener());
     },
@@ -100,11 +152,15 @@ async function passFirstContent() {
   });
 }
 
-let motion: ReturnType<typeof stubReducedMotion>;
+/** Lets the browser draw one frame, so a waiting pointer move is sent. */
+async function nextFrame() {
+  await act(async () => {
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  });
+}
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  motion = stubReducedMotion(false);
   mocks.pathname = "/";
   mocks.scheduled.length = 0;
   mocks.loadEngine.mockReset();
@@ -114,17 +170,24 @@ beforeEach(() => {
 
 afterEach(() => {
   tierStore.reset();
+  storyBridge.reset();
+  mocks.setSystemCalm(false);
+  calmStore.setChosen(false);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   document.body.replaceChildren();
 });
 
 describe("engine session", () => {
-  function setUp() {
+  function setUp({ calm = fakeCalm(), bridge = createStoryBridge() } = {}) {
     const wrapper = document.createElement("div");
     const host = document.createElement("div");
     wrapper.append(host);
-    return { wrapper, host, session: createEngineSession(wrapper, host) };
+    const session = createEngineSession(wrapper, host, {
+      calm: calm.store,
+      bridge,
+    });
+    return { wrapper, host, calm, bridge, session };
   }
 
   it("REQ-PERF-04 loads nothing until the field is asked for and first content has passed", async () => {
@@ -161,19 +224,111 @@ describe("engine session", () => {
   });
 
   it("REQ-A11Y-03 starts calm under reduced motion and follows the setting live", async () => {
-    motion.set(true);
-    const { session } = setUp();
-    expect(motion.matchMedia).toHaveBeenCalledWith(
+    const calm = fakeCalm({ system: true });
+    const { session } = setUp({ calm });
+    expect(calm.matchMedia).toHaveBeenCalledWith(
       "(prefers-reduced-motion: reduce)",
     );
     session.request();
     await passFirstContent();
     expect(engines[0]?.options).toEqual({ calm: true });
 
-    motion.set(false);
-    motion.set(true);
+    calm.setSystem(false);
+    calm.setSystem(true);
     expect(engines[0]?.setCalm).toHaveBeenNthCalledWith(1, false);
     expect(engines[0]?.setCalm).toHaveBeenNthCalledWith(2, true);
+  });
+
+  it("REQ-A11Y-04 the calm toggle's choice starts the engine calm and reaches it live", async () => {
+    const { calm, session } = setUp();
+    calm.store.setChosen(true);
+    session.request();
+    await passFirstContent();
+    expect(engines[0]?.options).toEqual({ calm: true });
+
+    calm.store.setChosen(false);
+    expect(engines[0]?.setCalm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("REQ-A11Y-03 a change that leaves calm as it was sends the engine nothing", async () => {
+    const calm = fakeCalm({ system: true });
+    const { session } = setUp({ calm });
+    session.request();
+    await passFirstContent();
+
+    calm.store.setChosen(true);
+    calm.setSystem(false);
+    expect(engines[0]?.setCalm).not.toHaveBeenCalled();
+
+    calm.store.setChosen(false);
+    expect(engines[0]?.setCalm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("REQ-A11Y-03 an OS change made before the engine loads is counted when it is created", async () => {
+    const calm = fakeCalm();
+    const { session } = setUp({ calm });
+    session.request();
+    calm.setSystem(true);
+    await passFirstContent();
+
+    expect(engines[0]?.options).toEqual({ calm: true });
+    expect(engines[0]?.setCalm).not.toHaveBeenCalled();
+  });
+
+  it("REQ-SCR-01 the latest story and pointer reach the engine before it starts, and later ones follow", async () => {
+    const { bridge, session } = setUp();
+    bridge.setStory("hero", 0.2);
+    bridge.setStory("bloom", 0.5);
+    bridge.setPointer(0.2, 0.3, true);
+    session.request();
+    await passFirstContent();
+
+    const engine = engines[0];
+    if (engine === undefined) throw new Error("No engine was created");
+    expect(engine.setStory).toHaveBeenCalledExactlyOnceWith("bloom", 0.5);
+    expect(engine.setPointer).toHaveBeenCalledExactlyOnceWith(0.2, 0.3, true);
+    const [storyOrder] = vi.mocked(engine.setStory).mock.invocationCallOrder;
+    const [startOrder] = vi.mocked(engine.start).mock.invocationCallOrder;
+    expect(storyOrder).toBeLessThan(startOrder ?? 0);
+
+    bridge.setStory("work", 0.25);
+    bridge.setPointer(-0.5, 0.5, false);
+    expect(engine.setStory).toHaveBeenLastCalledWith("work", 0.25);
+    expect(engine.setPointer).toHaveBeenLastCalledWith(-0.5, 0.5, false);
+  });
+
+  it("REQ-A11Y-05 the wrapper mirrors the chapter from the first story sent, before the engine loads and on tier 3", async () => {
+    const { wrapper, bridge, session } = setUp();
+    bridge.setStory("hero", 1);
+    expect(wrapper.dataset.chapter).toBe("hero");
+
+    session.request();
+    await passFirstContent();
+    engines[0]?.emit({ type: "tierChosen", tier: 3, reason: "save-data" });
+    engines[0]?.emit({ type: "ready", tier: 3 });
+
+    bridge.setStory("bloom", 0.1);
+    expect(wrapper.dataset.chapter).toBe("bloom");
+    // The engine keeps it for a GPU tier that setTier may bring back.
+    expect(engines[0]?.setStory).toHaveBeenLastCalledWith("bloom", 0.1);
+  });
+
+  it("REQ-A11Y-05 the chapter attribute is written only when the chapter changes", async () => {
+    const { wrapper, bridge, session } = setUp();
+    session.request();
+    await passFirstContent();
+    const observer = new MutationObserver(() => undefined);
+    observer.observe(wrapper, { attributes: true });
+
+    bridge.setStory("work", 0.1);
+    bridge.setStory("work", 0.2);
+    bridge.setStory("work", 0.3);
+    bridge.setStory("making-of", 0);
+
+    const names = observer.takeRecords().map((record) => record.attributeName);
+    observer.disconnect();
+    expect(names).toEqual(["data-chapter", "data-chapter"]);
+    expect(engines[0]?.setStory).toHaveBeenCalledTimes(4);
   });
 
   it("REQ-ENG-03 sends tierChosen and ready to the store and mirrors them on the wrapper", async () => {
@@ -269,14 +424,46 @@ describe("engine session", () => {
     expect(tierStore.getSnapshot().reason).toBe("no-backend");
   });
 
+  it("REQ-ENG-08 when the engine cannot load, the bridge still mirrors the chapter", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.loadEngine.mockRejectedValue(new Error("offline"));
+    const { wrapper, bridge, session } = setUp();
+    session.request();
+    await passFirstContent();
+
+    bridge.setStory("about", 0.4);
+    bridge.setPointer(0, 0, true);
+    expect(wrapper.dataset.chapter).toBe("about");
+    expect(engines).toHaveLength(0);
+  });
+
+  it("REQ-ENG-08 after a start that rejects, the bridge only mirrors the chapter", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.loadEngine.mockResolvedValue({
+      createEngine: (host: HTMLElement, options?: EngineOptions) => {
+        const engine = createFakeEngine(host, options);
+        engine.start = () => Promise.reject(new Error("no start"));
+        return engine;
+      },
+    });
+    const { wrapper, bridge, session } = setUp();
+    session.request();
+    await passFirstContent();
+
+    bridge.setStory("contact", 0.5);
+    expect(wrapper.dataset.chapter).toBe("contact");
+    expect(engines[0]?.setStory).not.toHaveBeenCalled();
+  });
+
   it("REQ-ENG-07 dispose awaits the engine's dispose once, clears the store and the wrapper, and stops listening", async () => {
-    const { wrapper, session } = setUp();
+    const { wrapper, calm, bridge, session } = setUp();
+    bridge.setStory("work", 0.5);
     session.request();
     await passFirstContent();
     engines[0]?.emit({ type: "tierChosen", tier: 2, reason: "phone" });
     engines[0]?.emit({ type: "ready", tier: 2 });
     engines[0]?.emit({ type: "frameRate", fps: 30 });
-    expect(motion.listeners.size).toBe(1);
+    expect(calm.listeners.size).toBe(1);
 
     let isSettled = false;
     let finishDispose = () => {};
@@ -299,15 +486,23 @@ describe("engine session", () => {
     await Promise.all([first, second]);
 
     expect(engine.dispose).toHaveBeenCalledTimes(1);
-    expect(motion.listeners.size).toBe(0);
+    expect(calm.listeners.size).toBe(0);
     expect(tierStore.getSnapshot()).toBe(tierStore.getServerSnapshot());
-    for (const name of ["tier", "tier-reason", "ready", "fps"]) {
+    for (const name of ["tier", "tier-reason", "ready", "fps", "chapter"]) {
       expect(wrapper.hasAttribute(`data-${name}`)).toBe(false);
     }
 
     engine.emit({ type: "tierChosen", tier: 1, reason: "forced" });
     expect(wrapper.hasAttribute("data-tier")).toBe(false);
     expect(tierStore.getSnapshot().tier).toBeNull();
+
+    // The page owns the story: the bridge keeps it and sends nothing on.
+    calm.store.setChosen(true);
+    bridge.setStory("about", 0.1);
+    expect(bridge.getStory()).toEqual({ chapter: "about", progress: 0.1 });
+    expect(engine.setStory).toHaveBeenCalledExactlyOnceWith("work", 0.5);
+    expect(engine.setCalm).not.toHaveBeenCalled();
+    expect(wrapper.hasAttribute("data-chapter")).toBe(false);
   });
 
   it("REQ-ENG-07 a dispose while the engine is still loading creates no engine", async () => {
@@ -319,7 +514,7 @@ describe("engine session", () => {
         finishLoad = resolve;
       }),
     );
-    const { session } = setUp();
+    const { calm, session } = setUp();
     session.request();
     await passFirstContent();
 
@@ -328,6 +523,7 @@ describe("engine session", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(engines).toHaveLength(0);
+    expect(calm.listeners.size).toBe(0);
   });
 
   it("REQ-ENG-07 a dispose that rejects is logged, never thrown", async () => {
@@ -387,6 +583,20 @@ describe("EngineHost", () => {
     });
   }
 
+  /** A mouse move to a point given as a share of the viewport. */
+  async function moveMouse(shareX: number, shareY: number) {
+    await act(async () => {
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          pointerType: "mouse",
+          clientX: window.innerWidth * shareX,
+          clientY: window.innerHeight * shareY,
+        }),
+      );
+    });
+    await nextFrame();
+  }
+
   beforeEach(() => {
     container = document.createElement("div");
     document.body.append(container);
@@ -409,7 +619,12 @@ describe("EngineHost", () => {
     ).toHaveLength(0);
     expect(wrapper?.querySelector('[data-part="veil"]')).not.toBeNull();
     expect(html.querySelector("img, picture, canvas")).toBeNull();
-    for (const name of ["data-tier", "data-ready", "data-fps"]) {
+    for (const name of [
+      "data-tier",
+      "data-ready",
+      "data-fps",
+      "data-chapter",
+    ]) {
       expect(wrapper?.hasAttribute(name)).toBe(false);
     }
   });
@@ -527,6 +742,19 @@ describe("EngineHost", () => {
     expect(parts().wrapper.dataset.tier).toBe("1");
   });
 
+  it("REQ-ENG-07 strict mode's second mount leaves the bridge connected to the one engine", async () => {
+    await render(
+      <StrictMode>
+        <EngineHost />
+      </StrictMode>,
+    );
+    await passFirstContent();
+
+    storyBridge.setStory("hero", 1);
+    expect(engines[0]?.setStory).toHaveBeenCalledExactlyOnceWith("hero", 1);
+    expect(parts().wrapper.dataset.chapter).toBe("hero");
+  });
+
   it("REQ-ENG-07 unmounting disposes the engine", async () => {
     await render();
     await passFirstContent();
@@ -540,6 +768,7 @@ describe("EngineHost", () => {
     await emit({ type: "tierChosen", tier: 2, reason: "no-webgpu" });
     await emit({ type: "ready", tier: 2 });
     await emit({ type: "frameRate", fps: 58 });
+    storyBridge.setStory("work", 0.5);
     await goTo("/work");
     await goTo("/");
 
@@ -548,6 +777,7 @@ describe("EngineHost", () => {
     expect(wrapper.dataset.tierReason).toBe("no-webgpu");
     expect(wrapper.dataset.ready).toBe("true");
     expect(wrapper.dataset.fps).toBe("58");
+    expect(wrapper.dataset.chapter).toBe("work");
     expect(still).toBeNull();
   });
 
@@ -628,5 +858,136 @@ describe("EngineHost", () => {
     expect(wrapper.dataset.tierReason).toBe("no-backend");
     expect(wrapper.dataset.ready).toBe("true");
     expect(still).not.toBeNull();
+  });
+
+  it("REQ-A11Y-03 the OS reduced motion setting starts the engine calm", async () => {
+    mocks.setSystemCalm(true);
+    await render();
+    await passFirstContent();
+    expect(engines[0]?.options).toEqual({ calm: true });
+
+    await act(async () => {
+      mocks.setSystemCalm(false);
+    });
+    expect(engines[0]?.setCalm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("REQ-A11Y-04 the calm toggle's choice reaches the live engine", async () => {
+    await render();
+    await passFirstContent();
+
+    await act(async () => {
+      calmStore.setChosen(true);
+    });
+    expect(engines[0]?.setCalm).toHaveBeenCalledExactlyOnceWith(true);
+  });
+
+  it("REQ-A11Y-05 the wrapper mirrors the page's chapter before the engine loads and on tier 3", async () => {
+    await render();
+    storyBridge.setStory("bloom", 0.4);
+    expect(parts().wrapper.dataset.chapter).toBe("bloom");
+
+    await passFirstContent();
+    await emit({ type: "tierChosen", tier: 3, reason: "save-data" });
+    storyBridge.setStory("work", 0.1);
+    expect(parts().wrapper.dataset.chapter).toBe("work");
+  });
+
+  it("REQ-ENG-01 a route change keeps the bridge connected and leaves its values alone", async () => {
+    await render();
+    await passFirstContent();
+    storyBridge.setStory("work", 0.5);
+
+    await goTo("/work");
+    await goTo("/");
+    expect(storyBridge.getStory()).toEqual({ chapter: "work", progress: 0.5 });
+
+    storyBridge.setStory("about", 0.2);
+    expect(engines[0]?.setStory).toHaveBeenLastCalledWith("about", 0.2);
+    expect(engines).toHaveLength(1);
+  });
+
+  it("REQ-SCR-06 on the home route a mouse move reaches the engine through the bridge, in device coordinates", async () => {
+    await render();
+    await passFirstContent();
+
+    await moveMouse(0.75, 0.25);
+    expect(engines[0]?.setPointer).toHaveBeenLastCalledWith(0.5, 0.5, true);
+  });
+
+  it("REQ-SCR-06 a pointer that moved before the engine loaded reaches it as it is created", async () => {
+    await render();
+    await moveMouse(0.25, 0.75);
+    await passFirstContent();
+
+    expect(engines[0]?.setPointer).toHaveBeenCalledExactlyOnceWith(
+      -0.5,
+      -0.5,
+      true,
+    );
+  });
+
+  it("REQ-SCR-06 no pointer reaches the field on routes without it, in calm, or on tier 3", async () => {
+    await render();
+    await passFirstContent();
+    const setPointer = engines[0]?.setPointer;
+
+    await goTo("/work");
+    await moveMouse(0.5, 0.5);
+    expect(setPointer).not.toHaveBeenCalled();
+
+    await goTo("/");
+    await act(async () => {
+      calmStore.setChosen(true);
+    });
+    await moveMouse(0.5, 0.5);
+    expect(setPointer).not.toHaveBeenCalled();
+
+    await act(async () => {
+      calmStore.setChosen(false);
+    });
+    await emit({ type: "tierChosen", tier: 3, reason: "save-data" });
+    await moveMouse(0.5, 0.5);
+    expect(setPointer).not.toHaveBeenCalled();
+
+    await emit({ type: "tierChosen", tier: 2, reason: "forced" });
+    await moveMouse(0.5, 0.5);
+    expect(setPointer).toHaveBeenCalledExactlyOnceWith(0, 0, true);
+  });
+
+  it("REQ-A11Y-04 turning calm on releases an active pointer at once", async () => {
+    await render();
+    await passFirstContent();
+    await moveMouse(0.75, 0.25);
+
+    await act(async () => {
+      calmStore.setChosen(true);
+    });
+    expect(engines[0]?.setPointer).toHaveBeenLastCalledWith(0.5, 0.5, false);
+  });
+
+  it("REQ-ENG-07 leaving the route and unmounting remove the pointer listeners", async () => {
+    const added = vi.spyOn(window, "addEventListener");
+    const removed = vi.spyOn(window, "removeEventListener");
+    const pointerTypes = (calls: unknown[][]) =>
+      calls
+        .map(([type]) => type)
+        .filter((type) => type === "pointermove" || type === "touchmove");
+
+    await render();
+    expect(pointerTypes(added.mock.calls)).toEqual([
+      "pointermove",
+      "touchmove",
+    ]);
+
+    await goTo("/work");
+    expect(pointerTypes(removed.mock.calls)).toEqual([
+      "pointermove",
+      "touchmove",
+    ]);
+
+    await goTo("/");
+    await unmount();
+    expect(pointerTypes(removed.mock.calls)).toHaveLength(4);
   });
 });

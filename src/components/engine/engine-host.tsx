@@ -3,9 +3,12 @@
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
+import { calmStore } from "@/lib/calm-store";
+import { storyBridge } from "@/lib/story-bridge";
 import { tierStore } from "@/lib/tier-store";
 
 import { createEngineSession, type EngineSession } from "./engine-session";
+import { startPointerInput } from "./pointer-input";
 import { TierStill } from "./tier-still";
 
 // The routes that show the field. Every other route hides the wrapper, so
@@ -26,9 +29,16 @@ export function EngineHost() {
     tierStore.getSnapshot,
     tierStore.getServerSnapshot,
   );
+  const { calm } = useSyncExternalStore(
+    calmStore.subscribe,
+    calmStore.getSnapshot,
+    calmStore.getServerSnapshot,
+  );
   const wrapperRef = useRef<HTMLDivElement>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<EngineSession | null>(null);
+  // A still field has nothing to stir, and calm sends no active pointer.
+  const canStir = isFieldRoute && !calm && tier !== 3;
 
   useEffect(() => {
     const wrapper = wrapperRef.current;
@@ -48,6 +58,18 @@ export function EngineHost() {
     if (!isFieldRoute) return;
     return sessionRef.current?.request();
   }, [isFieldRoute]);
+
+  // The cursor or a finger stirs the field anywhere in the window
+  // (REQ-SCR-06). Leaving the route, turning calm on or unmounting removes
+  // every listener.
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!canStir || wrapper === null) return;
+    return startPointerInput({
+      send: storyBridge.setPointer,
+      area: () => wrapper.getBoundingClientRect(),
+    });
+  }, [canStir]);
 
   return (
     <div

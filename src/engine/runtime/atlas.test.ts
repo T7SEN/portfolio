@@ -5,6 +5,7 @@ import {
   ATLAS_SHAPES,
   ATLAS_WIDTH,
   POINTS_PER_SHAPE,
+  RIM_DEPTH,
   ROWS_PER_SHAPE,
   packAtlas,
 } from "./atlas";
@@ -47,7 +48,9 @@ describe("the shape atlas", () => {
 
   test("REQ-SCR-01 centres each shape on its own box and measures its size and area", () => {
     // A box off to one side, a quarter of the square.
-    const atlas = packAtlas(square(0, 0, 1, 1));
+    const atlas = packAtlas(square(0, 0, 1, 1), () => [
+      [0, 0, 1, 0, 1, 1, 0, 1],
+    ]);
 
     for (const [index, id] of ATLAS_SHAPES.entries()) {
       let minX = Infinity;
@@ -60,7 +63,8 @@ describe("the shape atlas", () => {
         maxX = Math.max(maxX, x);
         minY = Math.min(minY, y);
         maxY = Math.max(maxY, y);
-        expect(z).toBe(0);
+        expect(z).toBeGreaterThanOrEqual(0);
+        expect(z).toBeLessThanOrEqual(1);
         expect(w).toBe(0);
       }
       expect(minX + maxX).toBeCloseTo(0, 5);
@@ -74,6 +78,23 @@ describe("the shape atlas", () => {
       expect(extent.area).toBeGreaterThan(0.95);
       expect(extent.area).toBeLessThan(1.1);
     }
+  });
+
+  test("REQ-SCR-07 the third channel lights each shape's rim: 1 at the outline, 0 from RIM_DEPTH inward", () => {
+    const atlas = packAtlas(square(-1, -1, 1, 1), () => [
+      [-1, -1, 1, -1, 1, 1, -1, 1],
+    ]);
+    let rim = 0;
+    for (let point = 0; point < POINTS_PER_SHAPE; point += 1) {
+      const [x = 0, y = 0, edge = NaN] = pointOf(atlas.data, 0, point);
+      const inward = 1 - Math.max(Math.abs(x), Math.abs(y));
+      if (inward > RIM_DEPTH + 0.02) expect(edge).toBe(0);
+      if (inward < 0.005) expect(edge).toBeGreaterThan(0.9);
+      if (edge > 0.5) rim += 1;
+    }
+    // The rim of a square of side 2, RIM_DEPTH deep, is about a sixteenth of it.
+    expect(rim / POINTS_PER_SHAPE).toBeGreaterThan(0.02);
+    expect(rim / POINTS_PER_SHAPE).toBeLessThan(0.12);
   });
 
   test("REQ-SCR-01 a sampler that gives too few points has them repeated, never left at the origin", () => {

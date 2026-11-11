@@ -5,7 +5,9 @@
 // texture from this data.
 
 import { WORK_SHAPES, type ShapeId } from "../story";
-import { sampleShape } from "./shapes";
+import { outline, sampleShape } from "./shapes";
+import type { Ring } from "./shapes/draw";
+import { edgeWeights } from "./shapes/edge";
 import type { ShapeExtent } from "./story";
 
 /** Every shape in the atlas, in row order. */
@@ -24,8 +26,16 @@ export const ROWS_PER_SHAPE = POINTS_PER_SHAPE / ATLAS_WIDTH;
 // that hold a point. At 16,384 points most cells inside a shape hold several.
 const AREA_GRID = 64;
 
+// The rim light (field.ts) lifts points within this distance of a shape's
+// outline, in the sample space of -1 to 1, where the shape's longer side is
+// 2: a band about 3% of the shape deep.
+export const RIM_DEPTH = 0.06;
+
 export interface Atlas {
-  /** RGBA floats, one point a texel: x, y, 0, 0, centred on its own box. */
+  /**
+   * RGBA floats, one point a texel: x and y, centred on its own box; the
+   * point's edge weight, 1 on the outline and 0 from RIM_DEPTH inward; 0.
+   */
   data: Float32Array;
   width: number;
   height: number;
@@ -91,6 +101,7 @@ function extentOf(points: Float32Array): {
  */
 export function packAtlas(
   sample: (id: ShapeId, count: number) => Float32Array = sampleShape,
+  rings: (id: ShapeId) => Ring[] = outline,
 ): Atlas {
   const height = ROWS_PER_SHAPE * ATLAS_SHAPES.length;
   const data = new Float32Array(ATLAS_WIDTH * height * 4);
@@ -100,6 +111,7 @@ export function packAtlas(
   ATLAS_SHAPES.forEach((id, shape) => {
     const points = sample(id, POINTS_PER_SHAPE);
     const { centreX, centreY, extent } = extentOf(points);
+    const edges = edgeWeights(rings(id), points, RIM_DEPTH);
     extents[id] = extent;
     index[id] = shape;
 
@@ -110,6 +122,7 @@ export function packAtlas(
       const source = (point % Math.max(Math.floor(points.length / 2), 1)) * 2;
       data[start + point * 4] = (points[source] ?? 0) - centreX;
       data[start + point * 4 + 1] = (points[source + 1] ?? 0) - centreY;
+      data[start + point * 4 + 2] = edges[source / 2] ?? 0;
     }
   });
 

@@ -435,3 +435,44 @@ Every departure from the brief, and every technical choice a later phase needs t
 - REQ-PERF-06, REQ-SCR-01. The headed per-chapter frame-rate test (D-057) also checks, per state, more than 5 frame-rate readouts, the engine's rate within 3% of the page's, and a frame floor at the pass line (at least 567 frames on tier 1 and 285 on tier 2 in the 10 s window), so a field that stops drawing early in a window, or stalls that lose about three quarters of the window at 240 Hz, fail it. The readouts arrive once a second, so calm switched on late in a window can still pass; that is a known limit of this check.
 - REQ-A11Y-04. The calm half of the cursor test checks that the still is lit before comparing screenshots. That check showed the half had compared two frames of the hero's dot since P3: the bar is not sticky, so clicking Calm scrolled the page to the top. The test now takes the page back to contact before the still. The settle check reports the page height, the scroll position and Lenis's classes before and after, so a repeat of the 153 px move seen in the P3 rerun names its cause.
 - Decided by T7SEN on 11 Nov 2026, each the option recommended to him: D-057's figures stay as reported, output not kept, with no extra runs; the scene lines keep their wording. The reason given with the recommendation: "where your device draws the field live" already makes each line true under calm.
+
+## Design review, 11 Nov 2026
+
+Decided by T7SEN on 11 Nov 2026 from the design review (screenshots of every chapter and page on each tier at 1280 and 375 px): veil by chapter with rim light; the dot into the clear band; marks beside the cards; outline cards on the home page; chapter titles in Unbounded; services as type; /work in two columns; the intro line with its title; the scrollbar ends a glide. He approved the plan as written, setStage as its own command. None of these departs from the brief.
+
+### D-065 setStage, a sixth engine command
+
+- REQ-ENG-03, REQ-SCR-01. The page measures two places from its own layout and sends them as stages, in normalised device coordinates: the hero's dot point and, from 64rem, the free side beside the study cards. The engine keeps the latest, hands it to a runtime before the story when a tier is adopted, and the runtime turns it into the dot's centre, the shapes' centre and the size the shapes are fitted to. The centres follow over 0.6 s, as the camera push does, so a resize or the step from the work stage to the whole frame glides; a calm field is put on its new stage and drawn once.
+- Its own command, not a third argument on setStory: the stage changes with the layout, never with the scroll, so setStory keeps its cheap per-frame path.
+
+### D-066 The dot sits in the clear band, and the bloom grows from it
+
+- REQ-SCR-01, REQ-SCR-07. The review found the dot hidden under the headline at every width. It now sits at the middle of the band between the hero's actions and Skip intro, at the middle of the screen's width (data-stage marks in hero.tsx), clamped inside 0.9 of the screen's height. The bloom lets particles go in order of how far their home is from the dot, so the field grows out of it wherever it sits.
+- The dark hole around the dot early in the bloom came from the bloom's light rule: homes nearer the centre than 0.15 counted from 0.15, so particles resting there were dimmed. The floor is now 0.02, below the dot's radius, and distances are measured from the dot.
+
+### D-067 Study shapes form beside the cards; home cards are outlines
+
+- REQ-SCR-01, REQ-I18N-01. From 64rem the work chapter's stage is the side of the content the card column leaves free (32 px gap, at least 240 px wide, 0.85 of the screen's height), measured with the column's own direction, so a right to left page mirrors it. Below 64rem the shapes keep the whole frame.
+- The home page's study cards are outlines (border in the edge token, no fill), so a shape behind a card, as on a phone, shows through. /work keeps filled cards.
+
+### D-068 Rim light on formations
+
+- REQ-SCR-07, REQ-ENG-05. The review found every formation a flat, dim silhouette. A formed particle near its shape's outline now adds up to 2.8 times the light of one inside (RIM_GAIN 1.8) and leans toward glow (RIM_GLOW 0.6). Shapes carry an edge weight per point in the atlas's third channel, from an exact distance transform over a 256 grid of each shape (runtime/shapes/edge.ts, linear in the grid, on the CPU once per runtime); the sheet lights its outer 6% and the wave the outer 40% of its band. Every value is the particle's own, read by its instance index, so WebGL2 runs it as WebGPU does.
+
+### D-069 The veil opens where no text is, plates keep 0.7 behind text
+
+- REQ-A11Y-06, REQ-SCR-07. Decided as "veil by chapter". A veil across the whole screen could not open at the bloom mark's fullest, because the bloom's words are on that same screen (a probe measured 0.56 at best). So the veil is two layers: while the story runs on tier 1 or 2 the wrapper's veil opens to 0.35, and a soft plate of the void colour behind every text element brings those areas back to 0.7 (the plate's own opacity is 1 less 0.3 over 0.65; it covers the element's box plus 16 px and fades over a further 80 px). The plates sit in a layer at the page top, outside header, main and footer, so they scroll with the text natively and the contrast spec still measures them. Tier 3's still keeps 0.7 and shows no plates. Before the story starts and on every other page the veil is the wrapper's 0.7.
+- Replaces the single 0.7 veil of D-043 on tiers 1 and 2 while the story runs. The contrast spec measures it as shipped (headed, 11 Nov 2026, docs/test-log.md): the hero's text over the void at 17.24 to 1 and muted 7.27 at 1280 x 800 (4.59 at P3, when the dot sat behind the headline); over the formations the worst muted is 4.62 to 1, at making-of 0.8 on tier 1, where the sheet's rim runs behind the chapter's words, and the worst text 6.92. That muted figure has less room than P3's 5.50; P4 rebuilds that chapter. Plates cover each text element's whole box (its outermost heading, paragraph, link or button, else its list item), as the spec measures it, and are kept inside the page's width so the page never scrolls sideways.
+- The rim was first 2.5 (D-068). On the development page the tier 2 coup-online mark then reached a luminance of 0.52, over the spec's 0.5 limit for light piling to white, so it is 1.8.
+
+### D-070 Chapter titles, services and /work
+
+- REQ-SCR-05. The Work, About and Contact titles on the home page are set like a page title (Unbounded, text-title, 28 to 48 px): they are the story's big titles, where the cinematic tone and the word reveal belong. Services sets its two offers as type under a thin edge rule, not as boxes that held one line each. /work lists the studies in two columns from 64rem.
+
+### D-071 The line under a title reveals with it
+
+- REQ-SCR-05, REQ-CNT-01. The review found the Work intro line showing before its title. The line under each revealed title (data-story-intro) now waits hidden with it and fades in on the same trigger over 0.9 s, ease power2.inOut, so it trails the title's 0.8 s words; in calm mode it fades with the title in 0.3 s. Static HTML hides nothing.
+
+### D-072 A scroll Lenis did not write ends the glide
+
+- REQ-SCR-02. Amends D-061's "left as they are": during a glide Lenis writes its own position on every frame (dist/lenis.mjs 834 to 840) and follows a native scroll only once no glide runs (655 to 678). A scroll event whose position is more than 2 px from Lenis's animatedScroll while it glides was made by something else (a scrollbar drag, find in page, a script), and now ends the glide with stop() and start(), as D-061's listeners do. A link to this same page with no hash still does not end it.

@@ -76,8 +76,9 @@ function sameTargets(a: StoryTargets, b: StoryTargets): boolean {
 }
 
 // Float RGBA, read only with textureLoad: nearest filtering and no mipmaps,
-// so WebGPU binds it as an unfilterable texture without a sampler and WebGL2
-// reads it with texelFetch inside the transform feedback pass.
+// so WebGPU binds it without a sampler, as unfilterable-float, or as float
+// where the device has float32-filterable (three r187, WebGPUBindingUtils),
+// and WebGL2 reads it with texelFetch inside the transform feedback pass.
 function atlasTexture(atlas: Atlas): DataTexture {
   const texture = new DataTexture(
     atlas.data,
@@ -143,6 +144,11 @@ function startRuntime(
   let seatPending = false;
   const followed = { release: 1, push: 0, light: 1 };
   let lightTarget = 1;
+  // The last pointer the page sent. It pushes the particles only while the
+  // field runs: the page lets go of the pointer only after calm has frozen
+  // the field, and a settle with the push on would press a hole at the
+  // cursor into the still (REQ-A11Y-03).
+  const pointer = { x: 0, y: 0, active: false };
 
   let resolution = startResolution(window.devicePixelRatio);
   let bufferWidth = 0;
@@ -190,6 +196,10 @@ function startRuntime(
       followed.light = lightTarget;
       showFollowed();
     }
+  };
+
+  const applyPointer = () => {
+    field.setPointer(pointer.x, pointer.y, pointer.active && !still);
   };
 
   const liveTargets = () =>
@@ -448,6 +458,7 @@ function startRuntime(
       // the page is now.
       if (still) aim(liveTargets(), false);
       still = false;
+      applyPointer();
       stillKey = null;
       previousFrameTime = null;
       // The time spent paused is not simulated.
@@ -459,6 +470,7 @@ function startRuntime(
       if (disposal === null && loss.message === null) {
         applySize();
         still = true;
+        applyPointer();
         aimStill();
         fitStill();
         draw();
@@ -467,7 +479,10 @@ function startRuntime(
       return Promise.resolve();
     },
     setPointer(x, y, active) {
-      field.setPointer(x, y, active);
+      pointer.x = x;
+      pointer.y = y;
+      pointer.active = active;
+      applyPointer();
     },
     setStory(chapter, progress) {
       if (disposal !== null || loss.message !== null) return;

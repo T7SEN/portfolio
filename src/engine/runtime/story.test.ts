@@ -335,7 +335,7 @@ describe("fit and light", () => {
     expect(half).toBeCloseTo((1 + whole) / 2, 9);
   });
 
-  test("REQ-ENG-07 follow moves toward its target at any frame rate, never past it", () => {
+  test("REQ-SCR-05 follow moves toward its target at any frame rate, never past it", () => {
     const once = follow(0, 1, 0.1, 0.4);
     const twice = follow(follow(0, 1, 0.05, 0.4), 1, 0.05, 0.4);
     expect(once).toBeGreaterThan(0);

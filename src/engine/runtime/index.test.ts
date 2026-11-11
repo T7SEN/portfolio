@@ -18,6 +18,11 @@ const fakes = vi.hoisted(() => {
     log: [] as string[],
     /** The reseat value each compute call ran with. */
     computes: [] as number[],
+    /** The pointer's push each compute call ran with. */
+    pushes: [] as number[],
+    pointerStrength: { value: 0 },
+    /** Where the field was last told the pointer is. */
+    pointerAt: [0, 0] as [number, number],
     reseat: { value: 0 },
     stepSeconds: { value: 0 },
     /** The story's uniforms, as the fake simulation hands them out. */
@@ -133,6 +138,7 @@ const fakes = vi.hoisted(() => {
     compute() {
       if (state.computeThrows) throw new Error("compute broke");
       state.computes.push(state.reseat.value);
+      state.pushes.push(state.pointerStrength.value);
     }
 
     render() {
@@ -163,7 +169,18 @@ const fakes = vi.hoisted(() => {
     }
   }
 
-  return { state, part, DataTexture, Timer, WebGPURenderer, ResizeObserver };
+  /** The push of an active pointer, standing in for field.ts's force. */
+  const PUSH = 0.15;
+
+  return {
+    state,
+    part,
+    PUSH,
+    DataTexture,
+    Timer,
+    WebGPURenderer,
+    ResizeObserver,
+  };
 });
 
 vi.mock("three/webgpu", () => ({
@@ -231,13 +248,17 @@ vi.mock("./field", () => ({
     setFocus(depth: number) {
       fakes.state.focus.push(depth);
     },
-    setPointer() {},
+    // As field.ts does: an inactive pointer has no push.
+    setPointer(x: number, y: number, active: boolean) {
+      fakes.state.pointerAt = [x, y];
+      fakes.state.pointerStrength.value = active ? fakes.PUSH : 0;
+    },
   }),
 }));
 
 const { createRuntime } = await import("./index");
 
-const { state } = fakes;
+const { state, PUSH } = fakes;
 const { story } = state;
 const SETTLE_STEPS = 90;
 const settle = (reseat: number[] = []) => [
@@ -281,6 +302,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
   state.log.length = 0;
   state.computes.length = 0;
+  state.pushes.length = 0;
+  state.pointerStrength.value = 0;
+  state.pointerAt = [0, 0];
   state.reseat.value = 0;
   state.stepSeconds.value = 0;
   for (const entry of Object.values(story)) entry.value = 0;
@@ -619,6 +643,52 @@ describe("the calm story", () => {
     // The very edge of the chapter: the formation lets go.
     expect(story.shapeWeight.value).toBeLessThan(0.5);
     expect(state.computes.filter((value) => value === 1)).toHaveLength(1);
+  });
+
+  test("REQ-A11Y-03 REQ-A11Y-04 a still is settled with no pointer push, even while the page still holds the pointer, and the kept pointer pushes again when the field runs", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("bloom", 0.2);
+    runtime.run();
+    runtime.setPointer(0.25, -0.5, true);
+    for (let frame = 0; frame < 5; frame += 1) state.loop?.(16 * frame);
+    expect(state.pushes.at(-1)).toBe(PUSH);
+    runtime.pause();
+    state.pushes.length = 0;
+
+    // Calm freezes the field before the page lets go of the pointer.
+    await runtime.drawStill();
+
+    expect(state.pushes).toEqual(Array<number>(SETTLE_STEPS).fill(0));
+    expect(state.pointerStrength.value).toBe(0);
+
+    runtime.run();
+    expect(state.pointerStrength.value).toBe(PUSH);
+    expect(state.pointerAt).toEqual([0.25, -0.5]);
+    state.pushes.length = 0;
+    state.loop?.(200);
+    expect(state.pushes).toEqual([PUSH]);
+  });
+
+  test("REQ-A11Y-03 a calm field settled again for a new chapter or a new frame shape feels no pointer push", async () => {
+    const { options, resizeTo } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStory("hero", 0);
+    await runtime.drawStill();
+
+    runtime.setPointer(0.25, -0.5, true);
+    expect(state.pointerStrength.value).toBe(0);
+    state.pushes.length = 0;
+
+    runtime.setStory("about", 0.5);
+    resizeTo(500, 1000);
+
+    // A new chapter's settle, then a seat and a settle for the new shape.
+    expect(state.pushes).toEqual(Array<number>(SETTLE_STEPS * 2 + 1).fill(0));
+    expect(count("render")).toBe(3);
+
+    runtime.run();
+    expect(state.pointerStrength.value).toBe(PUSH);
   });
 
   test("REQ-ENG-07 a calm field whose canvas is hidden is settled for a new chapter and drawn when it is shown again", async () => {

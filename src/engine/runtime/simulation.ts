@@ -36,8 +36,8 @@ const DRAG_PER_SECOND = 1.8;
 const POINTER_SOFTENING = 0.1;
 // A particle far from its target is called back harder, so the field comes
 // back from a formation in about a second instead of drifting home for
-// several. The field's own wander stays inside RECALL_NEAR, so the ambient
-// flow is the one P2 drew.
+// several. The field's own wander stays inside RECALL_NEAR, where the recall
+// adds nothing, so the ambient flow keeps HOME_PULL and DRAG_PER_SECOND.
 const RECALL_NEAR = 1;
 const RECALL_FAR = 2.5;
 const RECALL_PULL = 2.4;

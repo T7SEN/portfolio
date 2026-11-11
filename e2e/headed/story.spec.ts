@@ -58,7 +58,9 @@ const SETTLE_MS = 3_000;
 const REST_SETTLE_MS = 8_000;
 // The page's text is hidden and the veil is off while the field is
 // measured, so only the field's own light is in the frame.
-const HIDE_TEXT = "header, main, footer { visibility: hidden !important; }";
+// The veil's plates behind the text (story-veil.ts) go with it.
+const HIDE_TEXT =
+  "header, main, footer, [data-part='veil-plates'] { visibility: hidden !important; }";
 
 async function openHome(page: Page, setup: TierSetup) {
   await page.setViewportSize({ width: 1280, height: 800 });

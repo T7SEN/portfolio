@@ -182,6 +182,18 @@ for (const { name, viewport, tier, setup } of CASES) {
             ),
           veil,
         );
+        // The veil's plates behind the text (story-veil.ts) are part of the
+        // shipped veil, so they stay for every measured strength. The control
+        // looks at the bare background alone: void plates blended over void
+        // come back a level or two brighter (#09090B on 11 Nov 2026).
+        await page.evaluate((isControl) => {
+          const plates = document.querySelector<HTMLElement>(
+            '[data-part="veil-plates"]',
+          );
+          if (plates !== null) {
+            plates.style.visibility = isControl ? "hidden" : "";
+          }
+        }, veil === 1);
         let maxLuminance = 0;
         let brightest = "";
         // A still picture and the bare background do not change.
@@ -317,14 +329,18 @@ const CHAPTER_CASES = [
 // dissolving mark and the sheet that still holds.
 // text says whether words are in view there. A text state must find at least
 // one box to measure, so a broken selector fails instead of passing on
-// nothing. At bloom 0.6 and making-of 0.5 only the field is in view: those
+// nothing. At bloom 0.58 and making-of 0.5 only the field is in view: those
 // states check that the story reached the formation and that no text sits
 // over it, and a box found there fails too, so the flag cannot go stale.
 const FORMED_STATES = [
   {
-    name: "bloom 0.6, the mark",
+    // 0.58, not 0.6: after the design review the bloom label reaches the
+    // viewport's bottom at 0.608 on the phone and 0.613 at 1280 (measured
+    // 11 Nov 2026), so at 0.6 a late font swap could bring it into view.
+    // The mark is whole from 0.52.
+    name: "bloom 0.58, the mark",
     chapter: "bloom",
-    progress: 0.6,
+    progress: 0.58,
     text: false,
   },
   {

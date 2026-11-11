@@ -657,11 +657,12 @@ test("REQ-A11Y-03 with reduced motion the field draws the hero's dot and the con
   // The story takes the field from chapter to chapter below.
   await waitForStory(page);
 
-  // The field alone, at full strength: the page text and the veil would
-  // hide whether anything was drawn. Hidden, the text keeps its layout, so
-  // the page still scrolls through the chapters.
+  // The field alone, at full strength: the page text, the veil and its
+  // plates would hide whether anything was drawn. Hidden, the text keeps its
+  // layout, so the page still scrolls through the chapters.
   await page.addStyleTag({
-    content: "header, main, footer { visibility: hidden !important; }",
+    content:
+      "header, main, footer, [data-part='veil-plates'] { visibility: hidden !important; }",
   });
   await page
     .locator(FIELD)
@@ -673,18 +674,29 @@ test("REQ-A11Y-03 with reduced motion the field draws the hero's dot and the con
     "0",
   );
 
-  // The hero's still is the storyboard's first frame: one dot at the centre
-  // of a black field. The box is a tenth of the field's height across, in
-  // screenshot pixels.
+  // The hero's still is the storyboard's first frame: one dot on a black
+  // field, in the clear band between the hero's actions and Skip intro
+  // (D-066). The box is a tenth of the field's height across, centred there,
+  // in screenshot pixels.
   const hero = await stillScreenshot(page);
   await writeFile(testInfo.outputPath("calm-still-hero.png"), hero.frame);
   const host = await page.locator(HOST).boundingBox();
   if (host === null) throw new Error("The field's host has no box");
   const scale = await page.evaluate(() => window.devicePixelRatio);
   const half = 0.05 * host.height * scale;
+  const bandMiddle = await page.evaluate(() => {
+    const above = document.querySelector('[data-stage="dot-above"]');
+    const below = document.querySelector('[data-stage="dot-below"]');
+    if (above === null || below === null) throw new Error("No hero band");
+    return (
+      (above.getBoundingClientRect().bottom +
+        below.getBoundingClientRect().top) /
+      2
+    );
+  });
   const centre = {
     x: (host.x + host.width / 2) * scale - half,
-    y: (host.y + host.height / 2) * scale - half,
+    y: bandMiddle * scale - half,
     width: 2 * half,
     height: 2 * half,
   };
@@ -695,14 +707,17 @@ test("REQ-A11Y-03 with reduced motion the field draws the hero's dot and the con
     litPixels === 0 ? 0 : (dot.litShare * dot.pixels) / litPixels;
   const heroLine =
     `calm-still ${testInfo.project.name} hero: ${Math.round(litPixels)} lit pixels, ` +
-    `${inCentre.toFixed(4)} of them in the centre box, brightest ${whole.brightest}, ` +
+    `${inCentre.toFixed(4)} of them in the band's box, brightest ${whole.brightest}, ` +
     `two identical screenshots after ${hero.pairs} pairs: ${hero.identical}`;
   console.log(heroLine);
   testInfo.annotations.push({ type: "calm-still", description: heroLine });
 
   expect(hero.identical, "nothing moves in the hero's still").toBe(true);
   expect(litPixels, "the dot is drawn").toBeGreaterThan(20);
-  expect(inCentre, "the light is the dot at the centre").toBeGreaterThan(0.95);
+  expect(
+    inCentre,
+    "the light is the dot in the hero's clear band",
+  ).toBeGreaterThan(0.95);
 
   // A new chapter while calm: the field settles into that chapter's still
   // and draws it once. Contact is the field at rest across the frame.

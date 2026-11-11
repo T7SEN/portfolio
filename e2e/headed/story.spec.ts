@@ -10,11 +10,13 @@ import { PARTICLES } from "../../src/engine/config";
 import { packAtlas } from "../../src/engine/runtime/atlas";
 import { fitScale } from "../../src/engine/runtime/story";
 import {
+  FPS_TOLERANCE,
   PASS_MEDIAN_MS,
   WARM_UP_MS,
   WINDOW_MS,
   measureFrames,
   watchErrors,
+  type FrameSummary,
 } from "../gpu/frame-times";
 import { pixelStats, type Box } from "../gpu/pixels";
 import {
@@ -191,7 +193,37 @@ async function measureStir(
   };
 }
 
-/** Jumps to a place, lets the field settle, and checks nothing moved. */
+interface ScrollState {
+  scrollY: number;
+  /** The document's full height: layout that grows or shrinks shows here. */
+  height: number;
+  /** Lenis's classes on html, which say whether it is scrolling the page. */
+  lenis: string[];
+}
+
+function scrollState(page: Page): Promise<ScrollState> {
+  return page.evaluate(() => {
+    const root = document.documentElement;
+    return {
+      scrollY: Math.round(window.scrollY),
+      height: root.scrollHeight,
+      lenis: [...root.classList].filter(
+        (name) => name === "lenis" || name.startsWith("lenis-"),
+      ),
+    };
+  });
+}
+
+function scrollStateText({ scrollY, height, lenis }: ScrollState): string {
+  return `scroll ${scrollY}, height ${height}, Lenis classes ${lenis.join(" ") || "none"}`;
+}
+
+/**
+ * Jumps to a place, lets the field settle, and checks nothing moved. A move
+ * is reported with the page's height and Lenis's classes before and after
+ * the wait, so the failure names its likely cause: layout that changed
+ * height, or a scroll Lenis was still driving.
+ */
 async function settleAt(
   page: Page,
   place: StoryPlace,
@@ -199,28 +231,43 @@ async function settleAt(
   settleMs = SETTLE_MS,
 ) {
   const top = await scrollToPlace(page, place);
+  const before = await scrollState(page);
   await page.waitForTimeout(settleMs);
-  const now = await page.evaluate(() => Math.round(window.scrollY));
-  expect(now, `the page stayed at ${top}`).toBe(top);
+  const after = await scrollState(page);
+  expect(
+    after.scrollY,
+    `the page stayed at ${top} (before the wait ${scrollStateText(before)}; after it ${scrollStateText(after)})`,
+  ).toBe(top);
   await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", chapter);
   return top;
 }
 
-// From P3 the field changes with the scroll story, and each formation packs
-// the particles into part of the frame. The frame rate is measured again in
-// each chapter of the production home page (REQ-PERF-06).
+// The field changes with the scroll story, and each formation packs the
+// particles into part of the frame, so the frame rate is measured in each
+// chapter of the production home page (REQ-PERF-06).
 //
-// The home-field tests also hold the window to 95% of the frames its own
-// median promises. On a 240 Hz display the field on this page sits at the
-// edge of one display interval in some chapters, so a few per cent of its
-// frames take two, on both tiers (P3 integration: every median 4.20 ms;
-// tier 1 once held 94.8% of its promised frames with no frame longer than
-// 16.2 ms, and tier 2 had up to 9% of its frames above 6 ms with the
-// longest at 33.2 ms). That rule reads such frames as a stall, so here each
-// chapter is held to its line by the median, a stall is caught by the
-// longest interval (no frame may take as long as four frames at the line),
-// and the share of the promised frames is printed.
+// The home-field tests hold the window to 95% of the frames its own median
+// promises. On a 240 Hz display the field on this page sits at the edge of
+// one display interval in some chapters, so a few per cent of its frames
+// take two, on both tiers, and that rule reads such frames as a stall. The
+// figures behind this were reported during the build and their output was
+// not kept: every median 4.20 ms; tier 1 once held 94.8% of its promised
+// frames with no frame longer than 16.2 ms, and tier 2 had up to 9% of its
+// frames above 6 ms with the longest at 33.2 ms.
+//
+// So here each chapter is held to the tier's pass line instead: the median
+// at or under it; at least 95% of the frames the line promises in the
+// window, so time lost to many shorter stalls still counts; no interval as
+// long as four frames at the line; and the engine reporting the page's own
+// rate. The page's frames run on whatever the field does, so only that last
+// check catches a field that draws fewer frames than the page or stops
+// reporting for half the window. The share of the frames the median
+// promises is printed.
 const STALL_FRAMES = 4;
+// The engine publishes its rate once a second, so a 10 s window holds about
+// ten readouts; it must give more than this many, as in the home-field tests.
+const MIN_READOUTS = 5;
+const PASS_LINE_SHARE = 0.95;
 const CHAPTER_STATES: ReadonlyArray<{
   name: string;
   place: StoryPlace;
@@ -267,12 +314,9 @@ for (const setup of TIERS) {
     const { errors } = watchErrors(page);
     await openHome(page, setup);
     const field = page.locator(FIELD);
+    const frameFloor = (PASS_LINE_SHARE * WINDOW_MS) / PASS_MEDIAN_MS[tier];
 
-    const results: Array<{
-      name: string;
-      medianMs: number;
-      longestMs: number;
-    }> = [];
+    const results: Array<{ name: string; summary: FrameSummary }> = [];
     for (const state of CHAPTER_STATES) {
       const scrolledTo = await scrollToPlace(page, state.place);
       // The warm-up inside the measurement covers the glide to the new state.
@@ -288,21 +332,31 @@ for (const setup of TIERS) {
           `${summary.medianMs.toFixed(2)} ms p95 ${summary.p95Ms.toFixed(2)} ms, ` +
           `longest ${summary.longestMs.toFixed(1)} ms, ` +
           `${(((summary.frames * summary.medianMs) / WINDOW_MS) * 100).toFixed(1)}% of the frames the median promises, ` +
-          `engine ${summary.engineFps.toFixed(2)} fps`,
+          `at least ${Math.ceil(frameFloor)} due at the pass line, ` +
+          `engine ${summary.engineFps.toFixed(2)} fps against the page's ${summary.pageFps.toFixed(2)} fps ` +
+          `over ${summary.readouts} readouts`,
       );
       // The state measured must be the one named.
       expect(chapter, state.name).toBe(state.chapter);
       expect(scrolledAfter, `${state.name}: the page stayed`).toBe(scrolledTo);
-      results.push({
-        name: state.name,
-        medianMs: summary.medianMs,
-        longestMs: summary.longestMs,
-      });
+      results.push({ name: state.name, summary });
     }
 
-    for (const { name, medianMs, longestMs } of results) {
-      expect(medianMs, name).toBeLessThanOrEqual(PASS_MEDIAN_MS[tier]);
-      expect(longestMs, `${name}: no stall`).toBeLessThan(
+    for (const { name, summary } of results) {
+      expect(
+        summary.readouts,
+        `${name}: the engine reports its frame rate`,
+      ).toBeGreaterThan(MIN_READOUTS);
+      expect(
+        Math.abs(summary.engineFps - summary.pageFps) / summary.pageFps,
+        `${name}: the engine's frame rate matches the page's own count`,
+      ).toBeLessThanOrEqual(FPS_TOLERANCE);
+      expect(summary.medianMs, name).toBeLessThanOrEqual(PASS_MEDIAN_MS[tier]);
+      expect(
+        summary.frames,
+        `${name}: the window holds ${PASS_LINE_SHARE * 100}% of the frames the pass line promises`,
+      ).toBeGreaterThanOrEqual(frameFloor);
+      expect(summary.longestMs, `${name}: no stall`).toBeLessThan(
         STALL_FRAMES * PASS_MEDIAN_MS[tier],
       );
     }
@@ -497,11 +551,24 @@ for (const setup of TIERS) {
 
     // Calm: one still frame, which the cursor no longer moves.
     await restore();
+    // The bar is not sticky, so the click scrolls it into view at the top of
+    // the page and the field goes back to the hero's dot. The still is taken
+    // in contact again, where the cursor stirred it.
     await calmToggle(page).click();
     await expect(calmToggle(page)).toHaveAttribute("aria-pressed", "true");
-    await page.waitForTimeout(1_500);
+    await settleAt(
+      page,
+      { chapter: "contact", progress: 0.5 },
+      "contact",
+      1_500,
+    );
     await showFieldAlone(page);
     const still = await page.locator(HOST).screenshot();
+    // Two blank frames would also be equal, so the still must show the field.
+    expect(
+      (await pixelStats(page, still)).litShare,
+      "the calm still shows the field",
+    ).toBeGreaterThan(0.05);
     for (let step = 0; step < 12; step += 1) {
       await page.mouse.move(
         point.x + 120 * Math.cos(step),

@@ -36,7 +36,7 @@ async function textBoxes(page: Page): Promise<{ boxes: Box[]; own: number }> {
     const boxes: Box[] = [];
     let own = 0;
     const elements = document.querySelectorAll(
-      'header a, section[aria-labelledby="hero-headline"] :is(p, h1, a)',
+      'header :is(a, button), section[aria-labelledby="hero-headline"] :is(p, h1, a)',
     );
     for (const element of elements) {
       const box = element.getBoundingClientRect();
@@ -224,8 +224,8 @@ for (const { name, viewport, tier, setup } of CASES) {
   });
 }
 
-// From P3 the field gathers into formations further down the page: the mark
-// in the bloom, a mark per study, the flat sheet and the wave. They pack the
+// Further down the page the field gathers into formations: the mark in the
+// bloom, a mark per study, the flat sheet and the wave. They pack the
 // particles far more densely than the ambient field, so the text in view at
 // each one is measured too (accessibility.md section 7).
 

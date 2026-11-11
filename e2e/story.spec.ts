@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { studies } from "../src/content";
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
@@ -10,7 +10,6 @@ import {
   chapterInLayout,
   chapterOrder,
   chapterStarts,
-  fieldChapter,
   fixedElements,
   focusedView,
   goToChapter,
@@ -133,10 +132,14 @@ test("REQ-SCR-01 the six chapters run in order, start near the storyboard's shar
       path: testInfo.outputPath(`story-${chapter}.png`),
     });
     if (chapter === "hero") {
-      // The services block counts as the hero, at its end.
+      // The services block counts as the hero, at its end. Reached from the
+      // bloom, so the story has to write the hero again.
+      await goToChapter(page, "bloom");
       await goToServices(page);
-      await page.waitForTimeout(500);
-      expect(await fieldChapter(page), "services").toBe("hero");
+      await expect(page.locator(FIELD), "services").toHaveAttribute(
+        "data-chapter",
+        "hero",
+      );
     }
   }
 
@@ -446,6 +449,143 @@ test("REQ-NAV-01 with the story running, Skip intro reaches the work chapter and
   );
 });
 
+test("REQ-NAV-01 at 320 by 568, where the bar wraps to two rows, See the work and Skip intro show whole on the first screen", async ({
+  page,
+  isMobile,
+}, testInfo) => {
+  test.skip(!isMobile, "A 320 px wide screen is a phone's");
+  await page.setViewportSize({ width: 320, height: 568 });
+  await page.goto("/");
+  // The bar's rows depend on the width of its text, final once the fonts are in.
+  await page.evaluate(() => document.fonts.ready);
+
+  const seeTheWork = page.getByRole("link", {
+    name: HERO.primaryAction,
+    exact: true,
+  });
+  const skipIntro = page.getByRole("link", {
+    name: HERO.cornerControl,
+    exact: true,
+  });
+  const span = async (name: string, locator: Locator) => {
+    const box = await locator.boundingBox();
+    return box === null
+      ? `${name} not drawn`
+      : `${name} ${Math.round(box.y)} to ${Math.round(box.y + box.height)} px`;
+  };
+  const line =
+    `320 x 568 ${testInfo.project.name}: ` +
+    [
+      await span("bar", page.getByRole("banner")),
+      await span("See the work", seeTheWork),
+      await span("Skip intro", skipIntro),
+    ].join(", ");
+  console.log(line);
+  testInfo.annotations.push({ type: "first-screen", description: line });
+
+  expect(await page.evaluate(() => window.scrollY), line).toBe(0);
+  // The case this test exists for: two rows of 44 px inside py-3 (D-063).
+  const bar = await page.getByRole("banner").boundingBox();
+  expect(bar?.height ?? 0, `${line}: the bar wraps`).toBeGreaterThan(100);
+  await expect(seeTheWork, line).toBeInViewport({ ratio: 1 });
+  await expect(skipIntro, line).toBeInViewport({ ratio: 1 });
+});
+
+// One notch of a mouse wheel.
+const NOTCH_PX = 100;
+// Longer than the glide three notches start: Lenis closes the gap at a rate
+// of 6 a second (lerp 0.1) and stops within half a pixel, so 300 px take
+// about 1.1 s (lenis 1.3.27, dist/lenis.mjs lines 37 to 39 and 85 to 89).
+const AFTER_GLIDE_MS = 1_500;
+
+/** Whether Lenis animates a scroll now (lenis-smooth on html), and where. */
+function glideState(page: Page) {
+  return page.evaluate(() => ({
+    gliding: document.documentElement.classList.contains("lenis-smooth"),
+    scrollY: Math.round(window.scrollY),
+  }));
+}
+
+test("REQ-NAV-01 REQ-SCR-02 Skip intro clicked and End pressed while a wheel glide runs both take the page where they lead", async ({
+  page,
+  isMobile,
+}, testInfo) => {
+  test.skip(isMobile, "Lenis and the mouse wheel are desktop only");
+  test.setTimeout(ENGINE_TIMEOUT_MS + 60_000);
+  await page.goto("/");
+  await waitForStory(page);
+  await expect(page.locator("html")).toHaveClass(LENIS_CLASS, {
+    timeout: STORY_TIMEOUT_MS,
+  });
+  // As for the wheel test above: a glide needs frames, which the tier 1
+  // probe can hold back.
+  await waitForFieldShown(page);
+  await page.mouse.move(640, 400);
+  const lines: string[] = [];
+
+  // Skip intro, clicked while three quick notches still glide. A click event,
+  // not Playwright's click, which waits until the link has kept one box for
+  // two frames, that is until the glide has ended.
+  const started = Date.now();
+  for (let notch = 0; notch < 3; notch += 1) {
+    await page.mouse.wheel(0, NOTCH_PX);
+  }
+  const atClick = await page.evaluate(() => {
+    const link = document.querySelector<HTMLAnchorElement>(
+      'main section[data-chapter="hero"] a[href="#work"]',
+    );
+    if (link === null) throw new Error("No Skip intro link");
+    const state = {
+      gliding: document.documentElement.classList.contains("lenis-smooth"),
+      scrollY: Math.round(window.scrollY),
+    };
+    link.click();
+    return state;
+  });
+  const clickMs = Date.now() - started;
+  await page.waitForTimeout(AFTER_GLIDE_MS);
+  const work = page.locator('main section[data-chapter="work"]');
+  const landed = await work.evaluate((section) => ({
+    scrollY: Math.round(window.scrollY),
+    top: Math.round(section.getBoundingClientRect().top + window.scrollY),
+  }));
+  const skipLine =
+    `Skip intro clicked ${clickMs} ms after the first notch at ${atClick.scrollY} px, ` +
+    `${atClick.gliding ? "mid glide" : "with no glide running"}; ${AFTER_GLIDE_MS} ms later ` +
+    `scrollY ${landed.scrollY} px, the work chapter's top at ${landed.top} px`;
+  lines.push(skipLine);
+  expect(atClick.gliding, skipLine).toBe(true);
+  await expect(page).toHaveURL(/#work$/);
+  expect(Math.abs(landed.scrollY - landed.top), skipLine).toBeLessThanOrEqual(
+    2,
+  );
+  await expect(work, skipLine).toBeInViewport();
+
+  // End, pressed at once after three notches from the top.
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await scrollAtRest(page);
+  for (let notch = 0; notch < 3; notch += 1) {
+    await page.mouse.wheel(0, NOTCH_PX);
+  }
+  const atKey = await glideState(page);
+  await page.keyboard.press("End");
+  await page.waitForTimeout(AFTER_GLIDE_MS);
+  const rest = await page.evaluate(() => ({
+    scrollY: Math.round(window.scrollY),
+    foot: document.documentElement.scrollHeight - window.innerHeight,
+  }));
+  const endLine =
+    `End pressed at ${atKey.scrollY} px, ` +
+    `${atKey.gliding ? "mid glide" : "with no glide running"}; ${AFTER_GLIDE_MS} ms later ` +
+    `scrollY ${rest.scrollY} px, the foot of the page at ${rest.foot} px`;
+  lines.push(endLine);
+  expect(atKey.gliding, endLine).toBe(true);
+  expect(Math.abs(rest.scrollY - rest.foot), endLine).toBeLessThanOrEqual(1);
+
+  console.log(`glide ${testInfo.project.name}:\n${lines.join("\n")}`);
+  testInfo.annotations.push({ type: "glide", description: lines.join("; ") });
+});
+
 // A Page Down moves the page by most of a viewport: the browser keeps a
 // little of the screen before it in view.
 const PAGE_STEP = { least: 0.8, most: 1 } as const;
@@ -469,7 +609,7 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 with Lenis running, keys wor
   const lines: string[] = [`field tier ${report.tier}, ${report.reason}`];
 
   // The bar in Tab order, from the skip link to the Calm toggle, its last
-  // stop as built at P3 (accessibility.md section 3).
+  // stop (accessibility.md section 3).
   const banner = page.getByRole("banner");
   const primary = banner.getByRole("navigation", { name: "Primary" });
   const toggle = calmToggle(page);

@@ -639,7 +639,7 @@ async function stillScreenshot(page: Page) {
   return { frame, pairs, identical };
 }
 
-test("REQ-A11Y-03 with reduced motion the field draws one still frame per chapter and reports no frames", async ({
+test("REQ-A11Y-03 with reduced motion the field draws the hero's dot and the contact field as stills and reports no frames", async ({
   page,
 }, testInfo) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -674,8 +674,8 @@ test("REQ-A11Y-03 with reduced motion the field draws one still frame per chapte
   );
 
   // The hero's still is the storyboard's first frame: one dot at the centre
-  // of a black field (P3). The box is a tenth of the field's height across,
-  // in screenshot pixels.
+  // of a black field. The box is a tenth of the field's height across, in
+  // screenshot pixels.
   const hero = await stillScreenshot(page);
   await writeFile(testInfo.outputPath("calm-still-hero.png"), hero.frame);
   const host = await page.locator(HOST).boundingBox();

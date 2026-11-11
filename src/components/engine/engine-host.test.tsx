@@ -297,7 +297,7 @@ describe("engine session", () => {
     expect(engine.setPointer).toHaveBeenLastCalledWith(-0.5, 0.5, false);
   });
 
-  it("REQ-A11Y-05 the wrapper mirrors the chapter from the first story sent, before the engine loads and on tier 3", async () => {
+  it("REQ-SCR-01 the wrapper mirrors the chapter from the first story sent, before the engine loads and on tier 3", async () => {
     const { wrapper, bridge, session } = setUp();
     bridge.setStory("hero", 1);
     expect(wrapper.dataset.chapter).toBe("hero");
@@ -313,7 +313,7 @@ describe("engine session", () => {
     expect(engines[0]?.setStory).toHaveBeenLastCalledWith("bloom", 0.1);
   });
 
-  it("REQ-A11Y-05 the chapter attribute is written only when the chapter changes", async () => {
+  it("REQ-SCR-01 the chapter attribute is written only when the chapter changes", async () => {
     const { wrapper, bridge, session } = setUp();
     session.request();
     await passFirstContent();
@@ -882,7 +882,7 @@ describe("EngineHost", () => {
     expect(engines[0]?.setCalm).toHaveBeenCalledExactlyOnceWith(true);
   });
 
-  it("REQ-A11Y-05 the wrapper mirrors the page's chapter before the engine loads and on tier 3", async () => {
+  it("REQ-SCR-01 the wrapper mirrors the page's chapter before the engine loads and on tier 3", async () => {
     await render();
     storyBridge.setStory("bloom", 0.4);
     expect(parts().wrapper.dataset.chapter).toBe("bloom");

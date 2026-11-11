@@ -116,11 +116,6 @@ export async function scrollToPlace(
   return top;
 }
 
-/** The chapter the field's wrapper mirrors. */
-export function fieldChapter(page: Page): Promise<string | null> {
-  return page.locator(FIELD).getAttribute("data-chapter");
-}
-
 /** Jumps to the middle of a chapter and waits for the field to follow. */
 export async function goToChapter(
   page: Page,
@@ -143,7 +138,7 @@ export interface ChapterStart {
 /**
  * Where each chapter starts, as the story sees it: the scroll position at
  * which its section's top reaches the middle of the viewport, as a share of
- * the page's scroll range (the method of the P3 integration's figures).
+ * the page's scroll range, the measure STORYBOARD_SHARE is compared with.
  */
 export function chapterStarts(page: Page): Promise<ChapterStart[]> {
   return page.evaluate(() => {

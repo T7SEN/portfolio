@@ -22,7 +22,9 @@ export function SiteHeader() {
           <Logo variant="light" className="h-7 w-auto" />
         </Link>
         {/* Wraps only where the bar cannot hold every control on one line,
-            so a 320 px screen never scrolls sideways (WCAG 1.4.10). */}
+            so a 320 px screen never scrolls sideways (WCAG 1.4.10). Today
+            that is below 22rem, which hero.tsx allows for in the hero's
+            height; a control added here moves that width. */}
         <div className="-me-3 flex flex-wrap items-center justify-end">
           <nav aria-label="Primary">
             <ul className="flex items-center">

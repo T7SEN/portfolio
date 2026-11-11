@@ -5,17 +5,20 @@ import { ActionLink } from "./action-link";
 import { HeroHeadline } from "./hero-headline";
 import { StoryScene } from "./story-scene";
 
-// The hero fills the first screen below the bar (py-3 around the 44 px home
-// link, so 4.25rem), which keeps Skip intro in view from the first frame
-// (REQ-NAV-01). svh is the height with the phone browser's bars showing.
-// Short screens (a 375 by 667 phone with its bars is about 548 px tall) get
-// tighter spacing so Skip intro stays above the fold.
+// The hero fills the first screen below the bar, which keeps Skip intro in
+// view from the first frame (REQ-NAV-01). The bar is py-3 around one 44 px
+// row, so 4.25rem. Below 22rem (352 px) its links and the Calm toggle no
+// longer fit on one row and it wraps to two, so 7rem. svh is the height with
+// the phone browser's bars showing. Short screens (a 375 by 667 phone with
+// its bars is about 548 px tall) get tighter spacing so Skip intro stays
+// above the fold. Below 22rem and under about 559 px tall the content is
+// taller than this minimum, so Skip intro still ends below the fold (D-063).
 export function Hero() {
   const copy = heroCopy(STATIC_TIER);
 
   return (
     <section aria-labelledby="hero-headline" data-chapter="hero">
-      <Container className="flex min-h-[calc(100svh_-_4.25rem)] flex-col pb-4">
+      <Container className="flex min-h-[calc(100svh_-_4.25rem)] flex-col pb-4 max-[22rem]:min-h-[calc(100svh_-_7rem)]">
         <div className="flex flex-1 flex-col justify-center gap-6 py-10 [@media(max-height:40rem)]:gap-4 [@media(max-height:40rem)]:py-4">
           <p className="font-mono text-label text-muted">{copy.eyebrow}</p>
           <HeroHeadline id="hero-headline" text={copy.headline} />

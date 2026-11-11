@@ -100,6 +100,17 @@ describe("Hero", () => {
       expect(link.className).toContain("min-h-11");
     }
   });
+
+  it("REQ-NAV-01 the hero fills the screen below the bar's one row, and below its two rows under 22rem, where the bar wraps", () => {
+    const box = render(<Hero />).querySelector("section > div");
+    const heights = (box?.className.split(" ") ?? []).filter((name) =>
+      name.includes("min-h-"),
+    );
+    expect(heights.sort()).toEqual([
+      "max-[22rem]:min-h-[calc(100svh_-_7rem)]",
+      "min-h-[calc(100svh_-_4.25rem)]",
+    ]);
+  });
 });
 
 describe("HeroHeadline with the tier store", () => {

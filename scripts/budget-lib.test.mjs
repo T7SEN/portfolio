@@ -77,6 +77,21 @@ describe("deferred library signatures", () => {
     expect(findDeferredLibraries(read(path))).toContain(name);
   });
 
+  it("REQ-PERF-04 finds ScrollTrigger in the module build the bundler takes", () => {
+    expect(findDeferredLibraries(read("gsap/ScrollTrigger.js"))).toContain(
+      "ScrollTrigger",
+    );
+  });
+
+  it("REQ-PERF-04 does not take app code that names a loaded plugin for the plugin", () => {
+    // Minified app code that destructures the plugins from a dynamic import.
+    expect(
+      findDeferredLibraries(
+        "let{gsap:t,ScrollTrigger:r,SplitText:n}=await e;r.update()",
+      ),
+    ).toEqual([]);
+  });
+
   it("REQ-PERF-04 finds nothing in React DOM, which may load first", () => {
     expect(
       findDeferredLibraries(

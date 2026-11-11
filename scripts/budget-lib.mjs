@@ -17,11 +17,18 @@ export const ENGINE_ENTRY = "engine entry";
 // three.js has one per build file, so a build that splits three.core.js from
 // three.webgpu.js still counts both: "__THREE__" is in the core alone and the
 // renderer's message prefix in the WebGPU build alone.
+// ScrollTrigger is found by its pin spacer class and its registration
+// warning, not by its name: app code that receives the plugin from a dynamic
+// import keeps the property name "ScrollTrigger" through minification, and
+// matching the name flagged every route at P3 with no library in the chunk.
 export const DEFERRED_LIBRARIES = [
   { name: "three.js", signatures: ["__THREE__", "THREE.WebGPURenderer"] },
   { name: ENGINE_ENTRY, signatures: [ENGINE_MARKER] },
   { name: "GSAP", signatures: ["GSAP target"] },
-  { name: "ScrollTrigger", signatures: ["ScrollTrigger"] },
+  {
+    name: "ScrollTrigger",
+    signatures: ["pin-spacer", "registerPlugin(ScrollTrigger)"],
+  },
   { name: "SplitText", signatures: ["autoSplit", "deepSlice"] },
   { name: "Lenis", signatures: ["lenis-smooth"] },
   { name: "PostHog", signatures: ["__POSTHOG", "posthog-js"] },

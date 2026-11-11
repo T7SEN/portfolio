@@ -32,6 +32,7 @@ const CANVAS_MARK = "portfolio-field";
 interface Field {
   readonly runtime: Runtime;
   readonly canvas: HTMLCanvasElement;
+  /** The settled tier has drawn here. The probe's frames do not count. */
   drawn: boolean;
 }
 
@@ -213,9 +214,22 @@ export function createEngine(
     }
   }
 
+  /** The field the page's story and pointer reach: none until a tier is settled. */
+  function listening(): Field | null {
+    return chosen === null ? null : field;
+  }
+
+  // The canvas the probe ran on stays hidden until the tier it settled on has
+  // drawn there, so the first frame anyone sees is that tier's own, already
+  // on the page's chapter.
+  function showDrawn(target: Field): void {
+    if (target.drawn) return;
+    target.drawn = true;
+    target.canvas.style.removeProperty("visibility");
+  }
+
   function onFrame(target: Field, frameMs: number): void {
     if (field !== target) return;
-    target.drawn = true;
 
     if (probe !== null) {
       const counted =
@@ -226,6 +240,7 @@ export function createEngine(
     }
 
     if (chosen === null) return;
+    showDrawn(target);
     if (rateTimer !== null) rateFrames += 1;
     if (!readySent) sendReady(chosen);
   }
@@ -271,7 +286,7 @@ export function createEngine(
     pending.then(
       () => {
         if (field !== target) return;
-        target.drawn = true;
+        showDrawn(target);
         if (chosen !== null && !readySent) sendReady(chosen);
       },
       () => lose(target),
@@ -280,7 +295,16 @@ export function createEngine(
 
   function adopt(target: Field, tier: GpuTier, reason: TierReason): void {
     chosen = tier;
-    target.canvas.style.removeProperty("visibility");
+    // The story and pointer reach a field only from here, so the tier 1
+    // probe times the whole ambient field at the real count, whatever
+    // chapter the page is on (REQ-TIER-01). A first story is seated at the
+    // runtime's next step, before its canvas is shown.
+    const heard = attempt(target, (live) => {
+      if (story !== null) live.setStory(...story);
+      if (pointer !== null) live.setPointer(...pointer);
+    });
+    if (!heard) return;
+
     emit({ type: "tierChosen", tier, reason });
     // A listener may have disposed the engine or forced another tier.
     if (field !== target) return;
@@ -289,7 +313,6 @@ export function createEngine(
     if (field !== target) return;
 
     if (calm) drawStill(target);
-    else if (target.drawn) sendReady(tier);
   }
 
   async function build(backend: Backend, gen: number): Promise<Field | null> {
@@ -333,12 +356,7 @@ export function createEngine(
 
     target = { runtime, canvas: surface, drawn: false };
     field = target;
-
-    const remembered = attempt(target, (live) => {
-      if (story !== null) live.setStory(...story);
-      if (pointer !== null) live.setPointer(...pointer);
-    });
-    return remembered ? target : null;
+    return target;
   }
 
   async function enterWebgl2(reason: TierReason, gen: number): Promise<void> {
@@ -351,7 +369,10 @@ export function createEngine(
     adopt(target, 2, reason);
   }
 
-  /** Runs the field unseen and judges its frame times (REQ-TIER-01). */
+  /**
+   * Runs the ambient field unseen, with no story, and judges its frame times
+   * (REQ-TIER-01).
+   */
   function measure(target: Field): Promise<ProbeVerdict | null> {
     return new Promise((resolve) => {
       const state: Probe = {
@@ -512,16 +533,18 @@ export function createEngine(
     setStory(chapter, progress) {
       if (disposed) return;
       story = [chapter, progress];
-      if (field !== null) {
-        attempt(field, (runtime) => runtime.setStory(chapter, progress));
+      const target = listening();
+      if (target !== null) {
+        attempt(target, (runtime) => runtime.setStory(chapter, progress));
       }
     },
 
     setPointer(x, y, active) {
       if (disposed) return;
       pointer = [x, y, active];
-      if (field !== null) {
-        attempt(field, (runtime) => runtime.setPointer(x, y, active));
+      const target = listening();
+      if (target !== null) {
+        attempt(target, (runtime) => runtime.setPointer(x, y, active));
       }
     },
 

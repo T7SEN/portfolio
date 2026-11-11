@@ -491,7 +491,7 @@ describe("tier flow", () => {
     expect(request.particleCount).toEqual({ webgpu: 5000, webgl2: 5000 });
   });
 
-  test("REQ-TIER-01 a passing probe gives tier 1 on the canvas it ran on", async () => {
+  test("REQ-TIER-01 a passing probe gives tier 1 on the canvas it ran on, shown and ready with tier 1's first frame", async () => {
     const { events, stubs, canvas } = await startWith({
       environment: facts(),
     });
@@ -507,13 +507,86 @@ describe("tier flow", () => {
 
     expect(events).toEqual([
       { type: "tierChosen", tier: 1, reason: "probe-pass" },
-      { type: "ready", tier: 1 },
     ]);
     expect(stubs.requests).toHaveLength(1);
     expect(canvas()).toBe(probeCanvas);
-    expect(probeCanvas?.style.visibility).toBe("");
+    // The probe's last frame is still on the canvas, so it stays hidden.
+    expect(probeCanvas?.style.visibility).toBe("hidden");
     expect(runtime.running).toBe(true);
     expect(runtime.isDisposed).toBe(false);
+
+    runtime.frame();
+
+    expect(probeCanvas?.style.visibility).toBe("");
+    expect(events).toEqual([
+      { type: "tierChosen", tier: 1, reason: "probe-pass" },
+      { type: "ready", tier: 1 },
+    ]);
+  });
+
+  test("REQ-TIER-01 the probe measures the ambient field: the story and pointer reach its runtime only when its tier is adopted, and once", async () => {
+    const stubs = stubRuntimes();
+    const { engine, events, canvas } = mount({
+      environment: facts(),
+      loadRuntime: stubs.loadRuntime,
+    });
+    const stories = (log: readonly string[]) =>
+      log.filter((line) => line.startsWith("story "));
+
+    engine.setStory("hero", 0);
+    engine.setPointer(0.5, -0.5, true);
+    void engine.start();
+    await settle();
+    const runtime = nth(stubs.built, 0);
+
+    expect(runtime.log).toEqual(["run"]);
+
+    // A scroll during the probe is kept, not sent.
+    engine.setStory("bloom", 0.2);
+    engine.setPointer(-0.25, 0.25, true);
+    await vi.advanceTimersByTimeAsync(PROBE.warmupMs);
+    for (let index = 0; index < 30; index += 1) runtime.frame(10);
+    expect(runtime.log).toEqual(["run"]);
+
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs - PROBE.warmupMs);
+    await settle();
+
+    expect(events).toEqual([
+      { type: "tierChosen", tier: 1, reason: "probe-pass" },
+    ]);
+    expect(runtime.log).toEqual([
+      "run",
+      "story bloom 0.2",
+      "pointer -0.25 0.25 true",
+    ]);
+    expect(canvas()?.style.visibility).toBe("hidden");
+
+    runtime.frame();
+    expect(canvas()?.style.visibility).toBe("");
+    expect(stories(runtime.log)).toEqual(["story bloom 0.2"]);
+
+    engine.setStory("bloom", 0.4);
+    expect(stories(runtime.log)).toEqual([
+      "story bloom 0.2",
+      "story bloom 0.4",
+    ]);
+  });
+
+  test("REQ-TIER-01 a slow probe's runtime never hears the story; the WebGL2 runtime after it hears it before it runs", async () => {
+    const stubs = stubRuntimes();
+    const { engine } = mount({
+      environment: facts(),
+      loadRuntime: stubs.loadRuntime,
+    });
+
+    engine.setStory("work", 0.4);
+    void engine.start();
+    await settle();
+    const probed = nth(stubs.built, 0);
+    await playProbe(probed, 40);
+
+    expect(probed.log).toEqual(["run", "pause", "dispose"]);
+    expect(nth(stubs.built, 1).log).toEqual(["story work 0.4", "run"]);
   });
 
   test("REQ-TIER-01 frames inside the warm-up are not counted", async () => {
@@ -1200,6 +1273,32 @@ describe("lost device", () => {
     expect(events).toEqual([
       { type: "tierChosen", tier: 2, reason: "webgpu-init-fallback" },
     ]);
+  });
+
+  test("REQ-ENG-08 a runtime that throws when its adopted tier is handed the story drops one tier with device-lost", async () => {
+    const stubs = stubRuntimes();
+    const factory: RuntimeFactory = async (options) => {
+      const runtime = await stubs.factory(options);
+      runtime.setStory = () => {
+        throw new Error("the renderer broke");
+      };
+      return runtime;
+    };
+    const { engine, events, canvas } = mount({
+      environment: facts(NO_WEBGPU),
+      loadRuntime: () => Promise.resolve(factory),
+    });
+
+    engine.setStory("hero", 0);
+    await engine.start();
+
+    expect(nth(stubs.built, 0).isDisposed).toBe(true);
+    expect(nth(stubs.built, 0).log).not.toContain("run");
+    expect(events).toEqual([
+      { type: "tierChosen", tier: 3, reason: "device-lost" },
+      { type: "ready", tier: 3 },
+    ]);
+    expect(canvas()).toBeNull();
   });
 
   test("REQ-ENG-08 a loss reported by a runtime that was already replaced is ignored", async () => {

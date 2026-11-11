@@ -287,7 +287,7 @@ Every departure from the brief, and every technical choice a later phase needs t
 - After first content means: the load event, then the first contentful paint, then an idle moment. The paint step was added after a browser test caught three.js being requested before the first paint when the load event came first. Browsers without paint timing skip that step.
 - The wrapper stays transparent until `ready`, then fades in over 700 ms.
 - The hero headline is driven by a small store that mirrors the engine's events. The tier 1 and 2 line shows only while a tier 1 or 2 field is on screen, which means the tier is chosen and it has drawn; the tier 3 line returns while a tier changes and if the tier drops to 3 (rule A14). A browser test compares the frame before the real change with the frame that shows it and finds the h1 and the sub-line in the same place. This replaces the P1 test that changed the text by hand (D-033).
-- The pointer is not yet sent to the field on the home page; that arrives with the scroll story at P3 (REQ-SCR-06).
+- At P2 the pointer was not sent to the field on the home page. P3 sends it (D-052, REQ-SCR-06).
 
 ### D-042 The tier 3 stills
 
@@ -345,7 +345,7 @@ Every departure from the brief, and every technical choice a later phase needs t
 - REQ-SCR-01, REQ-SCR-05, REQ-SCR-07. Pure functions in src/engine/runtime/story.ts turn a chapter and its progress into targets: the dot, the mark gathering and dissolving in the bloom, one shape per study with a camera push of 1.6 world units through the work chapter, a flat sheet for the making-of, a travelling wave for about and the settled field for contact.
 - With no story at all the runtime draws P2's ambient field, so the development page and the tier 3 still capture behave as before.
 - The release, the camera push and the formation light follow the story over 0.45, 0.6 and 0.5 seconds, so a jump between chapters never snaps; particle targets switch at once and the particles fly with their own inertia. A story sent before the first frame seats every particle on its targets.
-- Formed shapes are dimmed to the share of the frame they cover (gain 1.6), and fast particles are dimmed, so light never piles to white behind text: the brightest pixel during the bloom fell from luminance 0.82 in the first build to 0.25 on tier 1 and 0.37 on tier 2 in the P3 gate, under the test's limit of 0.5.
+- Formed shapes are dimmed to the share of the frame they cover (gain 1.6), and fast particles are dimmed, so light never piles to white behind text: the brightest pixel during the bloom fell from about luminance 0.82, reported for the first build (that output was not kept), to 0.25 on tier 1 and 0.37 on tier 2 in the P3 gate, under the test's limit of 0.5.
 - Every chapter measured a median of 4.20 ms per frame on both tiers at this display's 240 Hz ceiling, so adaptive resolution needed no change. Phones are measured at P7.
 
 ### D-050 Calm mode
@@ -359,7 +359,7 @@ Every departure from the brief, and every technical choice a later phase needs t
 - REQ-SCR-02, REQ-SCR-03, REQ-PERF-04. Lenis runs only with a fine primary pointer and calm off, watched live, and is created after first content; a browser that cannot answer the pointer query keeps native scroll. It uses the GSAP wiring from its README: GSAP's ticker drives Lenis and each Lenis scroll updates ScrollTrigger, so no third frame loop is added. The engine keeps its own frame loop.
 - One option departs from the defaults: stopInertiaOnNavigate. Without it, a wheel scroll still gliding when a study link was clicked carried on after the router had put the new page at the top, and the study page landed at its bottom.
 - When Lenis goes, GSAP's lag smoothing is set back to its defaults (500 and 33 ms). A failed import leaves native scroll and is tried again on the next change of calm or pointer.
-- Lenis has no key listener, so the keyboard always scrolls natively. P5's palette navigates from code, which this option does not cover; it will need its own reset.
+- Lenis has no key listener, so the keyboard scrolls natively once no wheel glide runs. During a glide Lenis would undo a key scroll, so a scroll key ends the glide first (D-061). P5's palette navigates from code, which neither covers; it will need its own reset.
 
 ### D-052 Stirring the field
 
@@ -378,9 +378,9 @@ Every departure from the brief, and every technical choice a later phase needs t
 
 ### D-055 The budget after P3
 
-- REQ-PERF-04, REQ-PERF-05. The budget check found ScrollTrigger in the first load of every route, wrongly: the layout's code keeps the property name ScrollTrigger after minification even though the library arrives later by dynamic import. The check now looks for strings only the library contains ("pin-spacer" and "registerPlugin(ScrollTrigger)"), checked against the package files and the built chunk, with two unit tests.
-- First load after P3: 139.6 KB on / and 138.2 KB on the other pages. The three.js chunk, which now also holds the shapes and the choreography, is 226.0 KB gzip; tiers 1 and 2 load 228.7 KB.
-- The budget result file is written once per day of gates, so docs/results/2026-11-10-budget.md now holds the P3 figures; P2's figures from the same day are in its commit.
+- REQ-PERF-04, REQ-PERF-05. The budget check found ScrollTrigger in the first load of every route, wrongly: the layout's code keeps the property name ScrollTrigger after minification even though the library arrives later by dynamic import. The check now looks for strings only the library contains ("pin-spacer" and its registration warning, matched in full since the audit, D-064), checked against the package files and the built chunk, with two unit tests.
+- First load after P3, in the gate rerun: 139.8 KB on / and 138.2 KB on the other pages. The three.js chunk, which now also holds the shapes and the choreography, is 226.0 KB gzip; tiers 1 and 2 load 228.8 KB. Gate run 1, before the review fixes, measured 139.6 KB and 228.7 KB.
+- The budget result file is written once per day of gates, so docs/results/2026-11-10-budget.md holds the rerun's figures above; P2's figures from the same day are in its commit.
 
 ### D-056 Contrast with the story
 
@@ -392,7 +392,7 @@ Every departure from the brief, and every technical choice a later phase needs t
 - The gate gains e2e/story.spec.ts: chapter starts on the natural tier and forced tier 3, a wheel that moves exactly its own distance with nothing pinned or snapped, Lenis on desktop only and gone with calm, the story torn down and rebuilt across / to /work and back, calm stills, the toggle, keys and focus with Lenis running, and axe at the top and after every chapter. The keyboard test, added after the review, tabs through the bar to Calm, turns it on with Enter and off with Space, pages down into the work chapter and presses End to reach contact with the wrapper following, and tabs into every study, each fully in view and whole; Lenis sees the key scrolls as native ones and never animates them. Its keys, and the wheel test's wheel, wait until the field is shown: in a gate run of many browsers on one GPU, a Page Down pressed while the tier 1 probe drew sometimes did nothing, and a wheel glide counted too few positions. The reduced-motion test in e2e/engine.spec.ts now expects the hero still to be the dot, then checks the contact still for the lit field.
 - No browser check counts live ScrollTriggers, because GSAP is not on window in the production build; the route test checks the story's behaviour instead (one write per chapter change, none on /work, the title split once on return).
 - The headed suite gains e2e/headed/story.spec.ts (a frame-rate test per chapter, the mark forming and dissolving, cursor stirring with calm stopping it, and touch stirring) and e2e/gpu/story.spec.ts on the development page. Stirring is measured as the light at the pointer against four control boxes, which cancels the field's own drift.
-- The per-chapter frame-rate test holds the median line and fails on any frame of 4 display intervals or more, instead of P2's rule that 95% of promised frames arrive. On the production home page at 240 Hz, frames sitting at the edge of one interval failed the 95% rule in 3 of 5 runs while every median was 4.20 to 4.30 ms. The P2 tests keep the 95% rule.
+- The per-chapter frame-rate test holds the median line and fails on any frame as long as four frames at the tier's pass line (about 67 ms on tier 1, 134 ms on tier 2), instead of P2's rule that 95% of the frames the measured median promises arrive. During the build, frames sitting at the edge of one 240 Hz interval were reported to fail that rule in 3 of 5 runs while every median was 4.20 to 4.30 ms; that output was not kept, so the figure is a report, not a recorded result. The P2 tests keep the 95% rule. The audit added checks to this test (D-064).
 - pnpm e2e:gpu takes about 9.9 minutes, so it is run in two parts under the 10 minute command limit: the story and home field files, then the contrast and probe files.
 - The formed-state contrast loop marks each state as text or field only. A text state must find at least one text box, so a broken selector fails; a field-only state (bloom 0.6, making-of 0.5) must find none, so the mark cannot go stale.
 
@@ -410,3 +410,28 @@ Every departure from the brief, and every technical choice a later phase needs t
 ### D-060 The smooth scroll loads without SplitText
 
 - REQ-PERF-04. Found in the P3 review: the smooth scroll loaded GSAP through the story's loader, which also imports SplitText, so every desktop route downloaded SplitText after first content although only the home page's story uses it. src/lib/load-motion.ts now has loadScrollTrigger (gsap and ScrollTrigger), which the smooth scroll uses; loadMotion calls it and adds SplitText, so both share one gsap and one ScrollTrigger. A unit test with the pinned GSAP checks that loadScrollTrigger never loads SplitText.
+
+## P3 audit, 11 Nov 2026
+
+### D-061 Lenis gives way to native moves
+
+- REQ-SCR-02, REQ-NAV-01. Found in the audit: while a wheel glide runs (about a second after the last notch), Lenis 1.3.27 writes the scroll position on every frame and follows a native scroll only once no glide runs (dist/lenis.mjs 664 and 834 to 840). A click on Skip intro or on the skip link, a scroll key, or the scroll that brings a focused element into view, made during a glide, was undone. A gate test reproduced it on the P3 build: Skip intro clicked 87 ms into a glide left the page at 300 px, not at the work chapter at 2591 px.
+- While Lenis runs, three capture-phase listeners on window end a running glide before the browser moves the page: a click on a link to a place on this page, a scroll key (Space, Page Up, Page Down, the arrows, Home, End) outside a form field, and focusin. The glide is ended with stop() then start(), the public methods that both run Lenis's reset() (lines 698 to 720); reset() itself is private in Lenis's types. The listeners are removed with Lenis.
+- Left as they are: a drag of the scrollbar during a glide is overridden until the glide ends, and a link to this same page with no hash does not end it.
+
+### D-062 A calm still feels no pointer
+
+- REQ-A11Y-03, REQ-A11Y-04. Found in the audit: turning calm on with the mouse resting over the field settled the still with the pointer's push still on, because the calm store tells the engine at once while the page lets go of the pointer only after React has rendered. The still kept a hole at the cursor.
+- The runtime keeps the last pointer the page sent and applies its push only while the field runs: none during any still settle, and the kept pointer again when the field runs. This holds D-052's rule inside the engine. Two unit tests fail on the earlier runtime.
+
+### D-063 The hero allows for a two-row bar
+
+- REQ-NAV-01. Found in the audit: below 22rem (352 px) the bar's links and the Calm toggle no longer fit one row and the bar wraps to two (112 px), while the hero still subtracted one row (4.25rem). At 320 by 568 Skip intro sat at 552 to 596 px, 16 of its 44 px on screen. Decided by T7SEN on 11 Nov 2026: the hero allows for the two-row bar. Below 22rem it subtracts 7rem; at 22rem and wider nothing changes, and below it the hero is 44 px shorter, so at 320 by 568 Skip intro moved from 552 to 596 px up to 515 to 559 px. A gate test at 320 by 568 checks the bar wraps and See the work and Skip intro show whole on the first screen; it fails on the P3 build.
+- The limit, measured at 320 by 548 on the fixed build: the hero's content (403 px with the short-screen spacing) is taller than its minimum height there (436 px less the bar), so the content sets the height and Skip intro ends at 559 px, 11 px below the fold. Before P3 the one-row bar left it in view at that size. Closing it needs tighter spacing on narrow short screens, a visual change, so it is put to T7SEN.
+
+### D-064 Checks the audit tightened
+
+- REQ-PERF-04. The budget check now fails when src/lib/load-motion.ts has code and no built chunk is detected as GSAP, ScrollTrigger, SplitText or Lenis, as it already did for three.js and the engine entry, so a signature that stops matching can no longer pass in silence. ScrollTrigger's warning signature is matched in full, "Please gsap.registerPlugin(ScrollTrigger)", because the shorter string also matched the app's own registration line. Unit tests read the module builds the bundler takes.
+- REQ-PERF-06, REQ-SCR-01. The headed per-chapter frame-rate test (D-057) also checks, per state, more than 5 frame-rate readouts, the engine's rate within 3% of the page's, and a frame floor at the pass line (at least 567 frames on tier 1 and 285 on tier 2 in the 10 s window), so a field that stops drawing early in a window, or stalls that lose about three quarters of the window at 240 Hz, fail it. The readouts arrive once a second, so calm switched on late in a window can still pass; that is a known limit of this check.
+- REQ-A11Y-04. The calm half of the cursor test checks that the still is lit before comparing screenshots. That check showed the half had compared two frames of the hero's dot since P3: the bar is not sticky, so clicking Calm scrolled the page to the top. The test now takes the page back to contact before the still. The settle check reports the page height, the scroll position and Lenis's classes before and after, so a repeat of the 153 px move seen in the P3 rerun names its cause.
+- Decided by T7SEN on 11 Nov 2026, each the option recommended to him: D-057's figures stay as reported, output not kept, with no extra runs; the scene lines keep their wording. The reason given with the recommendation: "where your device draws the field live" already makes each line true under calm.

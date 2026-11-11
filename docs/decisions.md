@@ -316,3 +316,97 @@ Every departure from the brief, and every technical choice a later phase needs t
 - The wrapper carries the tier, its reason, ready and the last frame rate as data attributes, written straight to the element. The tests read them, and they ship; they force nothing.
 - The gate (`pnpm e2e`, headless, many workers) proves behaviour and asserts no frame rate. Frame rates, contrast, device loss and the stills are checked headed on this PC's GPU: `pnpm e2e:engine` runs the development page and `pnpm e2e:gpu` runs the production build. Neither is part of the gate.
 - Headed frame rates here sit on the display's 240 Hz ceiling, so they prove the pass lines and nothing about the GPU's limit. A window that is not being shown is drawn about once a second, which failed one headed test and thinned another; the test log carries every such run. The thinned run still passed, because the test read only the median time between frames; since 10 Nov 2026 the headed tests also hold the frame count to the run's own median: the window must hold at least 95% of the frames that median promises, so a window that stalls for more than a twentieth of its length fails. The thinned run had 1,311 frames where its median promised about 2,381. What the runtime frees on dispose, and that a throw in the frame loop is reported, are checked in unit tests with three.js replaced by recorders, because a page cannot see a renderer that was left alive.
+
+## P3 Scroll story, 10 Nov 2026
+
+### D-046 T7SEN's choices for the story
+
+- REQ-SCR-01, REQ-SCR-07. Asked and answered on 10 Nov 2026, after previews: the hero opens on one pulsing dot; the work silhouettes are simple marks drawn now, as placeholders; the T7SEN mark forms in violet and glow; the two new chapters show a mono label and one line.
+- Approved copy: "02 · Bloom" with "One field becomes every project on this site." (shown only while a tier 1 or 2 field draws; tier 3 and the static HTML carry its other form, D-059); "04 · Making-of" with "How the field is built, pass by pass." and the link "Read the making-of" to /work/making-of.
+- The services block stays between the hero and the bloom as a plain section, not a chapter; for the field it counts as the end of the hero.
+
+### D-047 The story contract
+
+- REQ-SCR-01, REQ-ENG-02. Each chapter section carries data-chapter and one visually hidden data-scene paragraph that says what the field shows. A chapter's progress runs from 0 when its top reaches the middle of the viewport to 1 when its bottom does.
+- The work chapter splits into five equal steps, one per study in the study index order (src/engine/story.ts, workStep). A unit test checks that list against the study index.
+- The page and the engine never import each other. src/lib/story-bridge.ts keeps the latest story and pointer and hands them to the engine once it exists, so the field starts on the right chapter even on a reload partway down. App code may import values from src/engine/story.ts; that file imports nothing.
+- The engine session mirrors the chapter onto the wrapper as data-chapter on every tier, from the first story, and keeps forwarding on tier 3, because the controller stores the story there and replays it if a GPU tier returns.
+- The driver measures the chapter in view from the layout as soon as it mounts, then loads GSAP and the story runner after first content. Its own copy of the chapter ids keeps the study text out of the home page's first load.
+
+### D-048 Shape targets
+
+- REQ-SCR-01, REQ-SCR-07, REQ-ENG-05. Shapes are sampled on the CPU and packed into one read-only float texture, 1024 x 96 texels, 16,384 points for the mark and for each of the five studies, read in the shared simulation with textureLoad. The compute pass keeps its three storage buffers; tier 2 reported MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS 4 on this PC, so a fourth buffer would have fitted, but nothing needs it. A particle's point is its own index modulo 16,384, with a small seeded jitter. At 4,096 points the shapes showed clumps.
+- The texture costs 1,572,864 bytes of GPU memory and no download; src/engine/manifest.json is unchanged.
+- The sampler cuts each filled outline (even-odd rule) into level trapezoids and places one point in each equal share of the area, then shuffles the order with a seeded generator. The points are evenly spread, always inside the shape and the same on every visit. 16,384 points take a few milliseconds.
+- The mark is the polygon from public/brand/t7sen-purple.svg. The five work marks are placeholders built from simple primitives (a screen with a dot bloom, two fanned cards, a flask, two chain links, a terminal window), nothing from any game, each swappable by replacing one entry in src/engine/runtime/shapes/marks.ts. Previews for review are kept outside the repo.
+
+### D-049 The choreography
+
+- REQ-SCR-01, REQ-SCR-05, REQ-SCR-07. Pure functions in src/engine/runtime/story.ts turn a chapter and its progress into targets: the dot, the mark gathering and dissolving in the bloom, one shape per study with a camera push of 1.6 world units through the work chapter, a flat sheet for the making-of, a travelling wave for about and the settled field for contact.
+- With no story at all the runtime draws P2's ambient field, so the development page and the tier 3 still capture behave as before.
+- The release, the camera push and the formation light follow the story over 0.45, 0.6 and 0.5 seconds, so a jump between chapters never snaps; particle targets switch at once and the particles fly with their own inertia. A story sent before the first frame seats every particle on its targets.
+- Formed shapes are dimmed to the share of the frame they cover (gain 1.6), and fast particles are dimmed, so light never piles to white behind text: the brightest pixel during the bloom fell from luminance 0.82 in the first build to 0.25 on tier 1 and 0.37 on tier 2 in the P3 gate, under the test's limit of 0.5.
+- Every chapter measured a median of 4.20 ms per frame on both tiers at this display's 240 Hz ceiling, so adaptive resolution needed no change. Phones are measured at P7.
+
+### D-050 Calm mode
+
+- REQ-A11Y-03, REQ-A11Y-04. src/lib/calm-store.ts holds calm for the whole site: the OS setting for reduced motion, or the visitor's choice from the toggle, remembered for the visit in the tab's session storage under portfolio:calm. The OS setting always wins; the toggle can only add calm.
+- The toggle sits at the end of the bar as a button named "Calm" with aria-pressed and a shape that changes with its state, so colour is never the only signal. Under the OS setting it stays pressed, with the hidden description "Your device asks for reduced motion, so calm stays on." A click always asks for the opposite of what the button shows. The bar's end group wraps on narrow screens.
+- In calm the field shows one still per chapter and per study, each at its fullest (the dot, the whole mark, each whole shape, the sheet, the wave, the settled field), drawn again only when the chapter or the study changes. The engine reads calm from the store instead of its own media query.
+
+### D-051 Smooth scroll
+
+- REQ-SCR-02, REQ-SCR-03, REQ-PERF-04. Lenis runs only with a fine primary pointer and calm off, watched live, and is created after first content; a browser that cannot answer the pointer query keeps native scroll. It uses the GSAP wiring from its README: GSAP's ticker drives Lenis and each Lenis scroll updates ScrollTrigger, so no third frame loop is added. The engine keeps its own frame loop.
+- One option departs from the defaults: stopInertiaOnNavigate. Without it, a wheel scroll still gliding when a study link was clicked carried on after the router had put the new page at the top, and the study page landed at its bottom.
+- When Lenis goes, GSAP's lag smoothing is set back to its defaults (500 and 33 ms). A failed import leaves native scroll and is tried again on the next change of calm or pointer.
+- Lenis has no key listener, so the keyboard always scrolls natively. P5's palette navigates from code, which this option does not cover; it will need its own reset.
+
+### D-052 Stirring the field
+
+- REQ-SCR-06. The pointer reaches the field only on field routes, with calm off and a GPU tier. Moves are sent at most once per frame and a release at once. Touch is read from passive touch events on the window, never pointer events, because pointer events stop as soon as a finger scrolls the page; nothing calls preventDefault and touch-action is unchanged, so scrolling stays native. A headed touch test dragged 200 px, scrolled the page 185 px and stirred the field. A real phone is checked at P7.
+
+### D-053 Title reveals
+
+- REQ-SCR-05, REQ-A11Y-03. Only the Work, About and Contact titles are revealed, once, word by word with SplitText: 0.8 s, power3.out, 0.08 s between words, starting when the title is 85% down the viewport. A title already on screen at load is left alone. The hero headline and the chapter labels are never animated, since they are first content.
+- In calm the whole title fades in over 0.3 s with no split, switching live with the toggle.
+- Every function given to gsap.context is wrapped so it cannot throw, because gsap 3.15.1 leaves a failed context current. Teardown on leaving the page reverts the context, kills every trigger, reverts every split and removes every listener; a jsdom test with real GSAP counts 14 triggers while running and none after.
+
+### D-054 Chapter lengths
+
+- REQ-SCR-01. The storyboard puts the chapters at about 0, 10, 30, 55, 75 and 90% of the scroll. With the first heights, making-of started at 68.9% and about at 82.3%. Section heights are now: bloom 175svh, making-of 185svh, about 140svh, contact 120svh with its words at the bottom; work keeps its cards with 20svh of room under each.
+- Measured starts: 0, 10.3, 28.7, 56.4, 75.8 and 90.4% at 1280 x 800, and 0, 11.2, 29.2, 56.6, 75.7 and 90.2% at 375 x 812. The home page is about 10.6 screens long at 1280 x 800. The gate fails a chapter that drifts more than 5 points from its share.
+
+### D-055 The budget after P3
+
+- REQ-PERF-04, REQ-PERF-05. The budget check found ScrollTrigger in the first load of every route, wrongly: the layout's code keeps the property name ScrollTrigger after minification even though the library arrives later by dynamic import. The check now looks for strings only the library contains ("pin-spacer" and "registerPlugin(ScrollTrigger)"), checked against the package files and the built chunk, with two unit tests.
+- First load after P3: 139.6 KB on / and 138.2 KB on the other pages. The three.js chunk, which now also holds the shapes and the choreography, is 226.0 KB gzip; tiers 1 and 2 load 228.7 KB.
+- The budget result file is written once per day of gates, so docs/results/2026-11-10-budget.md now holds the P3 figures; P2's figures from the same day are in its commit.
+
+### D-056 Contrast with the story
+
+- REQ-A11Y-06. Text over formed shapes is measured headed, 12 frames each, with the veil at 70%: the mark, two work shapes, the sheet and the wave on tier 1 and tier 2 at 1280 and on tier 2 touch at 375. Each text colour is compared with the brightest pixel inside its own boxes; text on cards or other filled surfaces and visually hidden text are left out. Worst figures in the P3 gate: muted text 5.50 to 1 over the making-of sheet on tier 2 at 375 x 812, body text 12.29 to 1 over a work shape on tier 2 at 1280 x 800.
+- The hero case keeps P2's method. Its muted figure is now 4.59 to 1, because the hero's dot sits inside the headline's box; it passes, with less room than P2's 5.21. Where the dot sits is on the design review list.
+
+### D-057 Testing the story
+
+- The gate gains e2e/story.spec.ts: chapter starts on the natural tier and forced tier 3, a wheel that moves exactly its own distance with nothing pinned or snapped, Lenis on desktop only and gone with calm, the story torn down and rebuilt across / to /work and back, calm stills, the toggle, keys and focus with Lenis running, and axe at the top and after every chapter. The keyboard test, added after the review, tabs through the bar to Calm, turns it on with Enter and off with Space, pages down into the work chapter and presses End to reach contact with the wrapper following, and tabs into every study, each fully in view and whole; Lenis sees the key scrolls as native ones and never animates them. Its keys, and the wheel test's wheel, wait until the field is shown: in a gate run of many browsers on one GPU, a Page Down pressed while the tier 1 probe drew sometimes did nothing, and a wheel glide counted too few positions. The reduced-motion test in e2e/engine.spec.ts now expects the hero still to be the dot, then checks the contact still for the lit field.
+- No browser check counts live ScrollTriggers, because GSAP is not on window in the production build; the route test checks the story's behaviour instead (one write per chapter change, none on /work, the title split once on return).
+- The headed suite gains e2e/headed/story.spec.ts (a frame-rate test per chapter, the mark forming and dissolving, cursor stirring with calm stopping it, and touch stirring) and e2e/gpu/story.spec.ts on the development page. Stirring is measured as the light at the pointer against four control boxes, which cancels the field's own drift.
+- The per-chapter frame-rate test holds the median line and fails on any frame of 4 display intervals or more, instead of P2's rule that 95% of promised frames arrive. On the production home page at 240 Hz, frames sitting at the edge of one interval failed the 95% rule in 3 of 5 runs while every median was 4.20 to 4.30 ms. The P2 tests keep the 95% rule.
+- pnpm e2e:gpu takes about 9.9 minutes, so it is run in two parts under the 10 minute command limit: the story and home field files, then the contrast and probe files.
+- The formed-state contrast loop marks each state as text or field only. A text state must find at least one text box, so a broken selector fails; a field-only state (bloom 0.6, making-of 0.5) must find none, so the mark cannot go stale.
+
+### D-058 The probe measures the ambient field
+
+- REQ-TIER-01, REQ-PERF-06. Found in the P3 review: the engine handed the page's story to a runtime as soon as it was built, so the tier 1 probe timed whatever chapter the page was on. In the hero only the dot's 400 particles draw, so a landing at the top timed the compute pass and 400 sprites and could pass a GPU that cannot carry the whole field; a reload inside a dense formation leaned the other way.
+- The controller now hands the story and the pointer to a field only when its tier is adopted, keeping the latest values until then. The probe's runtime hears neither, so it draws the ambient field at the real count, the load the probe judges. A runtime seats the first story it hears with one reseat step even after it has run, and the probed canvas stays hidden until tier 1 has drawn its first frame there, which is also when ready is sent, so a visitor never sees the ambient field gather into the dot.
+- Tier 2, forced tiers, a lost device and calm keep their order: the story reaches the runtime before it runs. A runtime that throws while it is handed the story takes the lost-device path. On the development page a field started with no chapter now starts on the first chapter chosen instead of gliding into it. The engine contract in src/engine/types.ts is unchanged. Four unit tests citing REQ-TIER-01 fail on the earlier code.
+
+### D-059 The bloom line follows the tier
+
+- REQ-SCR-01, REQ-CNT-01, rule A14. Decided by T7SEN on 10 Nov 2026, after the review asked about the line on tier 3: work like the hero headline. The static HTML carries "On a capable device, one field becomes every project on this site.", which is true on every tier, and the approved line replaces it only while a tier 1 or 2 field is on screen, chosen and drawn; the first line returns while a tier changes and if it drops to 3.
+- The section stays a server component. A small client island, src/components/home/bloom-line.tsx, reads the tier store; both lines reach it as props, because src/content/story.ts imports the study index and would bring every study's text into the client bundle. The other line is held in a hidden ::before in the same grid cell, so the cell keeps the height of the longer line at any width and the label above it never moves.
+
+### D-060 The smooth scroll loads without SplitText
+
+- REQ-PERF-04. Found in the P3 review: the smooth scroll loaded GSAP through the story's loader, which also imports SplitText, so every desktop route downloaded SplitText after first content although only the home page's story uses it. src/lib/load-motion.ts now has loadScrollTrigger (gsap and ScrollTrigger), which the smooth scroll uses; loadMotion calls it and adds SplitText, so both share one gsap and one ScrollTrigger. A unit test with the pinned GSAP checks that loadScrollTrigger never loads SplitText.

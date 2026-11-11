@@ -10,6 +10,7 @@ import { pages } from "../src/content/pages";
 import { services } from "../src/content/services";
 import { pixelStats } from "./gpu/pixels";
 import { expectNoAxeViolations } from "./support/axe";
+import { goToChapter, waitForStory } from "./support/story";
 import {
   afterTwoFrames,
   asTier2,
@@ -619,7 +620,26 @@ test("REQ-ENG-07 the field stops reporting frames while the document is hidden a
   await expect(page.locator(FIELD)).toHaveAttribute("data-tier", "2");
 });
 
-test("REQ-A11Y-03 with reduced motion the field draws one still frame and reports no frames", async ({
+/**
+ * Screenshots the page until two taken 600 ms apart are byte-identical, at
+ * most five pairs. Under load the first capture can still show the frame
+ * from before a change, so the pair is taken again until it matches.
+ */
+async function stillScreenshot(page: Page) {
+  let frame = await page.screenshot();
+  let pairs = 0;
+  let identical = false;
+  while (!identical && pairs < 5) {
+    await page.waitForTimeout(600);
+    const next = await page.screenshot();
+    identical = frame.equals(next);
+    frame = next;
+    pairs += 1;
+  }
+  return { frame, pairs, identical };
+}
+
+test("REQ-A11Y-03 with reduced motion the field draws one still frame per chapter and reports no frames", async ({
   page,
 }, testInfo) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -634,9 +654,12 @@ test("REQ-A11Y-03 with reduced motion the field draws one still frame and report
   expect(await frameRateEvents(page, QUIET_MS)).toBe(0);
   expect(await page.locator(FIELD).getAttribute("data-fps")).toBeNull();
   await expectHomeContent(page);
+  // The story takes the field from chapter to chapter below.
+  await waitForStory(page);
 
   // The field alone, at full strength: the page text and the veil would
-  // hide whether anything was drawn.
+  // hide whether anything was drawn. Hidden, the text keeps its layout, so
+  // the page still scrolls through the chapters.
   await page.addStyleTag({
     content: "header, main, footer { visibility: hidden !important; }",
   });
@@ -650,32 +673,54 @@ test("REQ-A11Y-03 with reduced motion the field draws one still frame and report
     "0",
   );
 
-  // A frozen field gives the same screenshot twice; a moving one never does.
-  // Under load the first capture can still show the frame from before the
-  // style change, so the pair is taken again until it matches.
-  let frame = await page.screenshot();
-  let pairs = 0;
-  let identical = false;
-  while (!identical && pairs < 5) {
-    await page.waitForTimeout(600);
-    const next = await page.screenshot();
-    identical = frame.equals(next);
-    frame = next;
-    pairs += 1;
-  }
+  // The hero's still is the storyboard's first frame: one dot at the centre
+  // of a black field (P3). The box is a tenth of the field's height across,
+  // in screenshot pixels.
+  const hero = await stillScreenshot(page);
+  await writeFile(testInfo.outputPath("calm-still-hero.png"), hero.frame);
+  const host = await page.locator(HOST).boundingBox();
+  if (host === null) throw new Error("The field's host has no box");
+  const scale = await page.evaluate(() => window.devicePixelRatio);
+  const half = 0.05 * host.height * scale;
+  const centre = {
+    x: (host.x + host.width / 2) * scale - half,
+    y: (host.y + host.height / 2) * scale - half,
+    width: 2 * half,
+    height: 2 * half,
+  };
+  const whole = await pixelStats(page, hero.frame);
+  const dot = await pixelStats(page, hero.frame, [centre]);
+  const litPixels = whole.litShare * whole.pixels;
+  const inCentre =
+    litPixels === 0 ? 0 : (dot.litShare * dot.pixels) / litPixels;
+  const heroLine =
+    `calm-still ${testInfo.project.name} hero: ${Math.round(litPixels)} lit pixels, ` +
+    `${inCentre.toFixed(4)} of them in the centre box, brightest ${whole.brightest}, ` +
+    `two identical screenshots after ${hero.pairs} pairs: ${hero.identical}`;
+  console.log(heroLine);
+  testInfo.annotations.push({ type: "calm-still", description: heroLine });
 
-  await writeFile(testInfo.outputPath("calm-still.png"), frame);
-  const stats = await pixelStats(page, frame);
+  expect(hero.identical, "nothing moves in the hero's still").toBe(true);
+  expect(litPixels, "the dot is drawn").toBeGreaterThan(20);
+  expect(inCentre, "the light is the dot at the centre").toBeGreaterThan(0.95);
+
+  // A new chapter while calm: the field settles into that chapter's still
+  // and draws it once. Contact is the field at rest across the frame.
+  await goToChapter(page, "contact");
+  const contact = await stillScreenshot(page);
+  await writeFile(testInfo.outputPath("calm-still.png"), contact.frame);
+  const stats = await pixelStats(page, contact.frame);
   const line =
     `calm-still ${testInfo.project.name}: lit share ${stats.litShare.toFixed(4)}, ` +
-    `brightest ${stats.brightest}, two identical screenshots after ${pairs} pairs: ${identical}`;
+    `brightest ${stats.brightest}, two identical screenshots after ${contact.pairs} pairs: ${contact.identical}`;
   console.log(line);
   testInfo.annotations.push({ type: "calm-still", description: line });
 
-  expect(identical, "nothing moves between two screenshots").toBe(true);
+  expect(contact.identical, "nothing moves between two screenshots").toBe(true);
   expect(stats.litShare, "the still frame shows the field").toBeGreaterThan(
     0.2,
   );
+  expect(await frameRateEvents(page, QUIET_MS)).toBe(0);
 });
 
 for (const { name, force, tier } of [

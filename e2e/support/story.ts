@@ -1,0 +1,424 @@
+import { expect, type Page } from "@playwright/test";
+
+import { chapterOrder } from "../../src/content/story";
+import type { ChapterId } from "../../src/engine/types";
+import { FIELD } from "./tiers";
+
+// Helpers for the home page's scroll story (REQ-SCR-01 to 07), shared by the
+// gate (e2e/story.spec.ts) and the headed specs (e2e/headed/).
+
+export { chapterOrder };
+
+/**
+ * Where the storyboard puts each chapter, as a share of the scroll
+ * (REQ-SCR-01; scroll-and-motion.md section 5).
+ */
+export const STORYBOARD_SHARE: Record<ChapterId, number> = {
+  hero: 0,
+  bloom: 0.1,
+  work: 0.3,
+  "making-of": 0.55,
+  about: 0.75,
+  contact: 0.9,
+};
+
+// The story loads GSAP after first content (REQ-PERF-04). In the gate many
+// workers share the CPU, so this is generous; a story that never starts
+// still fails.
+export const STORY_TIMEOUT_MS = 45_000;
+
+/** A place in the story: a chapter and a progress, or a study card. */
+export type StoryPlace =
+  { chapter: ChapterId; progress: number } | { step: number; local?: number };
+
+/**
+ * Waits until the story runner has started. It marks the first chapter
+ * title below the fold as it starts: split into words with an aria-label
+ * (motion), or set to fade in with an inline opacity (calm and reduced
+ * motion). Load the page at the top before calling it.
+ */
+export async function waitForStory(page: Page): Promise<"split" | "fade"> {
+  const handle = await page.waitForFunction(
+    () => {
+      const title = document.querySelector<HTMLElement>(
+        "main [data-story-title]",
+      );
+      if (title === null) return null;
+      if (title.hasAttribute("aria-label")) return "split";
+      if (title.style.opacity !== "") return "fade";
+      return null;
+    },
+    undefined,
+    { timeout: STORY_TIMEOUT_MS },
+  );
+  return (await handle.jsonValue()) as "split" | "fade";
+}
+
+/** html carries this class while Lenis drives the page. */
+export const LENIS_CLASS = /(?:^|\s)lenis(?:\s|$)/;
+
+/** The calm-mode toggle in the bar (REQ-A11Y-04). */
+export function calmToggle(page: Page) {
+  return page
+    .getByRole("banner")
+    .getByRole("button", { name: "Calm", exact: true });
+}
+
+/** Whether Lenis drives the page now: it puts its class on html. */
+export function hasLenis(page: Page): Promise<boolean> {
+  return page.evaluate(() =>
+    document.documentElement.classList.contains("lenis"),
+  );
+}
+
+/**
+ * Whether a Lenis instance was ever made in this document. The constructor
+ * sets window.lenisVersion, and destroy() leaves it (lenis 1.3.27,
+ * dist/lenis.mjs line 435 and destroy() from line 493).
+ */
+export function lenisWasMade(page: Page): Promise<boolean> {
+  return page.evaluate(() => "lenisVersion" in window);
+}
+
+/**
+ * The scroll position, clamped to the page, at which the place sits at the
+ * middle of the viewport. A chapter's progress is 0 when its section's top
+ * reaches the middle and 1 when its bottom does (the story to engine
+ * contract); a study card's span is measured the same way.
+ */
+export function scrollPositionOf(page: Page, place: StoryPlace) {
+  return page.evaluate((target) => {
+    const selector =
+      "step" in target
+        ? `main [data-work-step="${target.step}"]`
+        : `main [data-chapter="${target.chapter}"]`;
+    const element = document.querySelector(selector);
+    if (element === null) throw new Error(`Nothing matches ${selector}`);
+    const box = element.getBoundingClientRect();
+    const progress = "step" in target ? (target.local ?? 0.5) : target.progress;
+    const top =
+      box.top + window.scrollY - window.innerHeight / 2 + progress * box.height;
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    return Math.round(Math.min(Math.max(top, 0), max));
+  }, place);
+}
+
+/** Jumps the page to a place in the story and returns the position. */
+export async function scrollToPlace(
+  page: Page,
+  place: StoryPlace,
+): Promise<number> {
+  const top = await scrollPositionOf(page, place);
+  await page.evaluate(
+    (y) => window.scrollTo({ top: y, behavior: "instant" }),
+    top,
+  );
+  return top;
+}
+
+/** The chapter the field's wrapper mirrors. */
+export function fieldChapter(page: Page): Promise<string | null> {
+  return page.locator(FIELD).getAttribute("data-chapter");
+}
+
+/** Jumps to the middle of a chapter and waits for the field to follow. */
+export async function goToChapter(
+  page: Page,
+  chapter: ChapterId,
+  progress = 0.5,
+): Promise<number> {
+  const top = await scrollToPlace(page, { chapter, progress });
+  await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", chapter);
+  return top;
+}
+
+export interface ChapterStart {
+  chapter: ChapterId;
+  /** Scroll position at which the section's top reaches the middle. */
+  start: number;
+  /** That position as a share of the page's scroll range, 0 to 1. */
+  share: number;
+}
+
+/**
+ * Where each chapter starts, as the story sees it: the scroll position at
+ * which its section's top reaches the middle of the viewport, as a share of
+ * the page's scroll range (the method of the P3 integration's figures).
+ */
+export function chapterStarts(page: Page): Promise<ChapterStart[]> {
+  return page.evaluate(() => {
+    const max = document.documentElement.scrollHeight - window.innerHeight;
+    return [
+      ...document.querySelectorAll<HTMLElement>("main [data-chapter]"),
+    ].map((section) => {
+      const box = section.getBoundingClientRect();
+      const start = Math.max(
+        box.top + window.scrollY - window.innerHeight / 2,
+        0,
+      );
+      return {
+        chapter: section.dataset.chapter as ChapterId,
+        start: Math.round(start),
+        share: max > 0 ? start / max : 0,
+      };
+    });
+  });
+}
+
+/**
+ * Starts recording every value written to the wrapper's data-chapter. Read
+ * the writes with readChapterWrites.
+ */
+export async function recordChapterWrites(page: Page): Promise<void> {
+  await page.evaluate((selector) => {
+    const element = document.querySelector<HTMLElement>(selector);
+    if (element === null) throw new Error(`Nothing matches ${selector}`);
+    const writes: string[] = [];
+    const observer = new MutationObserver((records) => {
+      // Each record holds the value before its write, so the value a write
+      // left is the old value of the next record, or the current one.
+      records.forEach((_record, index) => {
+        const next = records[index + 1];
+        writes.push(
+          (next === undefined ? element.dataset.chapter : next.oldValue) ??
+            "(removed)",
+        );
+      });
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ["data-chapter"],
+      attributeOldValue: true,
+    });
+    Object.assign(window, {
+      chapterWrites: { writes, stop: () => observer.disconnect() },
+    });
+  }, FIELD);
+}
+
+/** Stops the recording and returns the values written, in order. */
+export function readChapterWrites(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const record = (
+      window as unknown as {
+        chapterWrites?: { writes: string[]; stop: () => void };
+      }
+    ).chapterWrites;
+    if (record === undefined) throw new Error("No recording was started");
+    record.stop();
+    return [...record.writes];
+  });
+}
+
+/**
+ * Samples the scroll position on every frame for the given time and returns
+ * every distinct position seen. A page that pins or snaps moves on its own.
+ */
+export function scrollPositionsFor(page: Page, ms: number): Promise<number[]> {
+  return page.evaluate(
+    (wait) =>
+      new Promise<number[]>((resolve) => {
+        const positions = [window.scrollY];
+        const start = performance.now();
+        const tick = (now: number) => {
+          if (window.scrollY !== positions.at(-1))
+            positions.push(window.scrollY);
+          if (now - start >= wait) resolve(positions);
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    ms,
+  );
+}
+
+export type ScrollRestOptions = {
+  from?: number;
+  quietMs?: number;
+  timeoutMs?: number;
+};
+
+/**
+ * Waits until the scroll position has stopped changing for quietMs and
+ * returns every distinct position seen on the way; the last is where the
+ * page rests. Given `from`, the position before a key was pressed, it first
+ * waits for the page to leave it, so a scroll that has not begun yet is not
+ * taken for rest. Gives up after timeoutMs.
+ */
+export function scrollAtRest(
+  page: Page,
+  { from, quietMs = 400, timeoutMs = 5_000 }: ScrollRestOptions = {},
+): Promise<number[]> {
+  return page.evaluate(
+    ({ from, quietMs, timeoutMs }) =>
+      new Promise<number[]>((resolve) => {
+        const positions = [window.scrollY];
+        const start = performance.now();
+        let changedAt = start;
+        let moved = from === null || window.scrollY !== from;
+        const tick = (now: number) => {
+          if (window.scrollY !== positions.at(-1)) {
+            positions.push(window.scrollY);
+            changedAt = now;
+            moved ||= window.scrollY !== from;
+          }
+          const rested = moved && now - changedAt >= quietMs;
+          if (rested || now - start >= timeoutMs) resolve(positions);
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    { from: from ?? null, quietMs, timeoutMs },
+  );
+}
+
+/**
+ * The chapter the story gives the current scroll position, read from the
+ * layout as story-progress.ts reads it: the last chapter whose top has
+ * reached the middle of the viewport. The services block after the hero is
+ * not a chapter, so it counts as the hero.
+ */
+export function chapterInLayout(page: Page): Promise<ChapterId> {
+  return page.evaluate(() => {
+    let current = "hero";
+    for (const section of document.querySelectorAll<HTMLElement>(
+      "main [data-chapter]",
+    )) {
+      const top = section.getBoundingClientRect().top;
+      if (top <= window.innerHeight / 2) {
+        current = section.dataset.chapter ?? current;
+      }
+    }
+    return current as ChapterId;
+  });
+}
+
+/**
+ * Starts recording every class Lenis puts on html. Lenis marks a scroll it
+ * watches with lenis-scrolling, and one it animates itself with lenis-smooth
+ * (lenis 1.3.27, dist/lenis.mjs, the className getter from line 1039). Read
+ * them with readLenisClasses.
+ */
+export async function recordLenisClasses(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const root = document.documentElement;
+    const seen = new Set<string>();
+    const note = () => {
+      for (const name of root.classList) {
+        if (name === "lenis" || name.startsWith("lenis-")) seen.add(name);
+      }
+    };
+    note();
+    const observer = new MutationObserver(note);
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
+    Object.assign(window, {
+      lenisClasses: { seen, stop: () => observer.disconnect() },
+    });
+  });
+}
+
+/** Stops the recording and returns every Lenis class seen on html. */
+export function readLenisClasses(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const record = (
+      window as unknown as {
+        lenisClasses?: { seen: Set<string>; stop: () => void };
+      }
+    ).lenisClasses;
+    if (record === undefined) throw new Error("No recording was started");
+    record.stop();
+    return [...record.seen].sort();
+  });
+}
+
+export interface FocusedView {
+  /** The focused element's box, in CSS px from the viewport's top start. */
+  top: number;
+  bottom: number;
+  left: number;
+  right: number;
+  /** The viewport, without its scrollbar. */
+  viewWidth: number;
+  viewHeight: number;
+  scrollY: number;
+  /**
+   * The focused element, its ancestors and its contents wherever they are
+   * drawn below full opacity or not drawn at all, such as a word mid reveal.
+   */
+  hiddenParts: string[];
+}
+
+/** Where the focused element sits in the viewport and whether it shows whole. */
+export function focusedView(page: Page): Promise<FocusedView> {
+  return page.evaluate(() => {
+    const focused = document.activeElement;
+    if (!(focused instanceof HTMLElement) || focused === document.body) {
+      throw new Error("Nothing has focus");
+    }
+    const ancestors: Element[] = [];
+    for (
+      let node = focused.parentElement;
+      node !== null;
+      node = node.parentElement
+    ) {
+      ancestors.push(node);
+    }
+    const hiddenParts = [
+      focused,
+      ...ancestors,
+      ...focused.querySelectorAll("*"),
+    ].flatMap((element) => {
+      const style = getComputedStyle(element);
+      return style.opacity !== "1" || style.visibility !== "visible"
+        ? [
+            `${element.tagName.toLowerCase()} "${(element.textContent ?? "").trim().slice(0, 40)}" at opacity ${style.opacity}, ${style.visibility}`,
+          ]
+        : [];
+    });
+    const box = focused.getBoundingClientRect();
+    return {
+      top: box.top,
+      bottom: box.bottom,
+      left: box.left,
+      right: box.right,
+      viewWidth: document.documentElement.clientWidth,
+      viewHeight: window.innerHeight,
+      scrollY: window.scrollY,
+      hiddenParts,
+    };
+  });
+}
+
+/**
+ * The chapter titles the story reveals, with any part of them not fully
+ * shown: the title or a word of its split below opacity 1.
+ */
+export function hiddenTitleParts(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>("main [data-story-title]")]
+      .flatMap((title) => [title, ...title.querySelectorAll<HTMLElement>("*")])
+      .filter((element) => getComputedStyle(element).opacity !== "1")
+      .map(
+        (element) =>
+          `${element.closest("[data-story-title]")?.id ?? "?"}: ${element.tagName.toLowerCase()} "${element.textContent ?? ""}" at opacity ${getComputedStyle(element).opacity}`,
+      ),
+  );
+}
+
+/** Every element positioned fixed or sticky, named by tag and its marks. */
+export function fixedElements(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>("body *")]
+      .filter((element) =>
+        ["fixed", "sticky"].includes(getComputedStyle(element).position),
+      )
+      .map((element) => {
+        const marks = ["id", "data-testid", "href"]
+          .map((name) => [name, element.getAttribute(name)] as const)
+          .filter(([, value]) => value !== null)
+          .map(([name, value]) => `[${name}="${value}"]`)
+          .join("");
+        return `${element.tagName.toLowerCase()}${marks}`;
+      }),
+  );
+}

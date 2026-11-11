@@ -223,3 +223,281 @@ for (const { name, viewport, tier, setup } of CASES) {
     }
   });
 }
+
+// From P3 the field gathers into formations further down the page: the mark
+// in the bloom, a mark per study, the flat sheet and the wave. They pack the
+// particles far more densely than the ambient field, so the text in view at
+// each one is measured too (accessibility.md section 7).
+
+type ColouredBox = Box & { colour: string };
+
+/**
+ * Every piece of text in view that sits straight on the field, with the
+ * colour it is drawn in. Text on a card or a chip has its own surface, so the
+ * field is not behind it; visually hidden scene lines are not drawn at all.
+ */
+async function textOnField(
+  page: Page,
+): Promise<{ boxes: ColouredBox[]; own: number }> {
+  return page.evaluate(() => {
+    const boxes: ColouredBox[] = [];
+    let own = 0;
+    const hex = (rgb: string) => {
+      const parts = rgb.match(/\d+(\.\d+)?/g)?.slice(0, 3) ?? ["0", "0", "0"];
+      return `#${parts
+        .map((part) => Number(part).toString(16).padStart(2, "0"))
+        .join("")}`.toUpperCase();
+    };
+    const filled = (element: Element) => {
+      for (
+        let node: Element | null = element;
+        node !== null && node !== document.body;
+        node = node.parentElement
+      ) {
+        const fill = getComputedStyle(node).backgroundColor;
+        if (fill !== "rgba(0, 0, 0, 0)" && fill !== "transparent") return true;
+      }
+      return false;
+    };
+    const elements = document.querySelectorAll(
+      "header :is(a, button), main :is(h1, h2, h3, p, a, li, span)",
+    );
+    for (const element of elements) {
+      if (element.closest(".sr-only, [hidden], [aria-hidden='true']")) {
+        continue;
+      }
+      const box = element.getBoundingClientRect();
+      const inView =
+        box.width > 2 &&
+        box.height > 2 &&
+        box.bottom > 0 &&
+        box.top < window.innerHeight;
+      if (!inView || (element.textContent ?? "").trim() === "") continue;
+      if (filled(element)) {
+        own += 1;
+        continue;
+      }
+      boxes.push({
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        colour: hex(getComputedStyle(element).color),
+      });
+    }
+    return { boxes, own };
+  });
+}
+
+const CHAPTER_CASES = [
+  {
+    name: "tier 1 at 1280 x 800",
+    viewport: { width: 1280, height: 800 },
+    tier: 1,
+    setup: "none",
+  },
+  {
+    name: "tier 2 at 1280 x 800",
+    viewport: { width: 1280, height: 800 },
+    tier: 2,
+    setup: "no-webgpu",
+  },
+  {
+    name: "tier 2 on a touch screen at 375 x 812",
+    viewport: { width: 375, height: 812 },
+    tier: 2,
+    setup: "touch",
+  },
+] as const;
+
+// Where each formation is whole, as a scroll position: a chapter's progress
+// through its section, or the middle of a study card.
+// The bloom and making-of words sit at the bottom of their sections, so they
+// come into view late in the chapter: 0.75 and 0.8 catch them over the
+// dissolving mark and the sheet that still holds.
+// text says whether words are in view there. A text state must find at least
+// one box to measure, so a broken selector fails instead of passing on
+// nothing. At bloom 0.6 and making-of 0.5 only the field is in view: those
+// states check that the story reached the formation and that no text sits
+// over it, and a box found there fails too, so the flag cannot go stale.
+const FORMED_STATES = [
+  {
+    name: "bloom 0.6, the mark",
+    chapter: "bloom",
+    progress: 0.6,
+    text: false,
+  },
+  {
+    name: "bloom 0.75, the mark letting go",
+    chapter: "bloom",
+    progress: 0.75,
+    text: true,
+  },
+  { name: "work, the coup-online mark", step: 1, text: true },
+  { name: "work, the archelab mark", step: 2, text: true },
+  {
+    name: "making-of 0.5, the sheet",
+    chapter: "making-of",
+    progress: 0.5,
+    text: false,
+  },
+  {
+    name: "making-of 0.8, the sheet",
+    chapter: "making-of",
+    progress: 0.8,
+    text: true,
+  },
+  { name: "about 0.3, the wave", chapter: "about", progress: 0.3, text: true },
+  { name: "about 0.5, the wave", chapter: "about", progress: 0.5, text: true },
+] as const;
+
+// The field needs about a second and a half to gather after a jump.
+const FORMED_SETTLE_MS = 3_000;
+
+for (const { name, viewport, tier, setup } of CHAPTER_CASES) {
+  test(`REQ-A11Y-06 REQ-SCR-07 chapter text over the formed field keeps 4.5 to 1: ${name}`, async ({
+    browser,
+    baseURL,
+  }) => {
+    test.setTimeout(120_000 + FORMED_STATES.length * FRAMES * 2_000);
+    const context = await browser.newContext({
+      baseURL,
+      ...(setup === "touch"
+        ? { ...devices["Pixel 5"], deviceScaleFactor: 1 }
+        : {}),
+      viewport,
+    });
+    const page = await context.newPage();
+    try {
+      if (setup === "no-webgpu") {
+        await page.addInitScript(() => {
+          Reflect.deleteProperty(Navigator.prototype, "gpu");
+        });
+      }
+
+      await page.goto("/");
+      const field = page.locator(FIELD);
+      await expect(field).toHaveAttribute("data-ready", "true", {
+        timeout: 90_000,
+      });
+      const reason = await field.getAttribute("data-tier-reason");
+      test.skip(
+        (await field.getAttribute("data-tier")) !== String(tier),
+        `This machine gave tier ${await field.getAttribute("data-tier")} (${reason}), not tier ${tier}`,
+      );
+      await expect(field).toHaveCSS("opacity", "1");
+      const shipped = Number(
+        await field.evaluate((element) =>
+          getComputedStyle(element).getPropertyValue("--field-veil"),
+        ),
+      );
+
+      const results: Array<{ state: string; worst: number }> = [];
+      for (const state of FORMED_STATES) {
+        const top = await page.evaluate((target) => {
+          const middle = window.innerHeight / 2;
+          const element =
+            "step" in target
+              ? document.querySelector(`main [data-work-step="${target.step}"]`)
+              : document.querySelector(
+                  `main [data-chapter="${target.chapter}"]`,
+                );
+          if (element === null)
+            throw new Error(`No element for ${target.name}`);
+          const box = element.getBoundingClientRect();
+          const progress = "step" in target ? 0.5 : target.progress;
+          return box.top + window.scrollY - middle + progress * box.height;
+        }, state);
+        await page.evaluate(
+          (y) => window.scrollTo({ top: y, behavior: "instant" }),
+          top,
+        );
+        await page.waitForTimeout(FORMED_SETTLE_MS);
+        const chapter = await field.getAttribute("data-chapter");
+        const { boxes, own } = await textOnField(page);
+
+        const colours = [...new Set(boxes.map((box) => box.colour))];
+        const brightest = new Map<string, { luminance: number; hex: string }>();
+        // A state with no text in view has nothing to measure.
+        const frames = boxes.length > 0 ? FRAMES : 0;
+        const hidden = await page.addStyleTag({
+          content: "header, main, footer { visibility: hidden !important; }",
+        });
+        for (let frame = 0; frame < frames; frame += 1) {
+          await page.waitForTimeout(FRAME_GAP_MS);
+          const png = await page.screenshot();
+          for (const colour of colours) {
+            const stats = await pixelStats(
+              page,
+              png,
+              boxes.filter((box) => box.colour === colour),
+            );
+            const seen = brightest.get(colour);
+            if (seen === undefined || stats.maxLuminance >= seen.luminance) {
+              brightest.set(colour, {
+                luminance: stats.maxLuminance,
+                hex: stats.brightest,
+              });
+            }
+          }
+        }
+        await hidden.evaluate((element) =>
+          element.parentNode?.removeChild(element),
+        );
+
+        // Every colour against the brightest pixel behind its own boxes.
+        const ratios = colours.map((colour) => {
+          const behind = brightest.get(colour);
+          return {
+            colour,
+            boxes: boxes.filter((box) => box.colour === colour).length,
+            behind: behind?.hex ?? "none",
+            ratio: contrast(colour, behind?.luminance ?? 0),
+          };
+        });
+        if (ratios.length > 0) {
+          results.push({
+            state: state.name,
+            worst: Math.min(...ratios.map(({ ratio }) => ratio)),
+          });
+        }
+        console.log(
+          `contrast chapters ${name} (${reason}) veil ${shipped} ${state.name} ` +
+            `(field chapter ${chapter}, scroll ${Math.round(top)}, ` +
+            `${state.text ? "a text state" : "a field-only state"}): ` +
+            `${boxes.length} text boxes over ${frames} frames` +
+            (own > 0 ? `, ${own} on their own surface left out` : "") +
+            "; " +
+            (ratios.length > 0
+              ? ratios
+                  .map(
+                    ({ colour, boxes: count, behind, ratio }) =>
+                      `${colour} x${count} over ${behind} ${ratio.toFixed(2)} to 1`,
+                  )
+                  .join(", ")
+              : "nothing to measure"),
+        );
+        expect(chapter, `the story reached ${state.name}`).toBe(
+          "step" in state ? "work" : state.chapter,
+        );
+        if (state.text) {
+          expect(
+            boxes.length,
+            `${state.name} is a text state: text in view to measure`,
+          ).toBeGreaterThan(0);
+        } else {
+          expect(
+            boxes.length,
+            `${state.name} is a field-only state: text in view there needs the flag text: true`,
+          ).toBe(0);
+        }
+      }
+
+      for (const { state, worst } of results) {
+        expect(worst, state).toBeGreaterThanOrEqual(MINIMUM);
+      }
+    } finally {
+      await context.close();
+    }
+  });
+}

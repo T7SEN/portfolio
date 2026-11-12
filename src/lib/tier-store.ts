@@ -1,4 +1,4 @@
-import type { EngineEvent, Tier, TierReason } from "@/engine/types";
+import type { EngineEvent, FieldLook, Tier, TierReason } from "@/engine/types";
 
 export type TierSnapshot = {
   /** Null until the engine has chosen a tier. */
@@ -8,6 +8,11 @@ export type TierSnapshot = {
   ready: boolean;
   /** Particles the live field draws, from its ready event; null until then. */
   particles: number | null;
+  /**
+   * How the live field draws, from its ready event; null until then and on
+   * tier 3. The making-of draws its live passes only on the halftone.
+   */
+  look: FieldLook | null;
 };
 
 export type TierStore = {
@@ -25,6 +30,7 @@ const INITIAL: TierSnapshot = Object.freeze({
   reason: null,
   ready: false,
   particles: null,
+  look: null,
 });
 
 // A plain store with no React import, read through useSyncExternalStore. The
@@ -58,9 +64,15 @@ export function createTierStore(): TierStore {
           reason: event.reason,
           ready: false,
           particles: null,
+          look: null,
         });
       } else if (event.type === "ready" && !snapshot.ready) {
-        set({ ...snapshot, ready: true, particles: event.particles });
+        set({
+          ...snapshot,
+          ready: true,
+          particles: event.particles,
+          look: event.look ?? null,
+        });
       }
     },
 

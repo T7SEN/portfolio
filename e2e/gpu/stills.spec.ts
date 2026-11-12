@@ -4,21 +4,25 @@ import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
 import { FIELD_STILLS } from "../../src/components/home/field-stills";
-import { WORK_SHAPES } from "../../src/engine/story";
+import { PASS_STILLS } from "../../src/components/home/pass-stills";
+import { PASSES, WORK_SHAPES } from "../../src/engine/story";
 import { packAtlas } from "../../src/engine/runtime/atlas";
 import {
+  SHEET_FIT,
   bloomStage,
   calmProgress,
   fitScale,
   stagedFrame,
 } from "../../src/engine/runtime/story";
+import { compareImages } from "./cards";
 import { readSurface, watchErrors } from "./frame-times";
 import { pixelStats } from "./pixels";
 
 // Captures the tier 3 pictures from the settled tier 1 field (REQ-TIER-03):
 // the field stills behind the whole page, one still of each full study's
-// shape for its frame on the home page, and the field chapter's wordmark,
-// wide and tall. They are written into public/still, so they run only when
+// shape for its frame on the home page, the field chapter's wordmark, wide
+// and tall, and one still of each making-of pass for its card. They are
+// written into public/still, so they run only when
 // asked:
 //   CAPTURE_STILLS=1 pnpm exec playwright test --config playwright.engine.config.ts stills
 // STILLS_DIR writes them elsewhere instead, to look at a capture before it
@@ -79,6 +83,7 @@ async function encodeWebp(
   png: Buffer,
   targetBytes: number,
   type: "image/webp" | "image/jpeg" = "image/webp",
+  qualities: readonly number[] = QUALITIES,
 ): Promise<Encoded> {
   const result = await page.evaluate(
     async ({ data, qualities, target, type }) => {
@@ -146,7 +151,7 @@ async function encodeWebp(
     },
     {
       data: png.toString("base64"),
-      qualities: QUALITIES,
+      qualities,
       target: targetBytes,
       type,
     },
@@ -156,6 +161,59 @@ async function encodeWebp(
     quality: result.quality,
     psnr: result.psnr,
   };
+}
+
+/**
+ * The middle of the making-of sheet, the frame's own shape at SHEET_FIT of
+ * it round its centre, at the given size's width over height: the sheet's
+ * full height where the sheet is wider than that. Drawn down to the size
+ * with the browser's best filter. It is the part of the frame a pass card
+ * shows (the engine's sheetCrop in runtime/pass-rules.ts). Returned as a
+ * lossless PNG.
+ */
+async function fitStill(
+  page: Page,
+  png: Buffer,
+  size: { width: number; height: number },
+): Promise<Buffer> {
+  const data = await page.evaluate(
+    async ({ source, width, height, fit }) => {
+      const bytes = Uint8Array.from(atob(source), (char) => char.charCodeAt(0));
+      const bitmap = await createImageBitmap(
+        new Blob([bytes], { type: "image/png" }),
+      );
+      const aspect = width / height;
+      const cropWidth = Math.min(
+        bitmap.width * fit,
+        bitmap.height * fit * aspect,
+      );
+      const cropHeight = cropWidth / aspect;
+      const canvas = new OffscreenCanvas(width, height);
+      const context = canvas.getContext("2d");
+      if (context === null) throw new Error("No 2D context to draw with");
+      context.imageSmoothingEnabled = true;
+      context.imageSmoothingQuality = "high";
+      context.drawImage(
+        bitmap,
+        (bitmap.width - cropWidth) / 2,
+        (bitmap.height - cropHeight) / 2,
+        cropWidth,
+        cropHeight,
+        0,
+        0,
+        width,
+        height,
+      );
+      const blob = await canvas.convertToBlob({ type: "image/png" });
+      let binary = "";
+      for (const byte of new Uint8Array(await blob.arrayBuffer())) {
+        binary += String.fromCharCode(byte);
+      }
+      return btoa(binary);
+    },
+    { source: png.toString("base64"), ...size, fit: SHEET_FIT },
+  );
+  return Buffer.from(data, "base64");
 }
 
 function expectWebp(bytes: Buffer) {
@@ -409,4 +467,129 @@ test.describe("the study stills", () => {
       expect(errors).toEqual([]);
     });
   }
+});
+
+// The making-of pass stills (REQ-ENG-09): one per pass, for every card the
+// field does not draw live (tier 3, before the field is ready, and velocity
+// on tier 2). Each is the pass over the making-of sheet's box on forced
+// tier 1, the only tier that draws every pass, in the making-of chapter's
+// calm still at the desktop frame's size, then the middle of the sheet at
+// the card's width over height, as a live card crops the frame
+// (runtime/pass-rules.ts, sheetCrop). The card's face is 200 by 270 CSS px
+// from 1024 px wide, so the still is twice that, sharp on a dense screen;
+// the page shows it with object-fit cover, so the flat phone cards crop it
+// to wide.
+const PASS_FRAME = { width: 1280, height: 800 } as const;
+const PASS_STILL = { width: 400, height: 540 } as const;
+// WebP, kept on 12 Nov 2026 when the stills were captured again inside the
+// sheet. At the same quality it was the smaller format for velocity (5,870
+// bytes against JPEG's 13,330), density (59,262 against 76,435) and glow
+// (2,344 against 4,921). For points and the final frame JPEG was smaller
+// (73,184 against 79,152 bytes at 0.85, and 75,211 against 80,946 at 0.8)
+// but lost more (PSNR 31.27 against 33.44 dB, and 28.64 against 30.48), and
+// both WebP files fit the target. Lossless is left out: velocity and glow
+// are smooth and lose under 0.5 per cent at 0.9 (PSNR 47.66 and 49.29 dB).
+const PASS_QUALITIES = [0.9, 0.85, 0.8, 0.72];
+const PASS_TARGET_BYTES = 80 * 1024;
+// Every pass lights part of its still, and every pass but the final frame
+// differs from the plain frame (the final pass is the frame itself).
+// Measured on 12 Nov 2026, cropped inside the sheet: lit 0.93 to 1.00 of
+// each still, and every pass but the final one changed the whole sheet,
+// the final one none.
+const PASS_LIT = 0.2;
+const PASS_CHANGED = 0.2;
+
+test.describe("the pass stills", () => {
+  test.use({ viewport: PASS_FRAME, deviceScaleFactor: 1 });
+
+  test("REQ-ENG-09 REQ-TIER-03 each making-of pass has a still of its own pass, captured on tier 1 at the card's shape", async ({
+    page,
+    browser,
+    browserName,
+  }) => {
+    test.skip(
+      process.env.CAPTURE_STILLS !== "1",
+      "Set CAPTURE_STILLS=1 to write the stills into public/still",
+    );
+    test.setTimeout(300_000);
+
+    const { errors } = watchErrors(page);
+    const view = page.locator(VIEW);
+    const host = page.locator(HOST);
+    const state =
+      "tier=1&count=1000000&calm=1&bare=1&chapter=making-of&progress=0.5";
+
+    async function settledFrame(query: string) {
+      await page.goto(`/engine?${query}`);
+      // The development server's badge, and the real cursor: the capture
+      // never stirs the field.
+      await page.addStyleTag({
+        content: `nextjs-portal { display: none; } ${HOST} { pointer-events: none !important; }`,
+      });
+      await expect(view).toHaveAttribute("data-ready", "true", {
+        timeout: 90_000,
+      });
+      await expect(view).toHaveAttribute("data-tier", "1");
+      await expect(view).toHaveAttribute("data-chapter", "making-of");
+      await page.waitForTimeout(1_000);
+      expect(await host.boundingBox()).toEqual({ x: 0, y: 0, ...PASS_FRAME });
+      const surface = await readSurface(page, `${HOST} > canvas`);
+      expect(surface).toMatchObject({ backend: "webgpu", ...PASS_FRAME });
+      return { png: await host.screenshot(), gpu: surface.gpu };
+    }
+
+    const plain = await settledFrame(state);
+
+    for (const pass of PASSES) {
+      const frame = await settledFrame(`${state}&pass=${pass}`);
+      await expect(view).toHaveAttribute("data-pass", pass);
+
+      // The pass covers the sheet's box alone, so its changed share is
+      // counted over the sheet.
+      const compared = await compareImages(page, plain.png, frame.png);
+      const changed =
+        compared.changed / (compared.pixels * SHEET_FIT * SHEET_FIT);
+      const fitted = await fitStill(page, frame.png, PASS_STILL);
+      const stats = await pixelStats(page, fitted);
+
+      const webp = await encodeWebp(
+        page,
+        fitted,
+        PASS_TARGET_BYTES,
+        "image/webp",
+        PASS_QUALITIES,
+      );
+      expectWebp(webp.bytes);
+      const jpeg = await encodeWebp(page, fitted, 0, "image/jpeg", [
+        webp.quality,
+      ]);
+
+      const file = PASS_STILLS[pass].replace("/still/", "");
+      mkdirSync(OUT_DIR, { recursive: true });
+      writeFileSync(join(OUT_DIR, file), webp.bytes);
+      console.log(
+        `still ${join(OUT_DIR, file)} ${PASS_STILL.width} x ${PASS_STILL.height} ${webp.bytes.length} bytes ` +
+          `webp quality ${webp.quality} (PSNR ${webp.psnr.toFixed(2)} dB, png ${fitted.length} bytes; ` +
+          `jpeg at the same quality ${jpeg.bytes.length} bytes, PSNR ${jpeg.psnr.toFixed(2)} dB), ` +
+          `lit share ${stats.litShare.toFixed(4)}, brightest ${stats.brightest}, ` +
+          `${changed.toFixed(4)} of the sheet differs from the plain frame (largest ${compared.maxDifference}), ` +
+          `gpu ${frame.gpu} browser ${browserName} ${browser.version()}`,
+      );
+
+      expect(stats.litShare, `${pass} lights its still`).toBeGreaterThan(
+        PASS_LIT,
+      );
+      if (pass === "final") {
+        expect(changed, "the final pass is the frame itself").toBeLessThan(
+          0.001,
+        );
+      } else {
+        expect(changed, `${pass} is not the frame`).toBeGreaterThan(
+          PASS_CHANGED,
+        );
+      }
+      expect(webp.bytes.length).toBeLessThanOrEqual(PASS_TARGET_BYTES);
+    }
+    expect(errors).toEqual([]);
+  });
 });

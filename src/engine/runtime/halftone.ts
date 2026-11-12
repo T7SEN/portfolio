@@ -97,7 +97,8 @@ import {
 // per cell, the glow, the backdrop lattice and the hero's dot. Every pass is
 // a plain render with additive blending or none, and reads its source with
 // textureLoad or a filtered texture read: no compute, no storage texture, no
-// atomics, so WebGL2 draws it exactly as WebGPU does (REQ-ENG-05).
+// atomics, so WebGL2 draws it exactly as WebGPU does (REQ-ENG-05). The
+// making-of pass viewer (passes.ts) reads the same targets after the frame.
 
 export interface HeroDot {
   /** The dot's centre in CSS pixels from the canvas's top start corner. */
@@ -246,9 +247,18 @@ export function createHalftone(particleCount: number) {
   const text = token(colors.text);
   const ground = token(colors.void);
 
-  const screen = Fn(() => {
-    // Where this pixel sits on the cell grid, in CSS pixels, y down.
-    const position = screenUV.mul(cssSize).toVar();
+  /**
+   * The halftone screen's colour at a point of the frame, in CSS pixels, y
+   * down. sharpness is how many device pixels draw one CSS pixel there: the
+   * pixel ratio for the frame itself, less for a pass card that shows the
+   * frame smaller (passes.ts), so a dot's edge is smoothed over one drawn
+   * pixel either way. Call it inside a shader function.
+   */
+  const screenColour = (
+    point: Node<"vec2">,
+    sharpness: Node<"float">,
+  ): Node<"vec3"> => {
+    const position = point.toVar();
     const gridPosition = position.add(pad).div(cell).toVar();
     const local = fract(gridPosition).sub(0.5).mul(cell);
     const distance = length(local).toVar();
@@ -267,7 +277,7 @@ export function createHalftone(particleCount: number) {
     const radius = sqrt(clamp(tone.div(TONE_FULL), 0, 1)).mul(
       cell.mul(DOT_RADIUS_MAX / CELL_PX),
     );
-    const coverage = clamp(radius.sub(distance).mul(pixelRatio).add(0.5), 0, 1)
+    const coverage = clamp(radius.sub(distance).mul(sharpness).add(0.5), 0, 1)
       .mul(smoothstep(DOT_RADIUS_MIN, DOT_RADIUS_MIN * 2, radius))
       .toVar();
 
@@ -333,13 +343,13 @@ export function createHalftone(particleCount: number) {
     const haloFade = clamp(heroDistance.div(heroReach).oneMinus(), 0, 1);
     const halo = haloFade.mul(haloFade).mul(HALO_ALPHA).mul(heroLight);
     const heroCore = clamp(
-      float(HERO_DOT_PX).sub(heroDistance).mul(pixelRatio).add(0.5),
+      float(HERO_DOT_PX).sub(heroDistance).mul(sharpness).add(0.5),
       0,
       1,
     ).mul(heroLight);
 
     const lattice = clamp(
-      float(LATTICE_RADIUS).sub(distance).mul(pixelRatio).add(0.5),
+      float(LATTICE_RADIUS).sub(distance).mul(sharpness).add(0.5),
       0,
       1,
     ).mul(
@@ -351,8 +361,13 @@ export function createHalftone(particleCount: number) {
     const lit = ground.add(violet.mul(glowLight)).add(glow.mul(rings));
     const withLattice = mix(lit, glow, lattice);
     const withDot = mix(withLattice, dot, coverage);
-    return vec4(mix(withDot, glow, heroCore), 1);
-  })();
+    return mix(withDot, glow, heroCore);
+  };
+
+  // Where each pixel sits on the frame, in CSS pixels, y down.
+  const screen = Fn(() =>
+    vec4(screenColour(screenUV.mul(cssSize), pixelRatio), 1),
+  )();
 
   const screenMaterial = passMaterial(screen);
   const gatherQuad = new QuadMesh(gather);
@@ -362,6 +377,22 @@ export function createHalftone(particleCount: number) {
   const clearColour = new Color();
 
   return {
+    /**
+     * What the making-of pass viewer reads (passes.ts): the splat, the cells
+     * and the blurred density as this frame's render left them, the grid's
+     * uniforms, and the screen's own colour at any point of the frame.
+     */
+    sources: {
+      splat: splat.texture,
+      cells: cells.texture,
+      glow: blurDown.texture,
+      pad,
+      cell,
+      gridSize,
+      splatTexels,
+      scale,
+      screenColour,
+    },
     /**
      * Sizes the targets to the cell grid and keeps the screen pass in step
      * with the canvas's CSS size and its pixel ratio.

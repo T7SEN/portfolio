@@ -36,6 +36,7 @@ import {
   LINE_GAIN,
   RIM_WEIGHT,
   SPEED_FOR_GLOW,
+  SPLAT_SUB,
   SPRINKLE_MIX,
   SWIRL_BREATH,
   SWIRL_GLOW,
@@ -44,6 +45,7 @@ import {
   splatSize,
   type Grid,
 } from "./halftone-rules";
+import { DIRECTIONS, VELOCITY_FLOOR, VELOCITY_SUB } from "./pass-rules";
 import { DOT_RADIUS, homeFor, releasedFor } from "./simulation";
 import type { Simulation, View } from "./simulation";
 
@@ -128,7 +130,22 @@ function mixOf(
   return fract(seed.x.mul(x).add(seed.y.mul(y)).add(seed.z.mul(z)));
 }
 
-export function createField(simulation: Simulation, look: FieldLook) {
+/** The velocity pass's own draw of the particles (passes.ts renders it). */
+export interface VelocityDraw {
+  scene: Scene;
+  dispose(): void;
+}
+
+/**
+ * velocityPass builds the making-of's velocity draw as well. The runtime
+ * asks for it on the WebGPU backend only, so it never reaches WebGL2
+ * (story.ts LIVE_PASSES, REQ-ENG-05).
+ */
+export function createField(
+  simulation: Simulation,
+  look: FieldLook,
+  velocityPass = false,
+) {
   const growth = Math.min(
     Math.cbrt(REFERENCE_COUNT / simulation.count),
     MAX_SPRITE_GROWTH,
@@ -154,7 +171,8 @@ export function createField(simulation: Simulation, look: FieldLook) {
   const sprinkleGain = uniform(1);
 
   const position = simulation.positions.toAttribute();
-  const speed = simulation.velocities.toAttribute().length();
+  const motion = simulation.velocities.toAttribute();
+  const speed = motion.length();
   const seed = simulation.seeds.toAttribute();
   const { release, pulse, dotCentre, dotSeed, rankScale, elapsedSeconds } =
     simulation;
@@ -283,6 +301,56 @@ export function createField(simulation: Simulation, look: FieldLook) {
   const scene = new Scene();
   scene.add(particles);
 
+  // The velocity pass (REQ-ENG-09): every particle drawn again where the
+  // splat draws it, one velocity texel each (VELOCITY_SUB texels a side per
+  // cell), summed with the same additive blending, so each texel holds its
+  // particles' colour times their weight and the weight. The colour is the
+  // direction wheel's tokens (pass-rules directionWeights) lit by the speed
+  // (velocityLight). A plain render that reads the velocities as a vertex
+  // attribute, as the splat already reads the speed.
+  let velocity: VelocityDraw | null = null;
+  if (velocityPass && look === "halftone") {
+    const planar = motion.xy;
+    const length = planar.length();
+    const along = planar.mul(step(1e-6, length)).div(max(length, 1e-6));
+    const leans = DIRECTIONS.map((direction) => {
+      const lean = along.dot(vec2(direction.x, direction.y)).add(1).div(2);
+      return { lean: lean.mul(lean), token: direction.token };
+    });
+    let total: Node<"float"> = float(0);
+    let tint: Node<"vec3"> = vec3(0, 0, 0);
+    for (const { lean, token } of leans) {
+      total = total.add(lean);
+      tint = tint.add(color(new Color(colors[token])).mul(lean));
+    }
+    const lit = smoothstep(0, SPEED_FOR_GLOW, speed)
+      .mul(1 - VELOCITY_FLOOR)
+      .add(VELOCITY_FLOOR);
+    const velocityMaterial = new SpriteNodeMaterial();
+    velocityMaterial.positionNode = drawn;
+    velocityMaterial.sizeAttenuation = false;
+    velocityMaterial.fragmentNode = vertexStage(
+      vec4(tint.div(total).mul(lit), weight),
+    );
+    velocityMaterial.scaleNode = splatScale
+      .mul(SPLAT_SUB / VELOCITY_SUB)
+      .mul(step(1e-3, released));
+    velocityMaterial.blending = AdditiveBlending;
+    velocityMaterial.depthTest = false;
+    velocityMaterial.depthWrite = false;
+    velocityMaterial.fog = false;
+
+    const moving = new Sprite(velocityMaterial);
+    moving.count = simulation.count;
+    moving.frustumCulled = false;
+    const velocityScene = new Scene();
+    velocityScene.add(moving);
+    velocity = {
+      scene: velocityScene,
+      dispose: () => velocityMaterial.dispose(),
+    };
+  }
+
   const camera = new PerspectiveCamera(CAMERA_FOV_DEGREES, 1, 0.1, 50);
   camera.position.z = CAMERA_DISTANCE;
 
@@ -303,6 +371,8 @@ export function createField(simulation: Simulation, look: FieldLook) {
     scene,
     camera,
     material,
+    /** The velocity pass's draw; null unless it was asked for. */
+    velocity,
     light,
     /** Keeps the camera, the homes and the light right for a frame. */
     setAspect(aspect: number): View {

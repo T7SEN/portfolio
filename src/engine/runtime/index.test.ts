@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-import { WORK_SHAPES } from "../story";
-import type { Backend, ChapterId, FieldLook, RuntimeOptions } from "../types";
+import { PASSES, WORK_SHAPES } from "../story";
+import type {
+  Backend,
+  ChapterId,
+  FieldLook,
+  PassCard,
+  PassId,
+  RuntimeOptions,
+} from "../types";
 import { sprinkle } from "./halftone-rules";
 import { FLOW_SHARE } from "./story";
 
@@ -60,6 +67,18 @@ const fakes = vi.hoisted(() => {
     swirl: 0,
     sprinkle: [0, 0] as [number, number],
     grids: [] as Array<Record<string, number>>,
+    /** Whether each field was asked for the velocity pass's draw. */
+    velocityAsked: [] as boolean[],
+    /** Each pass viewer made: whether it was given a velocity draw. */
+    passesBuilt: [] as boolean[],
+    /** The laid out cards of every pass render, in order. */
+    passRenders: [] as Array<
+      Array<{
+        pass: string;
+        crop: { x: number; y: number; width: number; height: number };
+        sharpness: number;
+      }>
+    >,
     /** What the start check reports, and the halftone each runtime made. */
     halftoneWorks: true,
     halftones: [] as Array<{
@@ -258,6 +277,32 @@ const fakes = vi.hoisted(() => {
     return Promise.resolve(state.halftoneWorks);
   }
 
+  /** A pass viewer that records the cards the runtime lays out for it. */
+  function createPasses(halftone: unknown, velocity: unknown) {
+    void halftone;
+    state.passesBuilt.push(velocity !== null);
+    return {
+      render(
+        renderer: unknown,
+        cards: Array<{
+          pass: string;
+          crop: { x: number; y: number; width: number; height: number };
+          sharpness: number;
+        }>,
+      ) {
+        void renderer;
+        state.log.push("passes render");
+        state.passRenders.push(
+          cards.map(({ pass, crop, sharpness }) => ({ pass, crop, sharpness })),
+        );
+      },
+      dispose() {
+        if (state.throwingPart === "passes") throw new Error("passes stuck");
+        state.log.push("passes dispose");
+      },
+    };
+  }
+
   return {
     state,
     part,
@@ -268,6 +313,7 @@ const fakes = vi.hoisted(() => {
     ResizeObserver,
     createHalftone,
     halftoneWorks,
+    createPasses,
   };
 });
 
@@ -283,6 +329,10 @@ vi.mock("three/webgpu", () => ({
 vi.mock("./halftone", () => ({
   createHalftone: fakes.createHalftone,
   halftoneWorks: fakes.halftoneWorks,
+}));
+
+vi.mock("./passes", () => ({
+  createPasses: fakes.createPasses,
 }));
 
 // Every shape gets the same square box, so its fit is easy to predict.
@@ -365,13 +415,19 @@ vi.mock("./field", () => ({
     halfHeight: 1,
     cameraDistance: 5,
   }),
-  createField: (simulation: unknown, look: string) => {
+  createField: (simulation: unknown, look: string, velocityPass = false) => {
     void simulation;
     fakes.state.log.push(`field ${look}`);
+    fakes.state.velocityAsked.push(velocityPass);
     return {
       scene: {},
       camera: {},
       material: fakes.part("material"),
+      // As field.ts does: the velocity draw only for the halftone.
+      velocity:
+        velocityPass && look === "halftone"
+          ? { scene: {}, ...fakes.part("velocity draw") }
+          : null,
       light: fakes.state.light,
       setAspect(aspect: number) {
         fakes.state.log.push(`aspect ${aspect}`);
@@ -446,6 +502,30 @@ const count = (entry: string) =>
   state.log.filter((line) => line === entry).length;
 
 /**
+ * A flat pass card centred at x: 0.3 of the screen wide and 0.8 high, so
+ * 150 by 200 CSS px on the 1000 by 500 canvas mount() makes by default.
+ */
+function flatCard(pass: PassId, x: number): PassCard {
+  return {
+    pass,
+    corners: [
+      { x: x - 0.15, y: 0.4 },
+      { x: x + 0.15, y: 0.4 },
+      { x: x + 0.15, y: -0.4 },
+      { x: x - 0.15, y: -0.4 },
+    ],
+  };
+}
+
+/** One flat card of every pass, side by side. */
+const ALL_CARDS = PASSES.map((pass, index) =>
+  flatCard(pass, -0.8 + index * 0.4),
+);
+
+const drawnPasses = () =>
+  state.passRenders.map((cards) => cards.map((card) => card.pass));
+
+/**
  * Lets the microtask run that settles a calm field once for the commands of
  * the task before it (runtime/index.ts, payStill).
  */
@@ -482,6 +562,9 @@ afterEach(() => {
   state.grids.length = 0;
   state.halftoneWorks = true;
   state.halftones.length = 0;
+  state.velocityAsked.length = 0;
+  state.passesBuilt.length = 0;
+  state.passRenders.length = 0;
   state.focus.length = 0;
   state.light.value = 1;
   state.textures.length = 0;
@@ -1036,7 +1119,9 @@ describe("teardown", () => {
       "loop off",
       "update dispose",
       "material dispose",
+      "velocity draw dispose",
       "halftone dispose",
+      "passes dispose",
       "positions dispose",
       "velocities dispose",
       "seeds dispose",
@@ -1049,11 +1134,14 @@ describe("teardown", () => {
     runtime.run();
     await runtime.drawStill();
     runtime.setStory("about", 0.5);
+    runtime.setPasses([flatCard("final", 0)]);
+    await settled();
     expect(state.log).not.toContain("loop on");
     expect(state.log).not.toContain("render");
+    expect(state.log).not.toContain("passes render");
   });
 
-  test.each(["material", "halftone", "atlas"])(
+  test.each(["material", "velocity draw", "halftone", "passes", "atlas"])(
     "REQ-ENG-07 a part that cannot be freed (%s) does not keep the rest or the renderer alive",
     async (stuck) => {
       const { options } = mount();
@@ -1067,7 +1155,9 @@ describe("teardown", () => {
         [
           "update dispose",
           "material dispose",
+          "velocity draw dispose",
           "halftone dispose",
+          "passes dispose",
           "positions dispose",
           "velocities dispose",
           "seeds dispose",
@@ -1553,6 +1643,230 @@ describe("the swirl at the pointer", () => {
     runtime.pause();
     await runtime.drawStill();
     expect(state.swirl).toBe(0);
+  });
+});
+
+describe("the making-of passes", () => {
+  test("REQ-ENG-09 on WebGPU every pass is live: the field builds the velocity draw, and each frame draws the cards after the halftone's frame, in one call", async () => {
+    const { options } = mount("webgpu");
+    const runtime = await createRuntime(options);
+
+    expect(state.velocityAsked).toEqual([true]);
+    expect(state.passesBuilt).toEqual([true]);
+
+    runtime.setPasses(ALL_CARDS);
+    runtime.run();
+    state.log.length = 0;
+    state.loop?.(16);
+
+    expect(state.log).toEqual(["halftone render", "render", "passes render"]);
+    expect(drawnPasses()).toEqual([[...PASSES]]);
+  });
+
+  test("REQ-ENG-09 REQ-ENG-05 on WebGL2 the field has no velocity draw, and a velocity card is never drawn", async () => {
+    state.isWebGL = true;
+    const { options } = mount("webgl2");
+    const runtime = await createRuntime(options);
+
+    expect(state.velocityAsked).toEqual([false]);
+    expect(state.passesBuilt).toEqual([false]);
+
+    runtime.setPasses(ALL_CARDS);
+    await runtime.drawStill();
+
+    expect(drawnPasses()).toEqual([["points", "density", "glow", "final"]]);
+  });
+
+  test("REQ-ENG-09 REQ-ENG-05 a renderer asked for WebGPU that came back on WebGL2 draws as tier 2, without velocity", async () => {
+    state.isWebGL = true;
+    const { options } = mount("webgpu");
+    const runtime = await createRuntime(options);
+
+    runtime.setPasses(ALL_CARDS);
+    await runtime.drawStill();
+
+    expect(state.velocityAsked).toEqual([false]);
+    expect(drawnPasses()).toEqual([["points", "density", "glow", "final"]]);
+  });
+
+  test("REQ-ENG-09 each card shows the making-of sheet cropped to its own width over height round the frame's centre, drawn as finely as the card draws it", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+
+    runtime.setPasses([flatCard("density", 0)]);
+    await runtime.drawStill();
+
+    // 150 by 200 CSS px on a 1000 by 500 frame, whose sheet is 700 by 350
+    // from (150, 75): the sheet's full height and 262.5 px of its width.
+    expect(state.passRenders).toEqual([
+      [
+        {
+          pass: "density",
+          crop: {
+            x: expect.closeTo(368.75, 9),
+            y: expect.closeTo(75, 9),
+            width: expect.closeTo(262.5, 9),
+            height: expect.closeTo(350, 9),
+          },
+          sharpness: expect.closeTo(200 / 350, 9),
+        },
+      ],
+    ]);
+  });
+
+  test("REQ-ENG-09 null or an empty list means no pass work at all in the frame", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.run();
+
+    runtime.setPasses(ALL_CARDS);
+    state.loop?.(16);
+    runtime.setPasses(null);
+    state.loop?.(32);
+    runtime.setPasses([]);
+    state.loop?.(48);
+
+    expect(count("passes render")).toBe(1);
+    expect(count("halftone render")).toBe(3);
+  });
+
+  test("REQ-ENG-09 a card whose corners make no face, or that repeats a pass already drawn, is not drawn", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    const point = { x: 0.2, y: 0.2 };
+    const crossed: PassCard = {
+      pass: "glow",
+      corners: [
+        { x: -0.2, y: 0.4 },
+        { x: 0.2, y: -0.4 },
+        { x: 0.2, y: 0.4 },
+        { x: -0.2, y: -0.4 },
+      ],
+    };
+
+    runtime.setPasses([
+      { pass: "points", corners: [point, point, point, point] },
+      {
+        pass: "density",
+        corners: [{ x: Number.NaN, y: 0 }, point, point, point],
+      },
+      crossed,
+      flatCard("final", -0.5),
+      flatCard("final", 0.5),
+    ]);
+    await runtime.drawStill();
+
+    expect(drawnPasses()).toEqual([["final"]]);
+  });
+
+  test("REQ-ENG-09 the runtime keeps its own copy of the cards: the page may reuse its objects", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    const cards = [flatCard("density", 0)];
+    runtime.setPasses(cards);
+    runtime.run();
+
+    const first = cards[0];
+    if (first === undefined) throw new Error("no card");
+    first.pass = "points";
+    first.corners[0].x = -1;
+    state.loop?.(16);
+
+    expect(state.passRenders).toEqual([
+      [
+        expect.objectContaining({
+          pass: "density",
+          sharpness: expect.closeTo(200 / 350, 9),
+        }),
+      ],
+    ]);
+  });
+
+  test("REQ-ENG-09 REQ-A11Y-03 a still is drawn with its cards; cards that move draw it again once, as it is, and the same cards again draw nothing", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("making-of", 0.5);
+    runtime.setPasses(ALL_CARDS);
+    await runtime.drawStill();
+    expect(count("passes render")).toBe(1);
+    const steps = state.computes.length;
+
+    // Two scroll frames in one task: one draw.
+    runtime.setPasses([flatCard("points", 0.1)]);
+    runtime.setPasses([flatCard("points", 0.2)]);
+    await settled();
+    expect(count("halftone render")).toBe(2);
+    expect(drawnPasses().at(-1)).toEqual(["points"]);
+    expect(state.computes).toHaveLength(steps);
+
+    runtime.setPasses([flatCard("points", 0.2)]);
+    await settled();
+    expect(count("halftone render")).toBe(2);
+
+    // Gone from the screen: drawn once more, without them.
+    runtime.setPasses(null);
+    await settled();
+    expect(count("halftone render")).toBe(3);
+    expect(count("passes render")).toBe(2);
+    expect(state.loop).toBeNull();
+  });
+
+  test("REQ-ENG-09 REQ-A11Y-03 cards sent with a new chapter to a still settle and draw it once", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("work", 0.5);
+    await runtime.drawStill();
+    state.computes.length = 0;
+
+    runtime.setStory("making-of", 0.5);
+    runtime.setPasses(ALL_CARDS);
+    await settled();
+
+    expect(state.computes).toEqual(settle());
+    expect(count("halftone render")).toBe(2);
+    expect(count("passes render")).toBe(1);
+  });
+
+  test("REQ-ENG-07 a paused field that is not calm draws nothing for new cards", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.run();
+    state.loop?.(16);
+    runtime.pause();
+    state.log.length = 0;
+
+    runtime.setPasses(ALL_CARDS);
+    await settled();
+
+    expect(state.log).toEqual([]);
+  });
+
+  test("REQ-ENG-07 a calm field whose canvas is hidden draws its cards when it is shown again", async () => {
+    const { options, resizeTo } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    await runtime.drawStill();
+    resizeTo(0, 0);
+    state.log.length = 0;
+
+    runtime.setPasses(ALL_CARDS);
+    await settled();
+    expect(state.log).toEqual([]);
+
+    resizeTo(1000, 500);
+    expect(count("passes render")).toBe(1);
+  });
+
+  test("REQ-ENG-08 the soft look has no passes to draw: no viewer is built and no card is drawn", async () => {
+    state.halftoneWorks = false;
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+
+    runtime.setPasses(ALL_CARDS);
+    await runtime.drawStill();
+
+    expect(runtime.look).toBe("soft");
+    expect(state.passesBuilt).toEqual([]);
+    expect(state.log).not.toContain("passes render");
   });
 });
 

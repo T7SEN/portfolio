@@ -13,6 +13,8 @@ export interface PixelStats {
   maxLuminance: number;
   /** The brightest pixel as #RRGGBB. */
   brightest: string;
+  /** Where the brightest pixel is, in image pixels, and the box it is in. */
+  brightestAt: { x: number; y: number; box: number } | null;
   meanLuminance: number;
   /** Share of pixels with a channel above the threshold, 0 to 1. */
   litShare: number;
@@ -55,11 +57,15 @@ export async function pixelStats(
       let sum = 0;
       let maxLuminance = 0;
       let brightest = "#000000";
+      let brightestAt: { x: number; y: number; box: number } | null = null;
 
       const whole = [
         { x: 0, y: 0, width: bitmap.width, height: bitmap.height },
       ];
-      for (const region of regions.length > 0 ? regions : whole) {
+      for (const [box, region] of (regions.length > 0
+        ? regions
+        : whole
+      ).entries()) {
         const x = Math.max(0, Math.floor(region.x));
         const y = Math.max(0, Math.floor(region.y));
         const width = Math.min(bitmap.width - x, Math.ceil(region.width));
@@ -68,6 +74,7 @@ export async function pixelStats(
 
         const image = context.getImageData(x, y, width, height).data;
         for (let index = 0; index < image.length; index += 4) {
+          const texel = index / 4;
           const r = image[index] ?? 0;
           const g = image[index + 1] ?? 0;
           const b = image[index + 2] ?? 0;
@@ -78,6 +85,11 @@ export async function pixelStats(
           if (value > maxLuminance) {
             maxLuminance = value;
             brightest = `#${hex(r)}${hex(g)}${hex(b)}`.toUpperCase();
+            brightestAt = {
+              x: x + (texel % width),
+              y: y + Math.floor(texel / width),
+              box,
+            };
           }
         }
       }
@@ -86,6 +98,7 @@ export async function pixelStats(
         pixels,
         maxLuminance,
         brightest,
+        brightestAt,
         meanLuminance: pixels === 0 ? 0 : sum / pixels,
         litShare: pixels === 0 ? 0 : lit / pixels,
       };

@@ -8,6 +8,34 @@
 // into the first load.
 export const WORK_SHAPES = ["making-of", "coup-online", "archelab"] as const;
 
+/**
+ * The making-of chapter's passes in the order the page shows them
+ * (REQ-ENG-09). Each is a real step of the halftone frame (runtime/halftone.ts):
+ * points, every particle splatted at one texel; velocity, each particle's
+ * speed and direction from the simulation; density, the cells' summed tents;
+ * glow, the blurred density; final, the halftone screen itself.
+ */
+export const PASSES = [
+  "points",
+  "velocity",
+  "density",
+  "glow",
+  "final",
+] as const;
+
+export type PassId = (typeof PASSES)[number];
+
+/**
+ * The passes each GPU tier draws live in their cards; the page shows a still
+ * of every other pass, and tier 3 shows only stills (REQ-ENG-09: tier 2 shows
+ * fewer buffers). Tier 2 leaves out velocity, which costs a second draw of
+ * every particle.
+ */
+export const LIVE_PASSES: Readonly<Record<1 | 2, readonly PassId[]>> = {
+  1: PASSES,
+  2: ["points", "density", "glow", "final"],
+};
+
 export type WorkShape = (typeof WORK_SHAPES)[number];
 
 /**

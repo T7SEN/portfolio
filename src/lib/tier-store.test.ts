@@ -5,7 +5,13 @@ import { createTierStore, tierStore } from "./tier-store";
 describe("tier store", () => {
   it("REQ-CNT-10 starts with no tier, on the server and in the browser", () => {
     const store = createTierStore();
-    const initial = { tier: null, reason: null, ready: false, particles: null };
+    const initial = {
+      tier: null,
+      reason: null,
+      ready: false,
+      particles: null,
+      look: null,
+    };
     expect(store.getSnapshot()).toEqual(initial);
     expect(store.getServerSnapshot()).toEqual(initial);
   });
@@ -18,19 +24,31 @@ describe("tier store", () => {
       reason: "no-webgpu",
       ready: false,
       particles: null,
+      look: null,
     });
   });
 
-  it("REQ-ENG-03 ready marks the chosen tier ready and mirrors the particles its field draws", () => {
+  it("REQ-ENG-03 ready marks the chosen tier ready and mirrors the particles its field draws and its look", () => {
     const store = createTierStore();
     store.apply({ type: "tierChosen", tier: 1, reason: "probe-pass" });
-    store.apply({ type: "ready", tier: 1, particles: 1_000_000 });
+    store.apply({
+      type: "ready",
+      tier: 1,
+      particles: 1_000_000,
+      look: "halftone",
+    });
     expect(store.getSnapshot()).toEqual({
       tier: 1,
       reason: "probe-pass",
       ready: true,
       particles: 1_000_000,
+      look: "halftone",
     });
+
+    const soft = createTierStore();
+    soft.apply({ type: "tierChosen", tier: 2, reason: "no-webgpu" });
+    soft.apply({ type: "ready", tier: 2, particles: 250_000, look: "soft" });
+    expect(soft.getSnapshot().look).toBe("soft");
   });
 
   it("REQ-ENG-03 REQ-CNT-10 the tier 3 still reports no particles, and the store says so", () => {
@@ -43,19 +61,26 @@ describe("tier store", () => {
       reason: "save-data",
       ready: true,
       particles: 0,
+      look: null,
     });
   });
 
-  it("REQ-ENG-08 a later tierChosen clears ready and the old count until that tier reports ready", () => {
+  it("REQ-ENG-08 a later tierChosen clears ready, the old count and the look until that tier reports ready", () => {
     const store = createTierStore();
     store.apply({ type: "tierChosen", tier: 1, reason: "probe-pass" });
-    store.apply({ type: "ready", tier: 1, particles: 1_000_000 });
+    store.apply({
+      type: "ready",
+      tier: 1,
+      particles: 1_000_000,
+      look: "halftone",
+    });
     store.apply({ type: "tierChosen", tier: 2, reason: "device-lost" });
     expect(store.getSnapshot()).toEqual({
       tier: 2,
       reason: "device-lost",
       ready: false,
       particles: null,
+      look: null,
     });
     store.apply({ type: "ready", tier: 2, particles: 250_000 });
     expect(store.getSnapshot().ready).toBe(true);

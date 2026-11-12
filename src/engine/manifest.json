@@ -1,8 +1,16 @@
 {
   "payloads": [
     { "tier": 1, "device": "desktop", "files": [] },
-    { "tier": 2, "device": "desktop", "files": [] },
-    { "tier": 2, "device": "phone", "files": [] },
+    {
+      "tier": 2,
+      "device": "desktop",
+      "files": ["public/still/pass-velocity.webp"]
+    },
+    {
+      "tier": 2,
+      "device": "phone",
+      "files": ["public/still/pass-velocity.webp"]
+    },
     {
       "tier": 3,
       "device": "desktop",
@@ -13,7 +21,12 @@
         "public/still/field-wordmark-tall.jpg",
         "public/still/work-making-of.webp",
         "public/still/work-coup-online.webp",
-        "public/still/work-archelab.webp"
+        "public/still/work-archelab.webp",
+        "public/still/pass-points.webp",
+        "public/still/pass-velocity.webp",
+        "public/still/pass-density.webp",
+        "public/still/pass-glow.webp",
+        "public/still/pass-final.webp"
       ]
     },
     {
@@ -26,7 +39,12 @@
         "public/still/field-wordmark-tall.jpg",
         "public/still/work-making-of.webp",
         "public/still/work-coup-online.webp",
-        "public/still/work-archelab.webp"
+        "public/still/work-archelab.webp",
+        "public/still/pass-points.webp",
+        "public/still/pass-velocity.webp",
+        "public/still/pass-density.webp",
+        "public/still/pass-glow.webp",
+        "public/still/pass-final.webp"
       ]
     }
   ]

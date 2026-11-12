@@ -11,6 +11,7 @@ import type {
   EngineOptions,
   Environment,
   GpuTier,
+  PassCard,
   ProbeVerdict,
   Runtime,
   RuntimeFactory,
@@ -73,6 +74,7 @@ export function createEngine(
   let story: readonly [ChapterId, number] | null = null;
   let pointer: readonly [number, number, boolean] | null = null;
   let stages: Stages | null = null;
+  let passes: readonly PassCard[] | null = null;
   let facts: Promise<Environment> | null = null;
 
   let canvas: HTMLCanvasElement | null = null;
@@ -119,7 +121,15 @@ export function createEngine(
     // The page's tier readout states this count, so it is the live
     // runtime's own, never a configured one (A14).
     const particles = tier === 3 ? 0 : (field?.runtime.particleCount ?? 0);
-    emit({ type: "ready", tier, particles });
+    // The look the runtime really draws, which can be soft where the
+    // halftone was asked for: the page draws a live pass only on the
+    // halftone (A14).
+    const look = tier === 3 ? undefined : field?.runtime.look;
+    emit(
+      look === undefined
+        ? { type: "ready", tier, particles }
+        : { type: "ready", tier, particles, look },
+    );
     releaseWaiters();
   }
 
@@ -305,11 +315,12 @@ export function createEngine(
     // chapter the page is on (REQ-TIER-01). A first story is seated at the
     // runtime's next step, before its canvas is shown. The stage goes first,
     // so that seat already puts the dot and the shapes where the page wants
-    // them.
+    // them. The pass cards come last: they change only what is drawn.
     const heard = attempt(target, (live) => {
       if (stages !== null) live.setStage(stages);
       if (story !== null) live.setStory(...story);
       if (pointer !== null) live.setPointer(...pointer);
+      if (passes !== null) live.setPasses(passes);
     });
     if (!heard) return;
 
@@ -566,6 +577,15 @@ export function createEngine(
       const target = listening();
       if (target !== null) {
         attempt(target, (runtime) => runtime.setStage(next));
+      }
+    },
+
+    setPasses(cards) {
+      if (disposed) return;
+      passes = cards;
+      const target = listening();
+      if (target !== null) {
+        attempt(target, (runtime) => runtime.setPasses(cards));
       }
     },
 

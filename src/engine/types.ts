@@ -1,6 +1,11 @@
 // The engine's contract. React sends the commands on Engine and hears back
-// only the three events (REQ-ENG-03). This file imports nothing, so app code
-// can read these types without pulling three.js into the first load.
+// only the three events (REQ-ENG-03). This file imports only types, which
+// compile away, so app code can read it without pulling three.js into the
+// first load.
+
+import type { PassId } from "./story";
+
+export type { PassId };
 
 export type Tier = 1 | 2 | 3;
 
@@ -41,7 +46,9 @@ export type FieldLook = "halftone" | "soft";
 
 export type EngineEvent =
   // particles: how many the live field draws; 0 for the tier 3 still.
-  | { type: "ready"; tier: Tier; particles: number }
+  // look: how the live field draws, sent with every live tier and absent
+  // for the tier 3 still; the making-of's live passes need the halftone.
+  | { type: "ready"; tier: Tier; particles: number; look?: FieldLook }
   | { type: "tierChosen"; tier: Tier; reason: TierReason }
   | { type: "frameRate"; fps: number };
 
@@ -71,6 +78,36 @@ export interface Stage {
  */
 export type Stages = Partial<Record<ChapterId, Stage>>;
 
+/** A point in normalised device coordinates: -1 to 1 on both axes, y up. */
+export interface Point {
+  x: number;
+  y: number;
+}
+
+/**
+ * One card of the making-of pass viewer as the page lays it out: the four
+ * corners of its face in normalised device coordinates, in the order top
+ * left, top right, bottom right, bottom left of the face as it stands
+ * unturned. A card the page turns in 3D so keeps its pass on its face, the
+ * right way round in either reading direction (a projective map).
+ */
+export interface PassCard {
+  pass: PassId;
+  corners: readonly [Point, Point, Point, Point];
+  /**
+   * The face's own size in CSS pixels, as it stands unturned: its width over
+   * height is the picture's, which the corners of a face turned in depth
+   * cannot give. Without it the picture takes the face's width over height
+   * as drawn.
+   */
+  size?: { width: number; height: number };
+  /**
+   * The radius of the face's corners in CSS pixels, on its own plane: the
+   * field draws nothing past it. None or 0 draws square corners.
+   */
+  radius?: number;
+}
+
 export interface Engine {
   /**
    * Picks the tier and starts the field inside the host. Resolves once
@@ -91,6 +128,15 @@ export interface Engine {
    * a jump glides (REQ-SCR-05).
    */
   setStage(stages: Stages): void;
+  /**
+   * The making-of pass viewer (REQ-ENG-09): the cards to draw a live pass
+   * in, measured from the page's layout and sent again on every scroll frame
+   * while they move; each call replaces the last. null when the viewer is
+   * off screen, so the passes cost nothing elsewhere. The engine draws only
+   * the passes LIVE_PASSES lists for its tier (story.ts) and ignores the
+   * rest; the page shows a still of each pass the engine does not draw.
+   */
+  setPasses(cards: readonly PassCard[] | null): void;
   /** Pointer in normalised device coordinates: -1 to 1 on both axes, y up. */
   setPointer(x: number, y: number, active: boolean): void;
   /** Calm mode and reduced motion: the field freezes to one still frame. */
@@ -180,6 +226,7 @@ export interface Runtime {
   setPointer(x: number, y: number, active: boolean): void;
   setStory(chapter: ChapterId, progress: number): void;
   setStage(stages: Stages): void;
+  setPasses(cards: readonly PassCard[] | null): void;
   dispose(): Promise<void>;
 }
 

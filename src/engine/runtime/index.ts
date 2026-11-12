@@ -9,10 +9,12 @@ import {
 
 import { colors } from "@/tokens/colors";
 
+import { LIVE_PASSES } from "../story";
 import { median } from "../tier/probe";
 import type {
   ChapterId,
   FieldLook,
+  PassCard,
   Runtime,
   RuntimeFactory,
   RuntimeOptions,
@@ -34,6 +36,8 @@ import {
   stageToCss,
   worldToCss,
 } from "./halftone-rules";
+import { copyCards, layoutCards, sameCards, tierOf } from "./pass-rules";
+import { createPasses } from "./passes";
 import {
   FIELD_MARGIN,
   FORM_DRAG,
@@ -174,8 +178,17 @@ function startRuntime(
   const atlas = packAtlas();
   const shapes = atlasTexture(atlas);
   const simulation = createSimulation(particleCount, view, shapes);
-  const field = createField(simulation, look);
+  // The making-of's passes are the halftone's own, so the soft look has
+  // none; the velocity draw is built only for a tier that shows it live.
+  const tier = tierOf(backend);
+  const field = createField(
+    simulation,
+    look,
+    LIVE_PASSES[tier].includes("velocity"),
+  );
   const halftone = look === "halftone" ? createHalftone(particleCount) : null;
+  const passes =
+    halftone === null ? null : createPasses(halftone, field.velocity);
   renderer.setClearColor(colors.void, 1);
 
   // The step comes from three's Timer, not the TSL deltaTime node, which
@@ -226,6 +239,9 @@ function startRuntime(
   // Stage); none until the page has measured its layout.
   let stages: Stages = {};
   const centre = { dotX: 0, dotY: 0, shapeX: 0, shapeY: 0 };
+  // The making-of's pass cards as the page last sent them (types.ts,
+  // PassCard); null while none are on screen, and then no pass is drawn.
+  let cards: PassCard[] | null = null;
   // The last pointer the page sent. It pushes the particles only while the
   // field runs: the page lets go of the pointer only after calm has frozen
   // the field, and a settle with the push on would press a hole at the
@@ -539,18 +555,28 @@ function startRuntime(
   };
 
   const draw = () => {
-    if (halftone === null) renderer.render(field.scene, field.camera);
-    else halftone.render(renderer, field.scene, field.camera);
+    if (halftone === null) {
+      renderer.render(field.scene, field.camera);
+    } else {
+      halftone.render(renderer, field.scene, field.camera);
+      // Laid out at every draw, from the canvas's size at that moment.
+      const laid =
+        passes === null || cards === null
+          ? []
+          : layoutCards(cards, tier, bufferWidth, bufferHeight, bufferRatio);
+      if (laid.length > 0) passes?.render(renderer, laid, field.camera);
+    }
     frames += 1;
   };
 
   const bufferAspect = () => bufferWidth / bufferHeight;
 
   // What a calm field still owes the screen from the commands of this task:
-  // a seat on a new stage, and a settle toward a new still. The page sends
-  // the work stage and the story together, so both wait for one microtask
-  // and the field is settled and drawn once for the pair (REQ-A11Y-03).
-  const owed = { reseat: false, settle: false };
+  // a seat on a new stage, a settle toward a new still, and a plain redraw
+  // for pass cards that moved. The page sends the work stage and the story
+  // together, so all wait for one microtask and the field is settled and
+  // drawn once for the lot (REQ-A11Y-03).
+  const owed = { reseat: false, settle: false, redraw: false };
   let owedQueued = false;
 
   /** Puts a calm field on the stage it owes, before it is settled. */
@@ -597,16 +623,21 @@ function startRuntime(
    */
   const payStill = () => {
     owedQueued = false;
-    const isOwed = owed.reseat || owed.settle;
+    const isOwed = owed.reseat || owed.settle || owed.redraw;
+    const redraw = owed.redraw;
     owed.settle = false;
+    owed.redraw = false;
     if (!isOwed || !still || disposal !== null || loss.message !== null) {
       owed.reseat = false;
       return;
     }
     try {
       payReseat();
-      if (steps >= SETTLE_STEPS) return;
-      fitStill();
+      const settling = steps < SETTLE_STEPS;
+      // Cards that moved over a settled still redraw it as it is: the
+      // particles do not step, so only the cards change (REQ-A11Y-03).
+      if (!settling && !redraw) return;
+      if (settling) fitStill();
       // A hidden canvas is drawn when it is shown again (the observer).
       if (!unseen) draw();
     } catch (error) {
@@ -707,7 +738,9 @@ function startRuntime(
       pause,
       () => simulation.update.dispose(),
       () => field.material.dispose(),
+      () => field.velocity?.dispose(),
       () => halftone?.dispose(),
+      () => passes?.dispose(),
       () => simulation.positions.value.dispose(),
       () => simulation.velocities.value.dispose(),
       () => simulation.seeds.value.dispose(),
@@ -768,8 +801,10 @@ function startRuntime(
         still = true;
         applyPointer();
         // The still pays what the field owes, so the microtask finds nothing.
+        // It draws the pass cards with it.
         payReseat();
         owed.settle = false;
+        owed.redraw = false;
         aimStill();
         fitStill();
         draw();
@@ -817,6 +852,16 @@ function startRuntime(
       // A calm field cannot glide: it is put where the new stage wants it
       // and drawn again once (REQ-A11Y-03), with any story sent with it.
       owe("reseat");
+    },
+    setPasses(next) {
+      if (disposal !== null || loss.message !== null) return;
+      const copied = copyCards(next);
+      if (sameCards(copied, cards)) return;
+      cards = copied;
+      // A running field draws them with its next frame; a still is drawn
+      // again as it is, once for every command of this task, so its cards
+      // keep to the page while it scrolls.
+      if (still) owe("redraw");
     },
     dispose() {
       disposal ??= release();

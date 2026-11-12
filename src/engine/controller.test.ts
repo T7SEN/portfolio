@@ -16,6 +16,8 @@ import type {
   EngineEvent,
   EngineOptions,
   Environment,
+  PassCard,
+  PassId,
   Runtime,
   RuntimeFactory,
   RuntimeOptions,
@@ -93,6 +95,9 @@ function stubRuntimes(outcomes: readonly Outcome[] = []) {
       setStage(stages) {
         stub.log.push(`stage ${JSON.stringify(stages)}`);
       },
+      setPasses(cards) {
+        stub.log.push(`passes ${JSON.stringify(cards)}`);
+      },
       dispose() {
         stub.isDisposed = true;
         stub.log.push("dispose");
@@ -154,6 +159,19 @@ function nth<T>(list: readonly T[], index: number): T {
 
 const count = <T>(list: readonly T[], item: T): number =>
   list.filter((entry) => entry === item).length;
+
+/** A flat pass card, a tenth of the screen a side, centred at x. */
+function card(pass: PassId, x: number): PassCard {
+  return {
+    pass,
+    corners: [
+      { x: x - 0.1, y: 0.1 },
+      { x: x + 0.1, y: 0.1 },
+      { x: x + 0.1, y: -0.1 },
+      { x: x - 0.1, y: -0.1 },
+    ],
+  };
+}
 
 const engines: Engine[] = [];
 let documentHidden = false;
@@ -238,13 +256,14 @@ afterEach(async () => {
 });
 
 describe("commands and events", () => {
-  test("REQ-ENG-03 the engine offers six commands, on and dispose", () => {
+  test("REQ-ENG-03 REQ-ENG-09 the engine offers seven commands, on and dispose", () => {
     const { engine } = mount({});
 
     expect(Object.keys(engine).sort()).toEqual([
       "dispose",
       "on",
       "setCalm",
+      "setPasses",
       "setPointer",
       "setStage",
       "setStory",
@@ -264,7 +283,12 @@ describe("commands and events", () => {
 
     expect(events).toEqual([
       { type: "tierChosen", tier: 2, reason: "no-webgpu" },
-      { type: "ready", tier: 2, particles: PARTICLES.tier2Desktop },
+      {
+        type: "ready",
+        tier: 2,
+        particles: PARTICLES.tier2Desktop,
+        look: "halftone",
+      },
       { type: "frameRate", fps: 60 },
     ]);
   });
@@ -428,6 +452,94 @@ describe("commands and events", () => {
     ]);
   });
 
+  test("REQ-ENG-03 REQ-ENG-09 setPasses sent before the runtime exists reaches it after the story, each call replaces the last, and the last cards reach a new runtime after a tier change", async () => {
+    const stubs = stubRuntimes();
+    const { engine } = mount({
+      environment: facts(NO_WEBGPU),
+      loadRuntime: stubs.loadRuntime,
+    });
+
+    engine.setPasses([card("points", -0.5)]);
+    engine.setPasses([card("density", 0.5)]);
+    engine.setStory("making-of", 0.5);
+    void engine.start();
+    await settle();
+
+    const first = nth(stubs.built, 0);
+    expect(first.log.slice(0, 2)).toEqual([
+      "story making-of 0.5",
+      `passes ${JSON.stringify([card("density", 0.5)])}`,
+    ]);
+
+    engine.setPasses([card("glow", 0)]);
+    expect(first.log.at(-1)).toBe(
+      `passes ${JSON.stringify([card("glow", 0)])}`,
+    );
+
+    engine.setTier(2);
+    await settle();
+    expect(nth(stubs.built, 1).log.slice(0, 2)).toEqual([
+      "story making-of 0.5",
+      `passes ${JSON.stringify([card("glow", 0)])}`,
+    ]);
+  });
+
+  test("REQ-ENG-09 REQ-ENG-07 null sent after cards reaches the runtime, and a new runtime after it hears no cards at all", async () => {
+    const { engine, stubs, runtime } = await startTier2();
+
+    engine.setPasses([card("final", 0)]);
+    engine.setPasses(null);
+    expect(runtime.log.slice(-2)).toEqual([
+      `passes ${JSON.stringify([card("final", 0)])}`,
+      "passes null",
+    ]);
+
+    engine.setTier(2);
+    await settle();
+    expect(
+      nth(stubs.built, 1).log.filter((line) => line.startsWith("passes")),
+    ).toEqual([]);
+  });
+
+  test("REQ-ENG-09 REQ-TIER-01 the tier 1 probe hears no cards; the probed runtime hears the last ones when its tier is adopted", async () => {
+    const started = await startWith({ environment: facts() });
+    const runtime = nth(started.stubs.built, 0);
+
+    started.engine.setPasses([card("velocity", 0)]);
+    expect(runtime.log.some((line) => line.startsWith("passes"))).toBe(false);
+
+    await playProbe(runtime, 10);
+    expect(runtime.log.filter((line) => line.startsWith("passes"))).toEqual([
+      `passes ${JSON.stringify([card("velocity", 0)])}`,
+    ]);
+  });
+
+  test("REQ-ENG-09 REQ-ENG-07 setPasses after dispose reaches no runtime", async () => {
+    const { engine, runtime } = await startTier2();
+    await engine.dispose();
+    const before = runtime.log.length;
+
+    engine.setPasses([card("points", 0)]);
+
+    expect(runtime.log).toHaveLength(before);
+  });
+
+  test("REQ-ENG-09 REQ-ENG-08 a setPasses that throws drops one tier and never reaches the caller", async () => {
+    const { engine, events, runtime } = await startTier2();
+    runtime.setPasses = () => {
+      throw new Error("the cards broke");
+    };
+
+    expect(() => engine.setPasses([card("glow", 0)])).not.toThrow();
+    await settle();
+
+    expect(runtime.isDisposed).toBe(true);
+    expect(events.slice(-2)).toEqual([
+      { type: "tierChosen", tier: 3, reason: "device-lost" },
+      { type: "ready", tier: 3, particles: 0 },
+    ]);
+  });
+
   test("REQ-ENG-03 REQ-ENG-08 a runtime call that throws drops one tier and never reaches the caller", async () => {
     const { engine, events, runtime, canvas } = await startTier2();
     runtime.setPointer = () => {
@@ -570,6 +682,23 @@ describe("tier flow", () => {
     ]);
   });
 
+  test("REQ-ENG-03 REQ-ENG-09 A14 ready says which look the live runtime draws, and none on the still", async () => {
+    const soft = await startTier2({ look: "soft" });
+    soft.runtime.frame();
+    await settle();
+    expect(soft.events.at(-1)).toEqual({
+      type: "ready",
+      tier: 2,
+      particles: PARTICLES.tier2Desktop,
+      look: "soft",
+    });
+
+    const still = await startWith({ environment: facts({ saveData: true }) });
+    const ready = still.events.find((event) => event.type === "ready");
+    expect(ready).toBeDefined();
+    expect(ready !== undefined && "look" in ready).toBe(false);
+  });
+
   test("REQ-ENG-03 ready carries the live runtime's own particle count: the count of the backend that came up, or the option's", async () => {
     // WebGPU asked for, WebGL2 live: the WebGL2 count.
     const fellBack = await startWith({ environment: facts() }, ["webgl2"]);
@@ -577,7 +706,12 @@ describe("tier flow", () => {
     await settle();
     expect(fellBack.events).toEqual([
       { type: "tierChosen", tier: 2, reason: "webgpu-init-fallback" },
-      { type: "ready", tier: 2, particles: PARTICLES.tier2Desktop },
+      {
+        type: "ready",
+        tier: 2,
+        particles: PARTICLES.tier2Desktop,
+        look: "halftone",
+      },
     ]);
 
     const counted = await startTier2({ particleCount: 5000 });
@@ -587,6 +721,7 @@ describe("tier flow", () => {
       type: "ready",
       tier: 2,
       particles: 5000,
+      look: "halftone",
     });
 
     // The phone count on a coarse pointer.
@@ -599,6 +734,7 @@ describe("tier flow", () => {
       type: "ready",
       tier: 2,
       particles: PARTICLES.tier2Phone,
+      look: "halftone",
     });
   });
 
@@ -631,7 +767,12 @@ describe("tier flow", () => {
     expect(probeCanvas?.style.visibility).toBe("");
     expect(events).toEqual([
       { type: "tierChosen", tier: 1, reason: "probe-pass" },
-      { type: "ready", tier: 1, particles: PARTICLES.tier1 },
+      {
+        type: "ready",
+        tier: 1,
+        particles: PARTICLES.tier1,
+        look: "halftone",
+      },
     ]);
   });
 
@@ -743,6 +884,7 @@ describe("tier flow", () => {
       type: "ready",
       tier: 2,
       particles: PARTICLES.tier2Desktop,
+      look: "halftone",
     });
   });
 
@@ -891,6 +1033,7 @@ describe("tier flow", () => {
       type: "ready",
       tier: 2,
       particles: PARTICLES.tier2Desktop,
+      look: "halftone",
     });
   });
 
@@ -915,7 +1058,12 @@ describe("tier flow", () => {
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "save-data" },
       { type: "tierChosen", tier: 2, reason: "forced" },
-      { type: "ready", tier: 2, particles: PARTICLES.tier2Desktop },
+      {
+        type: "ready",
+        tier: 2,
+        particles: PARTICLES.tier2Desktop,
+        look: "halftone",
+      },
     ]);
   });
 
@@ -949,6 +1097,7 @@ describe("tier flow", () => {
       type: "ready",
       tier: 1,
       particles: PARTICLES.tier1,
+      look: "halftone",
     });
   });
 
@@ -1059,7 +1208,12 @@ describe("tier flow", () => {
     ]);
     nth(stubs.built, 1).frame();
     expect(events.slice(3)).toEqual([
-      { type: "ready", tier: 1, particles: PARTICLES.tier1 },
+      {
+        type: "ready",
+        tier: 1,
+        particles: PARTICLES.tier1,
+        look: "halftone",
+      },
     ]);
 
     engine.setTier(3);
@@ -1205,7 +1359,12 @@ describe("pausing and teardown", () => {
     expect(runtime.log).toEqual(["drawStill"]);
     expect(events).toEqual([
       { type: "tierChosen", tier: 2, reason: "no-webgpu" },
-      { type: "ready", tier: 2, particles: PARTICLES.tier2Desktop },
+      {
+        type: "ready",
+        tier: 2,
+        particles: PARTICLES.tier2Desktop,
+        look: "halftone",
+      },
     ]);
 
     await vi.advanceTimersByTimeAsync(FRAME_RATE_INTERVAL_MS * 2);
@@ -1218,7 +1377,12 @@ describe("pausing and teardown", () => {
     expect(runtime.log).toEqual(["run", "pause", "drawStill"]);
     expect(events).toEqual([
       { type: "tierChosen", tier: 1, reason: "probe-pass" },
-      { type: "ready", tier: 1, particles: PARTICLES.tier1 },
+      {
+        type: "ready",
+        tier: 1,
+        particles: PARTICLES.tier1,
+        look: "halftone",
+      },
     ]);
   });
 
@@ -1352,6 +1516,7 @@ describe("lost device", () => {
       type: "ready",
       tier: 2,
       particles: PARTICLES.tier2Desktop,
+      look: "halftone",
     });
 
     rebuilt.lose();

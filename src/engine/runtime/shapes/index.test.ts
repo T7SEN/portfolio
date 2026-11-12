@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { WORK_SHAPES } from "../../story";
 import type { ShapeId } from "../../story";
@@ -451,24 +451,8 @@ describe("the study shapes", () => {
 });
 
 describe("sampleShape", () => {
-  it("REQ-SCR-01 gives 16,384 points of any shape in under 20 ms from a cold start", async () => {
-    // A busy machine can stall one run, so the best of three cold starts
-    // counts. Each start imports the module afresh.
-    const slowest: number[] = [];
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      vi.resetModules();
-      const fresh = await import("./index");
-      let worst = 0;
-      for (const id of IDS) {
-        const start = performance.now();
-        fresh.sampleShape(id, 16_384);
-        worst = Math.max(worst, performance.now() - start);
-      }
-      slowest.push(worst);
-    }
-
-    expect(Math.min(...slowest)).toBeLessThan(20);
-  });
+  // Its speed from a cold start is timed in cold-start.test.ts, which runs
+  // alone after every other test file (vitest.config.mts).
 
   it("REQ-SCR-01 gives two numbers per point, and none for a count below one", () => {
     expect(sampleShape("archelab", 300)).toHaveLength(600);

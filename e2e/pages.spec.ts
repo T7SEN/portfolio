@@ -2,7 +2,7 @@ import { expect, test, type Locator } from "@playwright/test";
 
 import { ENGINE_ENTRY, findDeferredLibraries } from "../scripts/budget-lib.mjs";
 import { findPhysicalInCss } from "../scripts/class-scan-lib.mjs";
-import { studies, studyHref } from "../src/content";
+import { fullStudies, studies, studyHref } from "../src/content";
 import { about } from "../src/content/about";
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { pages } from "../src/content/pages";
@@ -144,6 +144,34 @@ for (const study of SHORT_STUDIES) {
       description: `height ${Math.round(article.height)} px, bottom ${Math.round(article.y + article.height)} px, viewport ${viewport.width} by ${viewport.height}`,
     });
     expect(article.y + article.height).toBeLessThanOrEqual(viewport.height);
+  });
+}
+
+// Phones take the smaller file of each screenshot, so the picture never
+// holds back the page on a slow network; each file shows at the size the
+// content states, so nothing moves when it arrives.
+for (const study of fullStudies) {
+  const shot = study.screenshot;
+  if (typeof shot === "string") continue;
+  test(`REQ-CNT-03 REQ-PERF-01 ${studyHref(study.slug)} shows its screenshot at its stored size, the smaller file on a phone`, async ({
+    page,
+  }) => {
+    await page.goto(studyHref(study.slug));
+    const image = page.locator("main figure img");
+    await expect(image).toHaveAttribute("alt", shot.alt);
+    await image.scrollIntoViewIfNeeded();
+    await expect(image).toHaveJSProperty("complete", true);
+    const shown = await image.evaluate((element) => {
+      const img = element as HTMLImageElement;
+      return {
+        file: new URL(img.currentSrc).pathname,
+        size: [img.naturalWidth, img.naturalHeight],
+      };
+    });
+    const viewport = page.viewportSize();
+    if (!viewport) throw new Error("the project sets no viewport");
+    const file = viewport.width < 640 ? shot.phone : shot;
+    expect(shown).toEqual({ file: file.src, size: [file.width, file.height] });
   });
 }
 
@@ -291,18 +319,33 @@ test("REQ-I18N-01 the shipped CSS has no physical left or right rules", async ({
   page,
 }) => {
   await page.goto("/");
+  // The stylesheet is inlined into the HTML (next.config.ts, inlineCss), so
+  // its rules are read from the style elements; a linked stylesheet, should
+  // one appear, is fetched and read too.
+  const inline = await page
+    .locator("style")
+    .evaluateAll((styles) => styles.map((style) => style.textContent ?? ""));
   const hrefs = await page
     .locator('link[rel="stylesheet"]')
     .evaluateAll((links) =>
       links.map((link) => (link as HTMLLinkElement).href),
     );
-  expect(hrefs.length).toBeGreaterThan(0);
+  const sheets = [
+    ...inline.map((css, index) => ({ name: `style ${index + 1}`, css })),
+  ];
+  for (const href of hrefs) {
+    sheets.push({
+      name: href,
+      css: await (await page.request.get(href)).text(),
+    });
+  }
+  // The site's own sheet is there: Tailwind's utilities and the tokens.
+  expect(sheets.some(({ css }) => css.includes("--color-void"))).toBe(true);
 
   const hits: string[] = [];
-  for (const href of hrefs) {
-    const css = await (await page.request.get(href)).text();
+  for (const { name, css } of sheets) {
     for (const hit of findPhysicalInCss(css))
-      hits.push(`${href}: ${hit.match}`);
+      hits.push(`${name}: ${hit.match}`);
   }
   expect(hits).toEqual([]);
 });

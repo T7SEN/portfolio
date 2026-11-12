@@ -15,13 +15,27 @@ import {
   TITLE_REVEAL,
 } from "./motion-timing";
 import { readStoryElements } from "./story-dom";
-import { isReached, resolveStory, sameStory } from "./story-progress";
-import { measureLayout, sameStages, type PageLayout } from "./story-stage";
+import {
+  isReached,
+  resolveStory,
+  rowInView,
+  sameStory,
+  type Span,
+} from "./story-progress";
+import {
+  measureLayout,
+  sameStages,
+  stagesAt,
+  type PageLayout,
+} from "./story-stage";
 import {
   PLATE_SOFT,
   VEIL_OPEN,
+  clearAreas,
+  plateClip,
   plateColour,
   plates,
+  type ClearRect,
   type PageRect,
 } from "./story-veil";
 
@@ -51,7 +65,13 @@ function createPlateLayer(doc: Document): HTMLElement {
   return layer;
 }
 
-function drawPlates(layer: HTMLElement, blocks: readonly PageRect[]) {
+// Each plate is cut where a study frame is (story-veil.ts, plateClip), so
+// its soft edge never dims the field inside the frame.
+function drawPlates(
+  layer: HTMLElement,
+  blocks: readonly PageRect[],
+  clear: readonly ClearRect[],
+) {
   const colour = plateColour();
   layer.replaceChildren(
     ...blocks.map((block) => {
@@ -66,6 +86,8 @@ function drawPlates(layer: HTMLElement, blocks: readonly PageRect[]) {
         borderRadius: `${PLATE_SOFT / 2}px`,
         boxShadow: `0 0 ${PLATE_SOFT}px ${PLATE_SOFT / 2}px ${colour}`,
       });
+      const clip = plateClip(block, clear);
+      if (clip !== null) plate.style.clipPath = clip;
       return plate;
     }),
   );
@@ -86,6 +108,7 @@ export type StoryOptions = {
   root: HTMLElement;
   bridge?: Pick<StoryBridge, "setStory" | "setStage" | "setVeil">;
   calm?: Pick<CalmStore, "getSnapshot" | "subscribe">;
+  /** The screen's height, read on every scroll frame. */
   view?: Pick<Window, "innerHeight">;
   fonts?: Pick<FontFaceSet, "ready"> | null;
   /** The page's layout for the field: stages and text (story-stage.ts). */
@@ -123,8 +146,12 @@ function contained(run: () => void) {
  *
  * One ScrollTrigger per chapter maps the scroll position to the chapter at
  * the middle of the viewport and how far through it the page is, and sends
- * that to the field through the story bridge (REQ-SCR-01). Nothing is
- * pinned or snapped, and scrolling keeps its native speed (REQ-SCR-02).
+ * that to the field through the story bridge (REQ-SCR-01). The stages go
+ * the same way, through setStage only (REQ-ENG-03): measured from the
+ * layout on every refresh, and while the work chapter is on screen the work
+ * stage again on every scroll frame, so each study's shape forms inside its
+ * row's frame and moves with it. Nothing is pinned or snapped, and
+ * scrolling keeps its native speed (REQ-SCR-02).
  * Chapter titles below the fold rise into view once; in calm mode or under
  * reduced motion they fade in whole instead (REQ-SCR-05, REQ-A11Y-03).
  *
@@ -165,8 +192,46 @@ export function startStory(
   let isReady = false;
   let isStopped = false;
   let sentStages: Stages | null = null;
+  let layout: PageLayout | null = null;
   let plateLayer: HTMLElement | null = null;
   let unsubscribeTier: (() => void) | null = null;
+  let remeasureTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function currentPosition(): number {
+    return chapterTriggers[0]?.trigger.scroll() ?? 0;
+  }
+
+  function stepSpans(): Span[] {
+    return stepTriggers.map(({ start, end }) => ({ start, end }));
+  }
+
+  // The stages at a scroll position: the dot and the contact panel keep
+  // their places, and the work stage is the frame of the row in view where
+  // the screen shows it. Sent only when they moved (sameStages).
+  function sendStages(position: number, steps: Span[] = stepSpans()) {
+    if (layout === null || isStopped) return;
+    const next = stagesAt(layout, {
+      position,
+      height: view.innerHeight,
+      row: rowInView(position, steps),
+      calm: isCalm,
+    });
+    if (sameStages(sentStages, next)) return;
+    sentStages = next;
+    bridge.setStage(next);
+  }
+
+  // Any part of the work chapter is on screen: its top is above the
+  // screen's bottom and its bottom below the screen's top. A chapter span
+  // runs from its top at the screen's middle to its bottom there.
+  function isWorkInView(position: number): boolean {
+    const work = chapterTriggers.find(({ chapter }) => chapter === "work");
+    if (work === undefined) return false;
+    const half = view.innerHeight / 2;
+    return (
+      position > work.trigger.start - half && position < work.trigger.end + half
+    );
+  }
 
   // Reads every trigger at once, so the order in which ScrollTrigger calls
   // them never matters. ScrollTrigger refreshes every trigger before it
@@ -175,14 +240,22 @@ export function startStory(
   function report() {
     const first = chapterTriggers[0];
     if (!isReady || isStopped || first === undefined) return;
+    const position = first.trigger.scroll();
+    const steps = stepSpans();
+    // While the work chapter is on screen every scroll frame moves its
+    // stage, so the shape follows its frame; the engine takes a small move
+    // at once and glides over a jump to the next row (REQ-SCR-05). The stage
+    // goes first, so a new study already has its frame. In calm the stage
+    // does not move with the scroll, so nothing is sent (REQ-A11Y-03).
+    if (isWorkInView(position)) sendStages(position, steps);
     const next = resolveStory(
-      first.trigger.scroll(),
+      position,
       chapterTriggers.map(({ chapter, trigger }) => ({
         chapter,
         start: trigger.start,
         end: trigger.end,
       })),
-      stepTriggers.map(({ start, end }) => ({ start, end })),
+      steps,
     );
     if (next === null || sameStory(last, next)) return;
     last = next;
@@ -195,28 +268,28 @@ export function startStory(
     if (plateLayer !== null) plateLayer.hidden = live !== 1 && live !== 2;
   }
 
-  // A new layout moves the dot, the work stage and the page's text. The
-  // plates are laid before the veil opens, and again for each new layout.
+  // A new layout moves the dot, the frames, the contact panel and the
+  // page's text. The plates are laid before the veil opens, and again for
+  // each new layout.
   function remeasure() {
     if (isStopped) return;
-    const layout = measure();
-    if (!sameStages(sentStages, layout.stages)) {
-      sentStages = layout.stages;
-      bridge.setStage(layout.stages);
-    }
+    layout = measure();
+    sendStages(currentPosition());
+    const blocks = plates(
+      layout.lines,
+      layout.width > 0 ? layout.width : undefined,
+    );
+    const frames = layout.frames.flatMap((frame) =>
+      frame === null ? [] : [frame],
+    );
+    const clear = clearAreas(frames, layout.lines);
     if (plateLayer === null) {
       plateLayer = createPlateLayer(root.ownerDocument);
       showPlates();
-      drawPlates(
-        plateLayer,
-        plates(layout.lines, root.ownerDocument.documentElement.clientWidth),
-      );
+      drawPlates(plateLayer, blocks, clear);
       bridge.setVeil(VEIL_OPEN);
     } else {
-      drawPlates(
-        plateLayer,
-        plates(layout.lines, root.ownerDocument.documentElement.clientWidth),
-      );
+      drawPlates(plateLayer, blocks, clear);
     }
   }
 
@@ -224,6 +297,19 @@ export function startStory(
   function onRefresh() {
     remeasure();
     report();
+  }
+
+  // Some text arrives after the layout was read: the field's note and the
+  // tier readouts get their words once the field is ready, and the note
+  // comes and goes with calm. No refresh follows, so the plates are laid
+  // again on the next task, once React has drawn the words; without it
+  // that text would sit on the open veil (REQ-A11Y-06).
+  function remeasureSoon() {
+    if (isStopped || remeasureTimer !== null) return;
+    remeasureTimer = setTimeout(() => {
+      remeasureTimer = null;
+      remeasure();
+    }, 0);
   }
 
   // Both start hidden at once (lazy: false), not on GSAP's next tick, so a
@@ -326,6 +412,8 @@ export function startStory(
     ScrollTrigger.removeEventListener("refresh", onRefresh);
     unsubscribeTier?.();
     unsubscribeTier = null;
+    if (remeasureTimer !== null) clearTimeout(remeasureTimer);
+    remeasureTimer = null;
     // The field outside the story keeps its own veil, closed before the
     // plates go.
     if (plateLayer !== null) {
@@ -333,6 +421,7 @@ export function startStory(
       plateLayer.remove();
       plateLayer = null;
     }
+    layout = null;
     clearReveals();
     context?.revert();
     context = null;
@@ -372,6 +461,9 @@ export function startStory(
       const next = calm.getSnapshot().calm;
       if (isStopped || next === isCalm) return;
       isCalm = next;
+      // Calm holds the work stage still; motion lets it follow the frame.
+      sendStages(currentPosition());
+      remeasureSoon();
       try {
         buildReveals();
       } catch {
@@ -383,7 +475,10 @@ export function startStory(
     buildReveals();
 
     ScrollTrigger.addEventListener("refresh", onRefresh);
-    unsubscribeTier = tier.subscribe(showPlates);
+    unsubscribeTier = tier.subscribe(() => {
+      showPlates();
+      remeasureSoon();
+    });
     isReady = true;
     ScrollTrigger.refresh();
     // Whatever is in view now, sent at once.

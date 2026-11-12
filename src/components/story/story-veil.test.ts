@@ -5,14 +5,18 @@ import { colors } from "@/tokens/colors";
 import {
   PLATE_ALPHA,
   PLATE_PAD,
+  PLATE_REACH,
+  PLATE_SOFT,
   VEIL_OPEN,
   VEIL_TEXT,
+  clearAreas,
+  plateClip,
   plateColour,
   plates,
 } from "./story-veil";
 
 describe("the veil over the field", () => {
-  it("REQ-A11Y-06 a plate over the open veil lets through exactly what the measured 0.7 veil does", () => {
+  it("REQ-A11Y-06 a plate over the open veil lets through exactly what the text veil does", () => {
     expect(VEIL_OPEN).toBeLessThan(VEIL_TEXT);
     expect((1 - VEIL_OPEN) * (1 - PLATE_ALPHA)).toBeCloseTo(1 - VEIL_TEXT, 12);
   });
@@ -83,5 +87,59 @@ describe("plates at the page's edges", () => {
     );
     expect(wide).toEqual({ top: 484, bottom: 556, left: 0, right: 375 });
     expect(top?.top).toBe(0);
+  });
+});
+
+describe("the study frames stay open", () => {
+  // A 1280 px page: a study frame at the inline start, its details beside it.
+  const frame = { top: 3000, bottom: 3440, left: 88, right: 700, radius: 16 };
+  const details = { top: 3100, bottom: 3340, left: 756, right: 1192 };
+
+  it("REQ-A11Y-06 a frame holds no text, so it gets no plate of its own", () => {
+    const blocks = plates([details], 1280);
+    expect(blocks).toHaveLength(1);
+    for (const block of blocks) expect(block.left).toBeGreaterThan(frame.right);
+  });
+
+  it("REQ-SCR-01 REQ-A11Y-06 a plate whose soft edge reaches a frame is cut there, along the frame's rounded border", () => {
+    const [plate] = plates([details], 1280);
+    if (plate === undefined) throw new Error("no plate");
+    // The plate's soft edge reaches past its box, over the 56 px gap.
+    expect(PLATE_REACH).toBeGreaterThanOrEqual(PLATE_SOFT * 1.5);
+    expect(plate.left - frame.right).toBeLessThan(PLATE_REACH);
+
+    const clip = plateClip(plate, [frame]);
+    const width = plate.right - plate.left;
+    const height = plate.bottom - plate.top;
+    // Everything the plate paints, then the frame as a hole, in the
+    // plate's own coordinates.
+    expect(clip).toBe(
+      `path(evenodd, "M -160 -160 H ${width + 160} V ${height + 160} H -160 Z ` +
+        "M -636 -84 H -56 A 16 16 0 0 1 -40 -68 V 340 A 16 16 0 0 1 -56 356 " +
+        'H -636 A 16 16 0 0 1 -652 340 V -68 A 16 16 0 0 1 -636 -84 Z")',
+    );
+  });
+
+  it("REQ-A11Y-06 a plate far from every frame keeps its whole soft edge", () => {
+    const [plate] = plates([{ top: 100, bottom: 140, left: 88, right: 400 }]);
+    if (plate === undefined) throw new Error("no plate");
+    expect(plateClip(plate, [frame])).toBeNull();
+    expect(plateClip(plate, [])).toBeNull();
+  });
+
+  it("REQ-A11Y-06 a square frame is cut square, and a broken radius counts as none", () => {
+    const [plate] = plates([details], 1280);
+    if (plate === undefined) throw new Error("no plate");
+    const square = plateClip(plate, [{ ...frame, radius: 0 }]);
+    const broken = plateClip(plate, [{ ...frame, radius: Number.NaN }]);
+    expect(square).toContain("M -652 -84 H -40 V 356 H -652 Z");
+    expect(broken).toBe(square);
+    expect(square).not.toContain("A ");
+  });
+
+  it("REQ-A11Y-06 a frame that a line of text reaches into is not kept clear, so no plate is ever cut where text sits", () => {
+    const caption = { top: 3400, bottom: 3430, left: 120, right: 400 };
+    expect(clearAreas([frame], [details])).toEqual([frame]);
+    expect(clearAreas([frame], [details, caption])).toEqual([]);
   });
 });

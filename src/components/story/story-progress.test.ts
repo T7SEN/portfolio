@@ -5,6 +5,7 @@ import { WORK_SHAPES, workStep } from "@/engine/story";
 import {
   isReached,
   resolveStory,
+  rowInView,
   sameStory,
   spanProgress,
   workProgress,
@@ -12,8 +13,8 @@ import {
 } from "./story-progress";
 
 // A page laid out like the home page, in scroll pixels: each span starts
-// when the section's top reaches the viewport's middle. Services sits in the
-// gap between the hero and the bloom.
+// when the section's top reaches the viewport's middle. A gap is left
+// between the hero and the bloom, to check the rule for gaps.
 const PAGE: ChapterSpan[] = [
   { chapter: "hero", start: -300, end: 400 },
   { chapter: "bloom", start: 700, end: 1900 },
@@ -23,8 +24,9 @@ const PAGE: ChapterSpan[] = [
   { chapter: "contact", start: 4900, end: 5500 },
 ];
 
-// Five cards inside the work chapter, 200 px each with 100 px between them.
-const CARDS = [0, 1, 2, 3, 4].map((index) => ({
+// Three study rows inside the work chapter, 200 px each with 100 px between
+// them: one per work shape.
+const CARDS = [0, 1, 2].map((index) => ({
   start: 2100 + index * 300,
   end: 2300 + index * 300,
 }));
@@ -67,7 +69,7 @@ describe("resolveStory", () => {
     expect(resolveStory(4300, PAGE)).toEqual({ chapter: "about", progress: 0 });
   });
 
-  it("REQ-SCR-01 the services block counts as the hero at 1", () => {
+  it("REQ-SCR-01 a gap between two chapters belongs to the chapter above at 1", () => {
     for (const position of [400, 500, 699]) {
       expect(resolveStory(position, PAGE)).toEqual({
         chapter: "hero",
@@ -88,14 +90,14 @@ describe("resolveStory", () => {
     });
   });
 
-  it("REQ-SCR-01 the work chapter takes its progress from the card in view", () => {
-    // The middle of the third card (2700 to 2900): step 2, halfway.
+  it("REQ-SCR-01 the work chapter takes its progress from the row in view", () => {
+    // The middle of the third row (2700 to 2900): step 2, halfway.
     const story = resolveStory(2800, PAGE, CARDS);
     expect(story?.chapter).toBe("work");
     expect(workStep(story?.progress ?? -1)).toEqual({ index: 2, local: 0.5 });
   });
 
-  it("REQ-SCR-01 with no cards the work chapter falls back to its own span", () => {
+  it("REQ-SCR-01 with no rows the work chapter falls back to its own span", () => {
     expect(resolveStory(2700, PAGE)).toEqual({
       chapter: "work",
       progress: 0.5,
@@ -108,7 +110,7 @@ describe("resolveStory", () => {
 });
 
 describe("workProgress", () => {
-  it("REQ-SCR-01 each card is one of workStep's equal steps, in study order", () => {
+  it("REQ-SCR-01 each study row is one of workStep's equal steps, in study order", () => {
     expect(CARDS).toHaveLength(WORK_SHAPES.length);
     CARDS.forEach((card, index) => {
       for (const local of [0, 0.25, 0.5, 0.75]) {
@@ -120,7 +122,7 @@ describe("workProgress", () => {
     });
   });
 
-  it("REQ-SCR-01 above the first card the first shape has not begun", () => {
+  it("REQ-SCR-01 above the first row the first shape has not begun", () => {
     expect(workProgress(1950, CARDS)).toBe(0);
     expect(workStep(workProgress(1950, CARDS))).toEqual({
       index: 0,
@@ -128,13 +130,13 @@ describe("workProgress", () => {
     });
   });
 
-  it("REQ-SCR-01 between two cards the next shape is at its start", () => {
+  it("REQ-SCR-01 between two rows the next shape is at its start", () => {
     const step = workStep(workProgress(2350, CARDS));
     expect(step.index).toBe(1);
     expect(step.local).toBeCloseTo(0, 10);
   });
 
-  it("REQ-SCR-01 past the last card the last shape is complete", () => {
+  it("REQ-SCR-01 past the last row the last shape is complete", () => {
     expect(workProgress(4000, CARDS)).toBe(1);
     expect(workStep(1)).toEqual({ index: WORK_SHAPES.length - 1, local: 1 });
   });
@@ -142,6 +144,30 @@ describe("workProgress", () => {
   it("REQ-SCR-01 extra items beyond the shapes are ignored", () => {
     const extra = [...CARDS, { start: 3600, end: 3800 }];
     expect(workProgress(3700, extra)).toBe(1);
+  });
+});
+
+describe("rowInView", () => {
+  it("REQ-SCR-01 the frame the shape forms in belongs to the same study as the shape, at every position", () => {
+    for (let position = 1800; position <= 3200; position += 25) {
+      expect(rowInView(position, CARDS)).toBe(
+        workStep(workProgress(position, CARDS)).index,
+      );
+    }
+  });
+
+  it("REQ-SCR-01 above the first row the first; inside a row that row; between rows the next; past the last the last", () => {
+    expect(rowInView(1000, CARDS)).toBe(0);
+    expect(rowInView(2200, CARDS)).toBe(0);
+    expect(rowInView(2300, CARDS)).toBe(1);
+    expect(rowInView(2350, CARDS)).toBe(1);
+    expect(rowInView(2899, CARDS)).toBe(2);
+    expect(rowInView(9000, CARDS)).toBe(2);
+  });
+
+  it("REQ-SCR-01 fewer rows than shapes never name a row that is not there, and no rows give the first", () => {
+    expect(rowInView(9000, CARDS.slice(0, 2))).toBe(1);
+    expect(rowInView(9000, [])).toBe(0);
   });
 });
 

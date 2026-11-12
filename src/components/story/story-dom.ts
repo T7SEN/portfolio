@@ -1,3 +1,4 @@
+import { chapterOrder } from "@/content/story";
 import type { ChapterId } from "@/engine/types";
 import type { StoryState } from "@/lib/story-bridge";
 
@@ -12,20 +13,13 @@ export type StoryElements = {
   titles: HTMLElement[];
 };
 
-// Every chapter id, checked against the type by the compiler. Kept here
-// rather than read from src/content, whose study index would otherwise enter
-// the page's first load with this file (REQ-PERF-04).
-const CHAPTER_IDS: Record<ChapterId, true> = {
-  hero: true,
-  bloom: true,
-  work: true,
-  "making-of": true,
-  about: true,
-  contact: true,
-};
+// The chapters as content/story.ts lists them. That file imports nothing at
+// run time, so reading it here adds no study text to the first load
+// (REQ-PERF-04).
+const CHAPTER_IDS: ReadonlySet<string> = new Set<ChapterId>(chapterOrder);
 
 function isChapterId(value: string | undefined): value is ChapterId {
-  return value !== undefined && Object.hasOwn(CHAPTER_IDS, value);
+  return value !== undefined && CHAPTER_IDS.has(value);
 }
 
 // Read inside the page's main element only: the field's wrapper outside it

@@ -75,8 +75,8 @@ describe("story with the pinned GSAP", () => {
         fonts: null,
       });
       stopStory = stop;
-      // Six chapters, five cards, three titles.
-      expect(motion.ScrollTrigger.getAll()).toHaveLength(14);
+      // Six chapters, three study rows, four titles.
+      expect(motion.ScrollTrigger.getAll()).toHaveLength(13);
       expect(bridge.setStory).toHaveBeenCalled();
       const work = root.querySelector<HTMLElement>("#work-heading");
       if (calm) {
@@ -84,7 +84,7 @@ describe("story with the pinned GSAP", () => {
         expect(work?.hasAttribute("aria-label")).toBe(false);
       } else {
         // Split into words that wait out of view; the heading keeps its name.
-        expect(work?.getAttribute("aria-label")).toBe("Work");
+        expect(work?.getAttribute("aria-label")).toBe("Selected work");
         expect(
           work?.querySelectorAll('[aria-hidden="true"]').length,
         ).toBeGreaterThan(0);
@@ -92,7 +92,10 @@ describe("story with the pinned GSAP", () => {
         const hidden = [
           ...(work?.querySelectorAll<HTMLElement>("*") ?? []),
         ].filter((node) => node.style.opacity === "0");
-        expect(hidden.map((node) => node.textContent)).toEqual(["Work"]);
+        expect(hidden.map((node) => node.textContent)).toEqual([
+          "Selected",
+          "work",
+        ]);
       }
 
       stop();

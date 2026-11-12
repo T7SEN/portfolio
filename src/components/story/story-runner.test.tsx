@@ -15,6 +15,7 @@ import type { CalmSnapshot } from "@/lib/calm-store";
 
 import { REVEAL_START } from "./motion-timing";
 import { startStory, type StoryMotion } from "./story-runner";
+import { screenStage, type PageLayout } from "./story-stage";
 
 type Span = { start: number; end: number };
 
@@ -333,7 +334,7 @@ afterEach(() => {
 });
 
 describe("story triggers", () => {
-  it("REQ-SCR-01 one trigger per chapter, from its top at the middle to its bottom at the middle, and one per study card", () => {
+  it("REQ-SCR-01 one trigger per chapter, from its top at the middle to its bottom at the middle, and one per study row", () => {
     const fake = createFakeMotion(page);
     start(fake);
 
@@ -355,7 +356,9 @@ describe("story triggers", () => {
       steps.includes(vars.trigger as Element),
     );
     expect(stepVars.map((vars) => vars.trigger)).toEqual(steps);
-    expect(steps).toHaveLength(5);
+    // One row per full study, one shape each; the short studies are not
+    // steps.
+    expect(steps).toHaveLength(3);
   });
 
   it("REQ-SCR-02 nothing is pinned, snapped or scrubbed", () => {
@@ -394,7 +397,7 @@ describe("story triggers", () => {
     expect(bridge.setStory).toHaveBeenLastCalledWith("making-of", 401 / 800);
   });
 
-  it("REQ-SCR-01 the services block keeps sending the hero at 1", () => {
+  it("REQ-SCR-01 a gap between two chapters keeps sending the chapter above at 1", () => {
     const fake = createFakeMotion(page);
     start(fake);
     page.position = 550;
@@ -402,13 +405,13 @@ describe("story triggers", () => {
     expect(bridge.setStory).toHaveBeenLastCalledWith("hero", 1);
   });
 
-  it("REQ-SCR-01 the work chapter's progress comes from the card in view, in workStep's equal steps", () => {
+  it("REQ-SCR-01 the work chapter's progress comes from the study row in view, in workStep's equal steps", () => {
     const fake = createFakeMotion(page);
     start(fake);
-    // Halfway through the fourth card (index 3): (3 + 0.5) / 5.
-    page.position = 3100;
+    // Halfway through the third row (index 2): (2 + 0.5) / 3.
+    page.position = 2800;
     fake.triggers[0]?.vars.onUpdate?.();
-    expect(bridge.setStory).toHaveBeenLastCalledWith("work", 0.7);
+    expect(bridge.setStory).toHaveBeenLastCalledWith("work", 2.5 / 3);
   });
 
   it("REQ-SCR-01 an unchanged story is not sent again", () => {
@@ -463,11 +466,12 @@ describe("story triggers", () => {
 });
 
 describe("chapter title reveals", () => {
-  it("REQ-SCR-05 only the work, about and contact titles are revealed", () => {
+  it("REQ-SCR-05 only the work, making-of, about and contact titles are revealed", () => {
     expect(titles().map((title) => title.textContent)).toEqual([
-      "Work",
-      "About",
-      "Contact",
+      "Selected work",
+      "How one frame is built",
+      "Real time, on and off stream.",
+      "Send a message.",
     ]);
     expect(root.querySelector("h1")?.hasAttribute("data-story-title")).toBe(
       false,
@@ -478,7 +482,7 @@ describe("chapter title reveals", () => {
     const fake = createFakeMotion(page);
     start(fake);
 
-    expect(fake.SplitText.create).toHaveBeenCalledTimes(3);
+    expect(fake.SplitText.create).toHaveBeenCalledTimes(4);
     for (const [, vars] of fake.SplitText.create.mock.calls) {
       expect(vars).toMatchObject({ type: "words", mask: "words" });
     }
@@ -533,15 +537,18 @@ describe("chapter title reveals", () => {
   });
 
   it("REQ-SCR-05 REQ-CNT-01 a title already on screen or above is left as it is", () => {
-    placeTitles((title) => (title.textContent === "Contact" ? 3000 : 100));
+    placeTitles((title) =>
+      title.textContent === "Send a message." ? 3000 : 100,
+    );
     const before = titles().map((title) => title.outerHTML);
     const fake = createFakeMotion(page);
     start(fake);
 
     expect(fake.SplitText.create).toHaveBeenCalledTimes(1);
-    expect(fake.SplitText.create.mock.calls[0]?.[0].textContent).toBe(
-      "Contact",
-    );
+    // Split into words, the title keeps its name as its label.
+    expect(
+      fake.SplitText.create.mock.calls[0]?.[0].getAttribute("aria-label"),
+    ).toBe("Send a message.");
     expect(titles()[0]?.outerHTML).toBe(before[0]);
     expect(titles()[1]?.outerHTML).toBe(before[1]);
   });
@@ -582,16 +589,17 @@ describe("chapter title reveals", () => {
     for (const split of splitsBefore) expect(split.isReverted).toBe(true);
     for (const trigger of fake.triggers
       .filter((t) => t.vars.once)
-      .slice(0, 3)) {
+      .slice(0, 4)) {
       expect(trigger.isKilled).toBe(true);
     }
-    expect(work?.textContent).toBe("Work");
+    expect(work?.textContent).toBe("Selected work");
     expect(work?.style.opacity).toBe("");
-    expect(fake.SplitText.create).toHaveBeenCalledTimes(3);
-    const fades = titleTweens(fake).slice(3);
+    expect(fake.SplitText.create).toHaveBeenCalledTimes(4);
+    const fades = titleTweens(fake).slice(4);
     expect(fades.map((tween) => tween.elements[0]?.textContent)).toEqual([
-      "About",
-      "Contact",
+      "How one frame is built",
+      "Real time, on and off stream.",
+      "Send a message.",
     ]);
     for (const tween of fades) expect(tween.from).toEqual({ opacity: 0 });
   });
@@ -613,7 +621,7 @@ describe("chapter title reveals", () => {
     const fake = createFakeMotion(page);
     start(fake, calm);
     calm.set(false);
-    expect(fake.SplitText.create).toHaveBeenCalledTimes(3);
+    expect(fake.SplitText.create).toHaveBeenCalledTimes(4);
     for (const title of titles()) expect(title.style.opacity).toBe("");
   });
 });
@@ -651,7 +659,7 @@ describe("teardown", () => {
     fake.ScrollTrigger.refresh();
     calm.set(true);
     expect(bridge.setStory).toHaveBeenCalledTimes(count);
-    expect(fake.SplitText.create).toHaveBeenCalledTimes(3);
+    expect(fake.SplitText.create).toHaveBeenCalledTimes(4);
   });
 
   it("REQ-SCR-04 the story starts again after a teardown, as on returning to the page", () => {
@@ -664,7 +672,7 @@ describe("teardown", () => {
       first.ScrollTrigger.create.mock.calls.length,
     );
     expect(bridge.setStory).toHaveBeenLastCalledWith("bloom", 0.5);
-    expect(second.SplitText.create).toHaveBeenCalledTimes(3);
+    expect(second.SplitText.create).toHaveBeenCalledTimes(4);
     stop();
   });
 
@@ -698,6 +706,7 @@ describe("the field's layout", () => {
       tier: live as 1 | 2 | 3 | null,
       reason: null,
       ready: true,
+      particles: live === 3 ? 0 : 250_000,
     };
     return {
       store: {
@@ -739,7 +748,7 @@ describe("the field's layout", () => {
       view: VIEW,
       fonts: null,
       tier: tier.store,
-      measure: () => ({ stages, lines }),
+      measure: () => ({ stages, frames: [], width: 1280, lines }),
     });
 
     expect(bridge.setStage.mock.calls).toEqual([[{ hero }]]);
@@ -772,5 +781,201 @@ describe("the field's layout", () => {
     expect(bridge.setVeil).toHaveBeenLastCalledWith(null);
     expect(layer()).toBeNull();
     expect(tier.listeners.size).toBe(0);
+  });
+
+  it("REQ-A11Y-06 REQ-SCR-04 text that arrives once the field is ready, or comes and goes with calm, gets its plate on the next task, and teardown cancels one still waiting", () => {
+    vi.useFakeTimers();
+    try {
+      const fake = createFakeMotion(page);
+      const tier = fakeTier(2);
+      const calm = createCalm(false);
+      const label = { top: 100, bottom: 140, left: 88, right: 400 };
+      const note = { top: 1700, bottom: 1717, left: 56, right: 330 };
+      let lines = [label];
+      let measures = 0;
+      const stop = startStory(fake.motion, {
+        root,
+        bridge,
+        calm: calm.store,
+        view: VIEW,
+        fonts: null,
+        tier: tier.store,
+        measure: () => {
+          measures += 1;
+          return { stages: { hero }, frames: [], width: 1280, lines };
+        },
+      });
+      expect(layer()?.childElementCount).toBe(1);
+
+      // The field note's words arrive with the ready tier, after React draws
+      // them: laid on the next task, once for any number of changes.
+      lines = [label, note];
+      tier.set(1);
+      tier.set(1);
+      expect(layer()?.childElementCount).toBe(1);
+      const before = measures;
+      vi.runOnlyPendingTimers();
+      expect(measures).toBe(before + 1);
+      expect(layer()?.childElementCount).toBe(2);
+
+      // Calm takes the note away.
+      lines = [label];
+      calm.set(true);
+      vi.runOnlyPendingTimers();
+      expect(layer()?.childElementCount).toBe(1);
+
+      // A change just before leaving never measures a page that has gone.
+      tier.set(2);
+      stop();
+      const atStop = measures;
+      vi.runOnlyPendingTimers();
+      expect(measures).toBe(atStop);
+      expect(layer()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The three rows' frames in page coordinates: each row's top reaches the
+  // screen's middle at its span's start (2,100, 2,400 and 2,700 px), so the
+  // row's top is 400 px further down the page; the frame is its first 150 px.
+  const WIDTH = 1280;
+  const FRAMES = [0, 1, 2].map((index) => ({
+    top: 2500 + index * 300,
+    bottom: 2650 + index * 300,
+    left: 88,
+    right: 700,
+    radius: 16,
+  }));
+  const framed = (lines: PageLayout["lines"] = []): PageLayout => ({
+    stages: { hero },
+    frames: FRAMES,
+    width: WIDTH,
+    lines,
+  });
+  const frameAt = (row: number, position: number) =>
+    screenStage(FRAMES[row]!, position, WIDTH, VIEW.innerHeight);
+
+  function startFramed(calm = createCalm(false), lines?: PageLayout["lines"]) {
+    const fake = createFakeMotion(page);
+    const stop = startStory(fake.motion, {
+      root,
+      bridge,
+      calm: calm.store,
+      view: VIEW,
+      fonts: null,
+      tier: fakeTier(1).store,
+      measure: () => framed(lines),
+    });
+    /** Scrolls the page and lets ScrollTrigger report it. */
+    const scrollTo = (position: number) => {
+      page.position = position;
+      fake.triggers[0]?.vars.onUpdate?.();
+    };
+    return { fake, stop, scrollTo };
+  }
+
+  it("REQ-SCR-01 REQ-SCR-05 REQ-ENG-03 while the work chapter is on screen, each scroll frame sends the frame of the row in view, only when it moved, and a new row as one jump", () => {
+    page.position = 2200;
+    const { stop, scrollTo } = startFramed();
+    // Inside the first row: its frame, where the screen shows it now.
+    expect(bridge.setStage.mock.calls).toEqual([
+      [{ hero, work: frameAt(0, 2200) }],
+    ]);
+
+    // Ten pixels on, the frame is ten pixels higher, and so is the stage.
+    scrollTo(2210);
+    expect(bridge.setStage).toHaveBeenLastCalledWith({
+      hero,
+      work: frameAt(0, 2210),
+    });
+    // A frame that did not move sends nothing.
+    scrollTo(2210);
+    expect(bridge.setStage).toHaveBeenCalledTimes(2);
+
+    // Between two rows the next row's frame, sent before the story moves on
+    // to its shape.
+    scrollTo(2350);
+    expect(bridge.setStage).toHaveBeenLastCalledWith({
+      hero,
+      work: frameAt(1, 2350),
+    });
+    const [stageOrder] = bridge.setStage.mock.invocationCallOrder.slice(-1);
+    const [storyOrder] = bridge.setStory.mock.invocationCallOrder.slice(-1);
+    expect(stageOrder).toBeLessThan(storyOrder ?? 0);
+    expect(bridge.setStory).toHaveBeenLastCalledWith("work", 1 / 3);
+    stop();
+  });
+
+  it("REQ-SCR-01 with the work chapter off screen, scrolling sends no stage", () => {
+    page.position = 300;
+    const { stop, scrollTo } = startFramed();
+    const count = bridge.setStage.mock.calls.length;
+    // The work chapter's top reaches the screen's bottom at 1,500 px and its
+    // bottom leaves the top at 3,900 px.
+    for (const position of [400, 900, 1400, 1500, 3900, 4400]) {
+      scrollTo(position);
+    }
+    expect(bridge.setStage).toHaveBeenCalledTimes(count);
+    scrollTo(1501);
+    expect(bridge.setStage).toHaveBeenCalledTimes(count + 1);
+    stop();
+  });
+
+  it("REQ-A11Y-03 REQ-A11Y-04 in calm the stage stream stops: the frame holds the screen's middle, and calm turning off or on sends one stage", () => {
+    const calm = createCalm(true);
+    page.position = 2200;
+    const { stop, scrollTo } = startFramed(calm);
+    const middle = { ...frameAt(0, 2200)!, y: 0 };
+    expect(bridge.setStage.mock.calls).toEqual([[{ hero, work: middle }]]);
+
+    // Every row's frame has the same place on the screen in calm, so no
+    // scroll and no new row sends a stage.
+    for (const position of [2210, 2300, 2350, 2600, 2800]) scrollTo(position);
+    expect(bridge.setStage).toHaveBeenCalledTimes(1);
+
+    calm.set(false);
+    expect(bridge.setStage).toHaveBeenLastCalledWith({
+      hero,
+      work: frameAt(2, 2800),
+    });
+    scrollTo(2810);
+    expect(bridge.setStage).toHaveBeenLastCalledWith({
+      hero,
+      work: frameAt(2, 2810),
+    });
+
+    calm.set(true);
+    expect(bridge.setStage).toHaveBeenCalledTimes(4);
+    expect(bridge.setStage.mock.lastCall?.[0].work?.y).toBe(0);
+    stop();
+  });
+
+  it("REQ-SCR-04 after teardown no scroll sends a stage", () => {
+    page.position = 2200;
+    const { fake, stop } = startFramed();
+    const count = bridge.setStage.mock.calls.length;
+    stop();
+    page.position = 2300;
+    fake.triggers[0]?.vars.onUpdate?.();
+    fake.ScrollTrigger.refresh();
+    expect(bridge.setStage).toHaveBeenCalledTimes(count);
+  });
+
+  it("REQ-A11Y-06 a plate whose soft edge reaches a study frame is cut there, so the field shows inside the frame; other plates keep their whole edge", () => {
+    const { stop } = startFramed(createCalm(false), [
+      // The first row's title, beside its frame past a 56 px gap.
+      { top: 2540, bottom: 2580, left: 756, right: 1192 },
+      // A line far above the work chapter.
+      { top: 100, bottom: 140, left: 88, right: 400 },
+    ]);
+    const plateElements = [...(layer()?.children ?? [])] as HTMLElement[];
+    expect(plateElements).toHaveLength(2);
+    const [beside, far] = plateElements;
+    expect(beside?.style.clipPath).toMatch(/^path\(evenodd, "M -160 -160 /);
+    // The first frame, 652 to 40 px before the plate's start: a hole.
+    expect(beside?.style.clipPath).toContain("A 16 16 0 0 1 -40");
+    expect(far?.style.clipPath).toBe("");
+    stop();
   });
 });

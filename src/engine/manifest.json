@@ -6,12 +6,28 @@
     {
       "tier": 3,
       "device": "desktop",
-      "files": ["public/still/field-wide.jpg", "public/still/field-tall.jpg"]
+      "files": [
+        "public/still/field-wide.webp",
+        "public/still/field-tall.webp",
+        "public/still/field-wordmark-wide.jpg",
+        "public/still/field-wordmark-tall.jpg",
+        "public/still/work-making-of.webp",
+        "public/still/work-coup-online.webp",
+        "public/still/work-archelab.webp"
+      ]
     },
     {
       "tier": 3,
       "device": "phone",
-      "files": ["public/still/field-wide.jpg", "public/still/field-tall.jpg"]
+      "files": [
+        "public/still/field-wide.webp",
+        "public/still/field-tall.webp",
+        "public/still/field-wordmark-wide.jpg",
+        "public/still/field-wordmark-tall.jpg",
+        "public/still/work-making-of.webp",
+        "public/still/work-coup-online.webp",
+        "public/still/work-archelab.webp"
+      ]
     }
   ]
 }

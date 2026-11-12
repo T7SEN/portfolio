@@ -352,7 +352,7 @@ describe("engine session", () => {
     session.request();
     await passFirstContent();
     engines[0]?.emit({ type: "tierChosen", tier: 3, reason: "save-data" });
-    engines[0]?.emit({ type: "ready", tier: 3 });
+    engines[0]?.emit({ type: "ready", tier: 3, particles: 0 });
 
     bridge.setStory("bloom", 0.1);
     expect(wrapper.dataset.chapter).toBe("bloom");
@@ -378,7 +378,7 @@ describe("engine session", () => {
     expect(engines[0]?.setStory).toHaveBeenCalledTimes(4);
   });
 
-  it("REQ-ENG-03 sends tierChosen and ready to the store and mirrors them on the wrapper", async () => {
+  it("REQ-ENG-03 sends tierChosen and ready, with the particles the field draws, to the store and mirrors them on the wrapper", async () => {
     const { wrapper, session } = setUp();
     expect(wrapper.hasAttribute("data-ready")).toBe(false);
     session.request();
@@ -392,11 +392,13 @@ describe("engine session", () => {
       tier: 1,
       reason: "probe-pass",
       ready: false,
+      particles: null,
     });
 
-    engines[0]?.emit({ type: "ready", tier: 1 });
+    engines[0]?.emit({ type: "ready", tier: 1, particles: 1_000_000 });
     expect(wrapper.dataset.ready).toBe("true");
     expect(tierStore.getSnapshot().ready).toBe(true);
+    expect(tierStore.getSnapshot().particles).toBe(1_000_000);
   });
 
   it("REQ-ENG-08 a change of tier is not ready until the new tier reports ready", async () => {
@@ -404,15 +406,18 @@ describe("engine session", () => {
     session.request();
     await passFirstContent();
     engines[0]?.emit({ type: "tierChosen", tier: 1, reason: "probe-pass" });
-    engines[0]?.emit({ type: "ready", tier: 1 });
+    engines[0]?.emit({ type: "ready", tier: 1, particles: 1_000_000 });
 
     engines[0]?.emit({ type: "tierChosen", tier: 2, reason: "device-lost" });
     expect(wrapper.dataset.tier).toBe("2");
     expect(wrapper.dataset.tierReason).toBe("device-lost");
     expect(wrapper.dataset.ready).toBe("false");
 
-    engines[0]?.emit({ type: "ready", tier: 2 });
+    expect(tierStore.getSnapshot().particles).toBeNull();
+
+    engines[0]?.emit({ type: "ready", tier: 2, particles: 250_000 });
     expect(wrapper.dataset.ready).toBe("true");
+    expect(tierStore.getSnapshot().particles).toBe(250_000);
   });
 
   it("REQ-ENG-03 writes data-fps on every frameRate event, without waking the store", async () => {
@@ -446,6 +451,7 @@ describe("engine session", () => {
       tier: 3,
       reason: "no-backend",
       ready: true,
+      particles: 0,
     });
     expect(wrapper.dataset.tier).toBe("3");
     expect(wrapper.dataset.tierReason).toBe("no-backend");
@@ -508,7 +514,7 @@ describe("engine session", () => {
     session.request();
     await passFirstContent();
     engines[0]?.emit({ type: "tierChosen", tier: 2, reason: "phone" });
-    engines[0]?.emit({ type: "ready", tier: 2 });
+    engines[0]?.emit({ type: "ready", tier: 2, particles: 100_000 });
     engines[0]?.emit({ type: "frameRate", fps: 30 });
     expect(calm.listeners.size).toBe(1);
 
@@ -709,6 +715,15 @@ describe("EngineHost", () => {
     expect(veil?.className.split(" ")).toContain("bg-void");
   });
 
+  it("REQ-A11Y-06 REQ-TIER-03 tier 3's still lies under a veil of 0.75, where a glow dot of the sprinkle behind muted text read 4.49 to 1 at 0.7", () => {
+    const html = document.createElement("div");
+    html.innerHTML = renderToStaticMarkup(<EngineHost />);
+    const classes = html.firstElementChild?.className.split(" ") ?? [];
+
+    expect(classes).toContain("[--field-veil:0.7]");
+    expect(classes).toContain("data-[tier=3]:[--field-veil:0.75]");
+  });
+
   it("REQ-CNT-02 a route without the field hides the wrapper and loads nothing", async () => {
     mocks.pathname = "/work";
     await render();
@@ -813,7 +828,7 @@ describe("EngineHost", () => {
     await render();
     await passFirstContent();
     await emit({ type: "tierChosen", tier: 2, reason: "no-webgpu" });
-    await emit({ type: "ready", tier: 2 });
+    await emit({ type: "ready", tier: 2, particles: 250_000 });
     await emit({ type: "frameRate", fps: 58 });
     storyBridge.setStory("work", 0.5);
     await goTo("/work");
@@ -834,13 +849,13 @@ describe("EngineHost", () => {
     expect(parts().still).toBeNull();
 
     await emit({ type: "tierChosen", tier: 3, reason: "save-data" });
-    await emit({ type: "ready", tier: 3 });
+    await emit({ type: "ready", tier: 3, particles: 0 });
 
     const { still, host, veil } = parts();
     const source = still?.parentElement?.querySelector("source");
     expect(still?.parentElement?.tagName).toBe("PICTURE");
-    expect(still?.getAttribute("src")).toBe("/still/field-wide.jpg");
-    expect(source?.getAttribute("srcset")).toBe("/still/field-tall.jpg");
+    expect(still?.getAttribute("src")).toBe("/still/field-wide.webp");
+    expect(source?.getAttribute("srcset")).toBe("/still/field-tall.webp");
     expect(source?.getAttribute("media")).toBe("(orientation: portrait)");
     expect(still?.getAttribute("alt")).toBe("");
     expect(still?.getAttribute("decoding")).toBe("async");

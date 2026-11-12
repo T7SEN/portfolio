@@ -1,26 +1,57 @@
-import { Container } from "@/components/site";
+import { Container } from "@/components/site/container";
+import { site } from "@/content/site";
 import { story } from "@/content/story";
 
-import { BloomLine } from "./bloom-line";
 import { ChapterHeading } from "./chapter-heading";
+import { FieldNote } from "./field-note";
+import { FieldStill } from "./field-still";
+import { HeldPlate } from "./held-plate";
+import { HomeSection } from "./home-section";
+import { PointerRing } from "./pointer-ring";
 import { StoryScene } from "./story-scene";
+import { TierReadout } from "./tier-readout";
 
-// A scene chapter: the field is the content. About one and three quarter
-// screens of scroll give the dot, the bloom and the T7SEN mark a third each
-// (REQ-SCR-07); the section heights of the home page put each chapter near
-// the share of the scroll the storyboard gives it (REQ-SCR-01). The words sit
-// at the bottom start, clear of the mark that forms in the middle of the
-// frame.
+// The field chapter (its id stays "bloom"): the field is the content, from
+// the dot's bloom through the T7SEN mark and the wordmark to the flow lines.
+// One screen holds on screen through the whole chapter (position sticky), as
+// the preview shows the label, the tier and the note with the wordmark: the
+// label at the top start, the tier at the top end and the note at the bottom
+// start, clear of the formation in the middle. Each brings its own plate,
+// since the veil's plates scroll with the page (held-plate.tsx). The
+// chapter's room is long enough for the dot, the mark and the wordmark, and
+// puts the work chapter near its storyboard start (app/page.tsx has the
+// sums). On tier 3 the screen shows the wordmark's still.
 export function BloomSection() {
-  const { label, lines } = story.bloom;
-
   return (
-    <section id="bloom" aria-labelledby="bloom-heading" data-chapter="bloom">
-      <Container className="flex min-h-[175svh] flex-col justify-end py-16 sm:py-20">
-        <ChapterHeading id="bloom-heading" label={label} />
-        <StoryScene chapter="bloom" />
-        <BloomLine lines={lines} />
-      </Container>
-    </section>
+    <HomeSection
+      id="bloom"
+      chapter="bloom"
+      name={site.names.field}
+      className="relative min-h-[260svh] lg:min-h-[220svh]"
+    >
+      <div data-part="field-screen" className="sticky top-0 isolate h-svh">
+        <FieldStill />
+        <Container
+          width="full"
+          className="flex h-full flex-col justify-between gap-8 py-8 lg:py-10"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+            <HeldPlate>
+              <ChapterHeading id="bloom-heading" label={story.labels.bloom} />
+            </HeldPlate>
+            <HeldPlate>
+              <TierReadout variant="field" />
+            </HeldPlate>
+          </div>
+          <StoryScene chapter="bloom" />
+          {/* As wide as its words, so the plate behind it stays at the start
+              and the field's lines run on beside it. */}
+          <HeldPlate className="self-start">
+            <FieldNote />
+          </HeldPlate>
+        </Container>
+      </div>
+      <PointerRing />
+    </HomeSection>
   );
 }

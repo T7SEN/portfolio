@@ -27,7 +27,7 @@ export const STORYBOARD_SHARE: Record<ChapterId, number> = {
 // still fails.
 export const STORY_TIMEOUT_MS = 45_000;
 
-/** A place in the story: a chapter and a progress, or a study card. */
+/** A place in the story: a chapter and a progress, or a study row. */
 export type StoryPlace =
   { chapter: ChapterId; progress: number } | { step: number; local?: number };
 
@@ -57,11 +57,15 @@ export async function waitForStory(page: Page): Promise<"split" | "fade"> {
 /** html carries this class while Lenis drives the page. */
 export const LENIS_CLASS = /(?:^|\s)lenis(?:\s|$)/;
 
-/** The calm-mode toggle in the bar (REQ-A11Y-04). */
+/**
+ * The calm-mode switch in the bar (REQ-A11Y-04). The home page holds three
+ * switches of that name (the bar's, the hero's corner pill and the
+ * footer's), so this one is found inside the banner.
+ */
 export function calmToggle(page: Page) {
   return page
     .getByRole("banner")
-    .getByRole("button", { name: "Calm", exact: true });
+    .getByRole("switch", { name: "Calm mode", exact: true });
 }
 
 /** Whether Lenis drives the page now: it puts its class on html. */
@@ -84,7 +88,7 @@ export function lenisWasMade(page: Page): Promise<boolean> {
  * The scroll position, clamped to the page, at which the place sits at the
  * middle of the viewport. A chapter's progress is 0 when its section's top
  * reaches the middle and 1 when its bottom does (the story to engine
- * contract); a study card's span is measured the same way.
+ * contract); a study row's span is measured the same way.
  */
 export function scrollPositionOf(page: Page, place: StoryPlace) {
   return page.evaluate((target) => {
@@ -270,8 +274,7 @@ export function scrollAtRest(
 /**
  * The chapter the story gives the current scroll position, read from the
  * layout as story-progress.ts reads it: the last chapter whose top has
- * reached the middle of the viewport. The services block after the hero is
- * not a chapter, so it counts as the hero.
+ * reached the middle of the viewport.
  */
 export function chapterInLayout(page: Page): Promise<ChapterId> {
   return page.evaluate(() => {

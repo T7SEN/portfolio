@@ -10,6 +10,12 @@ import { pixelStats, type Box } from "../gpu/pixels";
 
 const FIELD = '[data-testid="engine-field"]';
 const MINIMUM = 4.5;
+// The page's text is hidden while the field is measured. The plates that
+// text held on screen brings along (home/held-plate.tsx) are part of the
+// veil, as the veil's own plates are, so they stay.
+const HIDE_TEXT =
+  "header, main, footer { visibility: hidden !important; } " +
+  "main [data-part='own-plate'] { visibility: visible !important; }";
 const FRAMES = Number(process.env.CONTRAST_FRAMES ?? 12);
 const FRAME_GAP_MS = 250;
 // Extra veil strengths to measure beside the shipped one, as "0.5,0.7".
@@ -36,7 +42,7 @@ async function textBoxes(page: Page): Promise<{ boxes: Box[]; own: number }> {
     const boxes: Box[] = [];
     let own = 0;
     const elements = document.querySelectorAll(
-      'header :is(a, button), section[aria-labelledby="hero-headline"] :is(p, h1, a)',
+      'header :is(a, button), section[data-chapter="hero"] :is(p, h1, a, button)',
     );
     for (const element of elements) {
       const box = element.getBoundingClientRect();
@@ -157,9 +163,7 @@ for (const { name, viewport, tier, setup } of CASES) {
         boxes.length,
         `text boxes in view at scroll ${await page.evaluate(() => window.scrollY)}`,
       ).toBeGreaterThan(5);
-      await page.addStyleTag({
-        content: "header, main, footer { visibility: hidden !important; }",
-      });
+      await page.addStyleTag({ content: HIDE_TEXT });
 
       const shipped = Number(
         await field.evaluate((element) =>
@@ -236,10 +240,11 @@ for (const { name, viewport, tier, setup } of CASES) {
   });
 }
 
-// Further down the page the field gathers into formations: the mark in the
-// bloom, a mark per study, the flat sheet and the wave. They pack the
-// particles far more densely than the ambient field, so the text in view at
-// each one is measured too (accessibility.md section 7).
+// Further down the page the field gathers into formations: the mark then
+// the wordmark in the field chapter, a shape per study inside its frame, the
+// flat sheet, the strands and the rings. They pack the particles far more
+// densely than the ambient field, so the text in view at each one is
+// measured too (accessibility.md section 7).
 
 type ColouredBox = Box & { colour: string };
 
@@ -278,6 +283,9 @@ async function textOnField(
       if (element.closest(".sr-only, [hidden], [aria-hidden='true']")) {
         continue;
       }
+      // A study row holds its frame, where the field forms the study's
+      // shape on purpose; its words are measured by their own elements.
+      if (element.querySelector('[data-stage="frame"]') !== null) continue;
       const box = element.getBoundingClientRect();
       const inView =
         box.width > 2 &&
@@ -323,48 +331,67 @@ const CHAPTER_CASES = [
 ] as const;
 
 // Where each formation is whole, as a scroll position: a chapter's progress
-// through its section, or the middle of a study card.
-// The bloom and making-of words sit at the bottom of their sections, so they
-// come into view late in the chapter: 0.75 and 0.8 catch them over the
-// dissolving mark and the sheet that still holds.
-// text says whether words are in view there. A text state must find at least
-// one box to measure, so a broken selector fails instead of passing on
-// nothing. At bloom 0.58 and making-of 0.5 only the field is in view: those
-// states check that the story reached the formation and that no text sits
-// over it, and a box found there fails too, so the flag cannot go stale.
+// through its section, or the middle of a study row. text says whether
+// words are in view there. A text state must find at least one box to
+// measure, so a broken selector fails instead of passing on nothing; a
+// field-only state must find none, so the flag cannot go stale. The field
+// chapter's label, tier readout and note hold on screen through the
+// chapter with their own plates, over the mark and the formed wordmark;
+// the making-of words sit at the top of their section and the sheet holds
+// below them.
 const FORMED_STATES = [
   {
-    // 0.58, not 0.6: after the design review the bloom label reaches the
-    // viewport's bottom at 0.608 on the phone and 0.613 at 1280 (measured
-    // 11 Nov 2026), so at 0.6 a late font swap could bring it into view.
-    // The mark is whole from 0.52.
-    name: "bloom 0.58, the mark",
+    name: "field 0.2, the label, readout and note over the opening field",
     chapter: "bloom",
-    progress: 0.58,
+    progress: 0.2,
+    text: true,
+  },
+  {
+    name: "field 0.46, the label, readout and note held over the mark",
+    chapter: "bloom",
+    progress: 0.46,
+    text: true,
+  },
+  {
+    name: "field 0.74, the label, readout and note held over the formed wordmark",
+    chapter: "bloom",
+    progress: 0.74,
+    text: true,
+    held: 3,
+  },
+  { name: "work, the making-of sheets", step: 0, text: true },
+  { name: "work, the coup-online cards", step: 1, text: true },
+  { name: "work, the archelab bubble", step: 2, text: true },
+  {
+    name: "making-of 0.2, the words over the gathering sheet",
+    chapter: "making-of",
+    progress: 0.2,
+    text: true,
+  },
+  {
+    name: "making-of 0.6, the sheet",
+    chapter: "making-of",
+    progress: 0.6,
     text: false,
   },
   {
-    name: "bloom 0.75, the mark letting go",
-    chapter: "bloom",
-    progress: 0.75,
+    name: "about 0.4, the strands",
+    chapter: "about",
+    progress: 0.4,
     text: true,
   },
-  { name: "work, the coup-online mark", step: 1, text: true },
-  { name: "work, the archelab mark", step: 2, text: true },
   {
-    name: "making-of 0.5, the sheet",
-    chapter: "making-of",
+    name: "about 0.6, the strands",
+    chapter: "about",
+    progress: 0.6,
+    text: true,
+  },
+  {
+    name: "contact 0.5, the rings",
+    chapter: "contact",
     progress: 0.5,
-    text: false,
-  },
-  {
-    name: "making-of 0.8, the sheet",
-    chapter: "making-of",
-    progress: 0.8,
     text: true,
   },
-  { name: "about 0.3, the wave", chapter: "about", progress: 0.3, text: true },
-  { name: "about 0.5, the wave", chapter: "about", progress: 0.5, text: true },
 ] as const;
 
 // The field needs about a second and a half to gather after a jump.
@@ -436,9 +463,7 @@ for (const { name, viewport, tier, setup } of CHAPTER_CASES) {
         const brightest = new Map<string, { luminance: number; hex: string }>();
         // A state with no text in view has nothing to measure.
         const frames = boxes.length > 0 ? FRAMES : 0;
-        const hidden = await page.addStyleTag({
-          content: "header, main, footer { visibility: hidden !important; }",
-        });
+        const hidden = await page.addStyleTag({ content: HIDE_TEXT });
         for (let frame = 0; frame < frames; frame += 1) {
           await page.waitForTimeout(FRAME_GAP_MS);
           const png = await page.screenshot();
@@ -501,6 +526,23 @@ for (const { name, viewport, tier, setup } of CHAPTER_CASES) {
             boxes.length,
             `${state.name} is a text state: text in view to measure`,
           ).toBeGreaterThan(0);
+          // The held words are measured where they hold, over the wordmark.
+          if ("held" in state) {
+            const held = await page.evaluate(
+              () =>
+                [
+                  ...document.querySelectorAll('main [data-plate="own"]'),
+                ].filter((element) => {
+                  const box = element.getBoundingClientRect();
+                  return (
+                    box.height > 0 &&
+                    box.top >= 0 &&
+                    box.bottom <= window.innerHeight
+                  );
+                }).length,
+            );
+            expect(held, `${state.name}: all held on screen`).toBe(state.held);
+          }
         } else {
           expect(
             boxes.length,

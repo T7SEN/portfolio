@@ -2,7 +2,7 @@ import { expect, test, type Locator } from "@playwright/test";
 
 import { ENGINE_ENTRY, findDeferredLibraries } from "../scripts/budget-lib.mjs";
 import { findPhysicalInCss } from "../scripts/class-scan-lib.mjs";
-import { studyHref } from "../src/content";
+import { studies, studyHref } from "../src/content";
 import { about } from "../src/content/about";
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { pages } from "../src/content/pages";
@@ -234,6 +234,59 @@ for (const route of ROUTES) {
   });
 }
 
+// The focus ring glows from the first frame it is drawn: nothing fades it in
+// (REQ-A11Y-02). Tailwind's transition-colors lists outline-color, so a ring
+// colour that arrived with focus would transition from the element's own
+// colour; the lavender primary pill showed a dark ring for its first frames.
+test("REQ-A11Y-02 the focus ring is glow from its first frame on every focusable element, with no colour transition", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const glow = "rgb(167, 139, 250)";
+  // Every element that takes focus on the home page, by Tab, and the
+  // lavender primary pill among them.
+  const primary = page
+    .locator("main")
+    .getByRole("link", { name: HERO.primaryAction, exact: true });
+  await expect(primary).toBeVisible();
+  const seen: string[] = [];
+  let reachedPrimary = false;
+  for (let stop = 0; stop < 40; stop += 1) {
+    await page.keyboard.press("Tab");
+    const ring = await page.evaluate(() => {
+      const element = document.activeElement;
+      if (element === null || element === document.body) return null;
+      const style = getComputedStyle(element);
+      const fading = element
+        .getAnimations()
+        .filter(
+          (animation) =>
+            animation instanceof CSSTransition &&
+            (animation.transitionProperty === "outline-color" ||
+              animation.transitionProperty === "outline"),
+        ).length;
+      return {
+        name: `${element.tagName.toLowerCase()} ${(element.textContent ?? "").trim().slice(0, 40)}`,
+        colour: style.outlineColor,
+        style: style.outlineStyle,
+        width: style.outlineWidth,
+        fading,
+      };
+    });
+    if (ring === null) break;
+    seen.push(ring.name);
+    expect(ring, `${ring.name}: the ring as it is first drawn`).toMatchObject({
+      colour: glow,
+      style: "solid",
+      width: "2px",
+      fading: 0,
+    });
+    if (ring.name.includes(HERO.primaryAction)) reachedPrimary = true;
+  }
+  expect(seen.length).toBeGreaterThan(5);
+  expect(reachedPrimary, "the primary pill took focus").toBe(true);
+});
+
 test("REQ-I18N-01 the shipped CSS has no physical left or right rules", async ({
   page,
 }) => {
@@ -268,4 +321,210 @@ test("REQ-A11Y-01 REQ-A11Y-02 an unknown page returns 404 with one h1, the skip 
   await expect(
     page.getByRole("link", { name: "Skip to content", exact: true }),
   ).toBeFocused();
+});
+
+// The contact address with its Copy button (T7SEN, 11 Nov 2026; a departure
+// from the brief's hidden address). "Address copied." clears after 4 s
+// (COPIED_MS in src/components/pages/copy-address.tsx); "Could not copy."
+// stays until the next press.
+const CLEARED_WITHIN_MS = 10_000;
+const FAILED_HELD_MS = 6_000;
+
+test.describe("the /contact address", () => {
+  const { address } = pages.contact;
+
+  test("REQ-A11Y-01 REQ-A11Y-05 Copy puts the address on the clipboard, says so politely and clears the line again", async ({
+    page,
+    context,
+  }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.goto("/contact");
+    const main = page.locator("main");
+
+    await expect(
+      main.getByRole("link", { name: address.email, exact: true }),
+    ).toHaveAttribute("href", address.href);
+    const button = main.getByRole("button", {
+      name: address.copy.name,
+      exact: true,
+    });
+    await expect(button).toHaveText(address.copy.label);
+    await expect(button).toHaveAttribute("data-state", "idle");
+    const box = await boxOf(button);
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    const status = main.getByRole("status");
+    await expect(status).toHaveText("");
+
+    await button.click();
+    await expect(status).toHaveText(address.copy.copied);
+    await expect(button).toHaveAttribute("data-state", "copied");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+      address.email,
+    );
+
+    // A second press says it again.
+    await button.click();
+    await expect(status).toHaveText(address.copy.copied);
+
+    await expect(status).toHaveText("", { timeout: CLEARED_WITHIN_MS });
+    await expect(button).toHaveAttribute("data-state", "idle");
+  });
+
+  test("REQ-A11Y-05 a clipboard that refuses gives the failed line with its way forward, and it stays", async ({
+    page,
+  }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText: () =>
+            Promise.reject(new DOMException("Refused", "NotAllowedError")),
+        },
+      });
+    });
+    await page.goto("/contact");
+    const main = page.locator("main");
+    const button = main.getByRole("button", {
+      name: address.copy.name,
+      exact: true,
+    });
+    const status = main.getByRole("status");
+
+    await button.click();
+    await expect(status).toHaveText(address.copy.failed);
+    await expect(button).toHaveAttribute("data-state", "failed");
+    await page.waitForTimeout(FAILED_HELD_MS);
+    await expect(status).toHaveText(address.copy.failed);
+  });
+
+  test.describe("without JavaScript", () => {
+    test.use({ javaScriptEnabled: false });
+
+    test("REQ-CNT-01 the address is a mail link and no Copy button shows, since it could not work", async ({
+      page,
+    }) => {
+      await page.goto("/contact");
+      const main = page.locator("main");
+      await expect(
+        main.getByRole("link", { name: address.email, exact: true }),
+      ).toHaveAttribute("href", address.href);
+      await expect(main.getByRole("button")).toHaveCount(0);
+    });
+  });
+});
+
+const escaped = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * A /work study link's name, exactly: its column word, then the project
+ * ("Full study, Coup Online"). The link carries it as its label, so no
+ * space comes before the comma.
+ */
+function studyLinkName(label: string, title: string): RegExp {
+  return new RegExp(`^${escaped(label)}, ${escaped(title)}$`);
+}
+
+/** Every row of the /work table: its key and its study link's name and href. */
+const WORK_ROWS = [
+  ...studies.map((study) => ({
+    key: study.slug,
+    title: study.title,
+    link: studyLinkName(study.listing.studyLabel, study.title),
+    href: studyHref(study.slug),
+  })),
+  {
+    key: "v1",
+    title: pages.work.table.v1.title,
+    link: studyLinkName(
+      pages.work.table.v1.link.label,
+      pages.work.table.v1.title,
+    ),
+    href: pages.work.table.v1.link.href,
+  },
+];
+
+test("REQ-CNT-02 REQ-CNT-07 REQ-A11Y-01 /work lists every study, then the archive, in one table named by its heading, each study link named with its project", async ({
+  page,
+}) => {
+  await page.goto("/work");
+  const table = page.getByRole("table", {
+    name: pages.work.heading,
+    exact: true,
+  });
+  await expect(table).toHaveCount(1);
+  const { headers } = pages.work.table;
+  expect(
+    await table
+      .getByRole("columnheader")
+      .evaluateAll((cells) => cells.map((cell) => cell.textContent)),
+  ).toEqual([
+    headers.number,
+    headers.project,
+    headers.what,
+    headers.builtWith,
+    headers.study,
+  ]);
+  expect(
+    await table
+      .locator("tbody tr")
+      .evaluateAll((rows) => rows.map((row) => row.getAttribute("data-study"))),
+  ).toEqual(WORK_ROWS.map((row) => row.key));
+
+  for (const row of WORK_ROWS) {
+    const tableRow = table.locator(`tbody tr[data-study="${row.key}"]`);
+    await expect(
+      tableRow.getByRole("rowheader", { name: row.title, exact: true }),
+    ).toHaveCount(1);
+    const link = tableRow.getByRole("link", { name: row.link });
+    await expect(link).toHaveAttribute("href", row.href);
+    expect((await boxOf(link)).height, row.key).toBeGreaterThanOrEqual(44);
+  }
+});
+
+test.describe("on a 320 px phone", () => {
+  test.use({ viewport: { width: 320, height: 568 } });
+
+  test("REQ-A11Y-01 REQ-I18N-01 /work stacks each row's cells beside its number, with no sideways scroll and every study link 44 px tall", async ({
+    page,
+  }, testInfo) => {
+    await page.goto("/work");
+    await page.evaluate(() => document.fonts.ready);
+    const overflow = await page.evaluate(
+      () =>
+        document.documentElement.scrollWidth -
+        document.documentElement.clientWidth,
+    );
+    await page.screenshot({
+      path: testInfo.outputPath("work-320.png"),
+      fullPage: true,
+    });
+    expect(overflow).toBe(0);
+
+    // The header row is hidden from sight below 1024 px; its cells keep
+    // their names for assistive technology.
+    const table = page.getByRole("table", {
+      name: pages.work.heading,
+      exact: true,
+    });
+    expect((await boxOf(table.locator("thead"))).height).toBeLessThanOrEqual(1);
+    await expect(table.getByRole("columnheader")).toHaveCount(5);
+
+    for (const row of WORK_ROWS) {
+      const tableRow = table.locator(`tbody tr[data-study="${row.key}"]`);
+      const number = await boxOf(tableRow.locator("td").first());
+      const title = await boxOf(tableRow.getByRole("rowheader"));
+      const what = await boxOf(tableRow.locator("td").nth(1));
+      const link = await boxOf(tableRow.getByRole("link", { name: row.link }));
+      const line = `${row.key}: number at ${Math.round(number.x)}, title ${Math.round(title.x)} to ${Math.round(title.x + title.width)} from ${Math.round(title.y)}, what ${Math.round(what.x)} from ${Math.round(what.y)}, link ${Math.round(link.height)} px tall`;
+      testInfo.annotations.push({ type: "stacked", description: line });
+      // The number at the start, the cells in one column after it, each
+      // under the one before.
+      expect(number.x + number.width, line).toBeLessThanOrEqual(title.x + 1);
+      expect(Math.abs(what.x - title.x), line).toBeLessThanOrEqual(1);
+      expect(what.y, line).toBeGreaterThanOrEqual(title.y + title.height - 1);
+      expect(title.x + title.width, line).toBeLessThanOrEqual(320);
+      expect(link.height, line).toBeGreaterThanOrEqual(44);
+    }
+  });
 });

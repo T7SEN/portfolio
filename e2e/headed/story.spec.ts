@@ -7,8 +7,14 @@ import {
 } from "@playwright/test";
 
 import { PARTICLES } from "../../src/engine/config";
+import { WORK_SHAPES, type ShapeId } from "../../src/engine/story";
 import { packAtlas } from "../../src/engine/runtime/atlas";
-import { fitScale } from "../../src/engine/runtime/story";
+import {
+  bloomStage,
+  calmProgress,
+  fitScale,
+  stagedFrame,
+} from "../../src/engine/runtime/story";
 import {
   FPS_TOLERANCE,
   PASS_MEDIAN_MS,
@@ -31,9 +37,10 @@ import { FIELD, HOST } from "../support/tiers";
 
 // The scroll story on the production home page, headed, on this machine's
 // GPU (pnpm e2e:gpu, after pnpm build): the frame rate in every chapter, the
-// T7SEN mark forming and dissolving, and the cursor and a finger stirring the
-// field. The window is on a real screen, so each measurement also checks
-// that the page is still where the test put it.
+// T7 mark then the T7SEN wordmark forming and dissolving, each study's shape
+// staying inside its row's frame while the page scrolls, and the cursor and
+// a finger stirring the field. The window is on a real screen, so each
+// measurement also checks that the page is still where the test put it.
 
 const TIERS = [
   {
@@ -282,24 +289,29 @@ const CHAPTER_STATES: ReadonlyArray<{
     chapter: "bloom",
   },
   {
-    name: "bloom 0.6, the mark",
-    place: { chapter: "bloom", progress: 0.6 },
+    name: "bloom 0.46, the mark",
+    place: { chapter: "bloom", progress: 0.46 },
     chapter: "bloom",
   },
-  { name: "work, coup-online", place: { step: 1 }, chapter: "work" },
-  { name: "work, systemseven", place: { step: 4 }, chapter: "work" },
+  {
+    name: "bloom 0.74, the wordmark",
+    place: { chapter: "bloom", progress: 0.74 },
+    chapter: "bloom",
+  },
+  { name: "work, making-of", place: { step: 0 }, chapter: "work" },
+  { name: "work, archelab", place: { step: 2 }, chapter: "work" },
   {
     name: "making-of 0.5, the sheet",
     place: { chapter: "making-of", progress: 0.5 },
     chapter: "making-of",
   },
   {
-    name: "about 0.5, the wave",
+    name: "about 0.5, the strands",
     place: { chapter: "about", progress: 0.5 },
     chapter: "about",
   },
   {
-    name: "contact 0.5, at rest",
+    name: "contact 0.5, the rings",
     place: { chapter: "contact", progress: 0.5 },
     chapter: "contact",
   },
@@ -366,19 +378,28 @@ for (const setup of TIERS) {
   });
 }
 
-// The bloom (REQ-SCR-07): the mark is whole from 0.52 to 0.7 of the chapter
-// and gone by 0.95 (src/engine/runtime/story.ts). 0.55 is the mark just
-// gathered; at 0.9 a tenth of the formation is left.
-const MARK_FORMED_AT = 0.55;
-const MARK_DISSOLVED_AT = 0.9;
+// The bloom (REQ-SCR-07, runtime/story.ts): the T7 mark is whole from 0.42
+// to 0.5 of the field chapter, it turns into the T7SEN wordmark by 0.64, the
+// wordmark holds to 0.84 (its calm still is 0.74) and is gone by 0.97. The
+// field chapter forms inside its bloom stage, the middle 0.8 of a landscape
+// screen.
+const MARK_FORMED_AT = 0.46;
+// The landscape frame's limit for the share of the light in the wordmark's
+// box, as e2e/gpu/story.spec.ts sets it: measured there at 0.959 on tiers 1
+// and 2 on 12 Nov 2026 (the line was 0.5 then); a little under it.
+const WORDMARK_SHARE_LANDSCAPE = 0.9;
+const WORDMARK_FORMED_AT = calmProgress("bloom", 0);
+const DISSOLVED_AT = 0.99;
 const atlas = packAtlas();
 
-/** Where the fitted mark sits in a host of this size, with room for noise. */
-function markBox(width: number, height: number): Box {
+/** Where a fitted bloom shape sits in a host of this size, with room for noise. */
+function bloomBox(id: ShapeId, width: number, height: number): Box {
   const frame = { halfWidth: width / height, halfHeight: 1 };
-  const extent = atlas.extents.logo;
-  const scale = fitScale(extent, frame);
-  const margin = 0.05 * (Math.min(width, height) / 2) + 8;
+  const staged = stagedFrame(bloomStage(width / height), frame);
+  const extent = atlas.extents[id];
+  const scale = fitScale(extent, staged.frame);
+  // Noise and the 8 px halftone lattice reach past the sampled box.
+  const margin = 0.05 * (Math.min(width, height) / 2) + 16;
   const halfWidth =
     ((extent.halfWidth * scale) / frame.halfWidth) * (width / 2) + margin;
   const halfHeight = extent.halfHeight * scale * (height / 2) + margin;
@@ -390,12 +411,12 @@ function markBox(width: number, height: number): Box {
   };
 }
 
-/** How the light of one frame sits against the mark's box. */
-async function markFrame(page: Page, box: Box, host: Box, path: string) {
+/** How the light of one frame sits against a shape's box. */
+async function shapeFrame(page: Page, box: Box, host: Box, path: string) {
   const png = await page.locator(HOST).screenshot({ path });
   const whole = await pixelStats(page, png);
   const inside = await pixelStats(page, png, [box]);
-  // The columns left and right of the mark's box, the full height.
+  // The columns left and right of the box, the full height.
   const sides = await pixelStats(page, png, [
     { x: 0, y: 0, width: box.x, height: host.height },
     {
@@ -408,22 +429,28 @@ async function markFrame(page: Page, box: Box, host: Box, path: string) {
   const lit = whole.litShare * whole.pixels;
   return {
     lit,
-    inMark: lit === 0 ? 0 : (inside.litShare * inside.pixels) / lit,
+    inBox: lit === 0 ? 0 : (inside.litShare * inside.pixels) / lit,
     sides: sides.litShare,
     brightest: whole.brightest,
   };
 }
 
+// Once the wordmark has gone, the flow lines run beside its box again. They
+// lit 0.0150 to 0.0163 of the columns beside it on 12 Nov 2026 on tiers 1
+// and 2, where the wordmark itself left 0.0044; the line is half the lowest.
+const DISSOLVED_SIDES = 0.0075;
+
 for (const setup of TIERS) {
   const { tier } = setup;
-  test(`REQ-SCR-07 on tier ${tier} the T7SEN mark gathers in the bloom and dissolves back into the field`, async ({
+  test(`REQ-SCR-07 on tier ${tier} the T7 mark gathers in the field chapter, turns into the T7SEN wordmark and dissolves into the flow`, async ({
     page,
   }, testInfo) => {
     test.setTimeout(180_000);
     const { errors } = watchErrors(page);
     await openHome(page, setup);
     const host = await hostBox(page);
-    const box = markBox(host.width, host.height);
+    const markBox = bloomBox("logo", host.width, host.height);
+    const wordmarkBox = bloomBox("wordmark", host.width, host.height);
 
     await settleAt(
       page,
@@ -431,58 +458,269 @@ for (const setup of TIERS) {
       "bloom",
     );
     await showFieldAlone(page);
-    const formed = await markFrame(
+    const mark = await shapeFrame(
       page,
-      box,
+      markBox,
       host,
-      testInfo.outputPath(`mark-formed-tier${tier}.png`),
+      testInfo.outputPath(`mark-tier${tier}.png`),
     );
     await settleAt(
       page,
-      { chapter: "bloom", progress: MARK_DISSOLVED_AT },
+      { chapter: "bloom", progress: WORDMARK_FORMED_AT },
       "bloom",
     );
-    const dissolved = await markFrame(
+    const wordmark = await shapeFrame(
       page,
-      box,
+      wordmarkBox,
       host,
-      testInfo.outputPath(`mark-dissolved-tier${tier}.png`),
+      testInfo.outputPath(`wordmark-tier${tier}.png`),
+    );
+    await settleAt(page, { chapter: "bloom", progress: DISSOLVED_AT }, "bloom");
+    const dissolved = await shapeFrame(
+      page,
+      wordmarkBox,
+      host,
+      testInfo.outputPath(`dissolved-tier${tier}.png`),
     );
 
-    const line = (name: string, frame: typeof formed, progress: number) =>
-      `mark tier ${tier} ${name} at bloom ${progress}: ${Math.round(frame.lit)} lit pixels, ` +
-      `${frame.inMark.toFixed(4)} of them in the mark's box ` +
+    const line = (
+      name: string,
+      frame: typeof mark,
+      box: Box,
+      progress: number,
+    ) =>
+      `bloom tier ${tier} ${name} at ${progress}: ${Math.round(frame.lit)} lit pixels, ` +
+      `${frame.inBox.toFixed(4)} of them in the box ` +
       `(${Math.round(box.width)} x ${Math.round(box.height)} of ${host.width} x ${host.height}), ` +
       `sides lit ${frame.sides.toFixed(4)}, brightest ${frame.brightest}`;
     for (const text of [
-      line("formed", formed, MARK_FORMED_AT),
-      line("dissolved", dissolved, MARK_DISSOLVED_AT),
+      line("the mark", mark, markBox, MARK_FORMED_AT),
+      line("the wordmark", wordmark, wordmarkBox, WORDMARK_FORMED_AT),
+      line("dissolved", dissolved, wordmarkBox, DISSOLVED_AT),
     ]) {
       console.log(text);
-      testInfo.annotations.push({ type: "mark", description: text });
+      testInfo.annotations.push({ type: "bloom", description: text });
     }
 
-    expect(formed.lit, "the mark is drawn").toBeGreaterThan(1_000);
-    expect(formed.inMark, "the light is in the mark").toBeGreaterThanOrEqual(
-      0.9,
+    expect(mark.lit, "the mark is drawn").toBeGreaterThan(1_000);
+    expect(mark.inBox, "the light is in the mark").toBeGreaterThanOrEqual(0.9);
+    expect(mark.sides, "nothing lit beside the mark").toBeLessThan(0.005);
+    expect(wordmark.lit, "the wordmark is drawn").toBeGreaterThan(1_000);
+    // Half the lines that may keep go on running round the wordmark; this
+    // is the landscape frame (e2e/gpu/story.spec.ts sets both limits).
+    expect(
+      wordmark.inBox,
+      "most of the light is in the wordmark",
+    ).toBeGreaterThanOrEqual(WORDMARK_SHARE_LANDSCAPE);
+    expect(dissolved.inBox, "the light has left the wordmark").toBeLessThan(
+      0.75,
     );
-    expect(formed.sides, "nothing lit beside the mark").toBeLessThan(0.005);
-    expect(dissolved.inMark, "the light has left the mark").toBeLessThan(0.75);
-    expect(dissolved.sides, "the field is back beside it").toBeGreaterThan(
-      0.05,
+    expect(dissolved.sides, "the flow runs beside it again").toBeGreaterThan(
+      DISSOLVED_SIDES,
     );
     expect(errors).toEqual([]);
   });
 }
 
-// Stirring (REQ-SCR-06) is measured in the contact chapter, where the field
-// rests on its homes across the frame, so a hole the pointer opens shows
-// against the field around it. The box at the pointer sits well inside the
-// hole, which is a few hundred pixels across on desktop.
+// Each study's shape forms inside its row's frame, and stays there while
+// the page scrolls: the story sends the frame of the row in view on every
+// scroll frame, and the engine takes a move of at most STAGE_STEP at once
+// and draws the formed particles ahead by the gap (runtime/index.ts, the
+// stage follow); a longer move glides. Measured with the page's text
+// hidden: the share of the lit pixels that fall inside the row's
+// [data-stage="frame"] box at that moment. On 12 Nov 2026, with the shapes
+// drawn as outlines, it was 100% at rest, after the wheel and mid scroll in
+// small steps, and 95.4% to 99.7% just after a 100 px jump, the least for
+// Coup Online's wide fan of cards, on both tiers (97.4% to 99.9% with the
+// filled shapes before).
+const FRAME_SHARE = 0.95;
+const FRAME_SCROLL_PX = 100;
+// STAGE_STEP is 0.2 of the half screen, 80 px on this 800 px window, so a
+// 100 px jump glides. Steps of 30 px, one every 150 ms, are each taken at
+// once; the frame is measured between two of them while the steps go on,
+// so the shape is caught mid scroll, not after a rest. Were these moves
+// glides, the field would trail the frame by most of the steps so far.
+const STEP_SCROLL_PX = 30;
+const STEP_EVERY_MS = 150;
+const STEPS = 16;
+const STEPS_BEFORE_SHOT_MS = 400;
+
+/** The row's frame box in the viewport now. */
+async function frameBox(page: Page, step: number): Promise<Box> {
+  return page.evaluate((index) => {
+    const frame = document.querySelector(
+      `main [data-work-step="${index}"] [data-stage="frame"]`,
+    );
+    if (frame === null) throw new Error(`No frame in row ${index}`);
+    const { x, y, width, height } = frame.getBoundingClientRect();
+    return { x, y, width, height };
+  }, step);
+}
+
+async function lightInFrame(page: Page, step: number, path: string) {
+  const png = await page.locator(HOST).screenshot({ path });
+  const box = await frameBox(page, step);
+  const whole = await pixelStats(page, png);
+  const inside = await pixelStats(page, png, [box]);
+  const lit = whole.litShare * whole.pixels;
+  return {
+    box,
+    lit,
+    share: lit === 0 ? 0 : (inside.litShare * inside.pixels) / lit,
+  };
+}
+
+/**
+ * The light in the frame while the page scrolls in steps smaller than
+ * STAGE_STEP: the steps run in the page on their own timer, and a shot
+ * counts only when the scroll position is the same before and after it, so
+ * the frame's box is the one the shot shows.
+ */
+async function lightInFrameMidScroll(page: Page, step: number, path: string) {
+  type Stepping = Window & { frameStepper?: number };
+  await page.evaluate(
+    ({ by, every, count }) => {
+      let done = 0;
+      const timer = window.setInterval(() => {
+        window.scrollBy({ top: by, behavior: "instant" });
+        done += 1;
+        if (done >= count) window.clearInterval(timer);
+      }, every);
+      (window as Stepping).frameStepper = timer;
+    },
+    { by: STEP_SCROLL_PX, every: STEP_EVERY_MS, count: STEPS },
+  );
+  const stop = () =>
+    page.evaluate(() => {
+      window.clearInterval((window as Stepping).frameStepper);
+    });
+  try {
+    await page.waitForTimeout(STEPS_BEFORE_SHOT_MS);
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const before = await page.evaluate(() => window.scrollY);
+      const png = await page.locator(HOST).screenshot({ path });
+      const box = await frameBox(page, step);
+      const after = await page.evaluate(() => window.scrollY);
+      if (before !== after) continue;
+      const whole = await pixelStats(page, png);
+      const inside = await pixelStats(page, png, [box]);
+      const lit = whole.litShare * whole.pixels;
+      // The steps went on after the shot: the page was still moving.
+      await page.waitForTimeout(STEP_EVERY_MS * 2);
+      const moved = (await page.evaluate(() => window.scrollY)) !== after;
+      return {
+        box,
+        lit,
+        share: lit === 0 ? 0 : (inside.litShare * inside.pixels) / lit,
+        moved,
+      };
+    }
+    throw new Error("No shot fell between two steps of the scroll");
+  } finally {
+    // The rest of the steps would move the page under the next study.
+    await stop();
+  }
+}
+
+for (const setup of TIERS) {
+  const { tier } = setup;
+  test(`REQ-SCR-01 REQ-SCR-05 REQ-ENG-03 on tier ${tier} each study's shape forms inside its row's frame and stays there while the page scrolls`, async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(240_000);
+    const { errors } = watchErrors(page);
+    await openHome(page, setup);
+    const host = await hostBox(page);
+    const lines: string[] = [];
+    const results: Array<{ name: string; share: number; lit: number }> = [];
+
+    for (const [step, slug] of WORK_SHAPES.entries()) {
+      await settleAt(page, { step }, "work");
+      const restore = await showFieldAlone(page);
+      const still = await lightInFrame(
+        page,
+        step,
+        testInfo.outputPath(`frame-${tier}-${slug}.png`),
+      );
+      // A jump of 100 px, more than STAGE_STEP's 80 px: the shape glides
+      // there, and the formed particles drawn ahead by their lag keep most
+      // of it inside the frame just after.
+      await page.evaluate(
+        (by) => window.scrollBy({ top: by, behavior: "instant" }),
+        FRAME_SCROLL_PX,
+      );
+      const jumped = await lightInFrame(
+        page,
+        step,
+        testInfo.outputPath(`frame-${tier}-${slug}-jumped.png`),
+      );
+      // Back up by the wheel, which Lenis glides, then at rest.
+      await page.mouse.move(host.width / 2, 40);
+      await page.mouse.wheel(0, -FRAME_SCROLL_PX);
+      await page.waitForTimeout(1_200);
+      const wheeled = await lightInFrame(
+        page,
+        step,
+        testInfo.outputPath(`frame-${tier}-${slug}-wheeled.png`),
+      );
+      // Steps smaller than STAGE_STEP, measured while they go on.
+      const stepping = await lightInFrameMidScroll(
+        page,
+        step,
+        testInfo.outputPath(`frame-${tier}-${slug}-stepping.png`),
+      );
+      expect(stepping.moved, `${slug}: the page was still moving`).toBe(true);
+      await restore();
+
+      for (const [name, measured] of [
+        ["at rest", still],
+        [`${FRAME_SCROLL_PX} px down at once`, jumped],
+        [`${FRAME_SCROLL_PX} px back by the wheel`, wheeled],
+        [
+          `mid scroll in ${STEP_SCROLL_PX} px steps every ${STEP_EVERY_MS} ms`,
+          stepping,
+        ],
+      ] as const) {
+        lines.push(
+          `frame tier ${tier} ${slug} ${name}: ${Math.round(measured.lit)} lit pixels, ` +
+            `${(measured.share * 100).toFixed(1)}% inside the frame at ` +
+            `(${Math.round(measured.box.x)}, ${Math.round(measured.box.y)}) ` +
+            `${Math.round(measured.box.width)} x ${Math.round(measured.box.height)}`,
+        );
+        results.push({
+          name: `${slug} ${name}`,
+          share: measured.share,
+          lit: measured.lit,
+        });
+      }
+    }
+    for (const line of lines) console.log(line);
+    testInfo.annotations.push(
+      ...lines.map((description) => ({ type: "frame", description })),
+    );
+
+    for (const { name, share, lit } of results) {
+      expect(lit, `${name}: the shape is drawn`).toBeGreaterThan(1_000);
+      expect(share, `${name}: its light is inside the frame`).toBeGreaterThan(
+        FRAME_SHARE,
+      );
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
+// Stirring (REQ-SCR-06) is measured on the making-of sheet, where the field
+// lies evenly over the middle 0.7 of the frame (runtime/story.ts SHEET_FIT),
+// so a hole the pointer opens shows against the sheet around it. Since P3.5
+// the contact chapter is three faint rings, too sparse to measure a hole in.
+// The box at the pointer sits well inside the hole.
+const STIR_PLACE = { chapter: "making-of", progress: 0.5 } as const;
 const STIR_HALF = 50;
 // What the box at the pointer keeps of its light, against the field around
-// it, at most. Measured 10 Nov 2026: 0.64 to 0.69 for the cursor and 0.52
-// for a finger, while the control boxes kept 0.97 of theirs.
+// it, at most. Measured on the ambient field on 10 Nov 2026: 0.64 to 0.69
+// for the cursor and 0.52 for a finger. On the halftone sheet on 12 Nov
+// 2026: 0.287 and 0.291 for the cursor on tiers 1 and 2 and 0.088 for a
+// finger, while the control boxes kept 1.004 to 1.030 of theirs.
 const HOLE_LIGHT = 0.8;
 // What the control boxes keep of their own light, at least: the field away
 // from the pointer is still there.
@@ -496,20 +734,13 @@ for (const setup of TIERS) {
     test.setTimeout(180_000);
     const { errors } = watchErrors(page);
     await openHome(page, setup);
-    await settleAt(
-      page,
-      { chapter: "contact", progress: 0.5 },
-      "contact",
-      REST_SETTLE_MS,
-    );
+    await settleAt(page, STIR_PLACE, STIR_PLACE.chapter, REST_SETTLE_MS);
     const host = await hostBox(page);
-    const point = { x: 0.25 * host.width, y: 0.5 * host.height };
+    const point = { x: 0.3 * host.width, y: 0.5 * host.height };
     const near = around(point.x, point.y, STIR_HALF);
-    // Four boxes in the other half of the frame.
-    const controls = [0.6, 0.85].flatMap((x) =>
-      [0.25, 0.75].map((y) =>
-        around(x * host.width, y * host.height, STIR_HALF),
-      ),
+    // Four boxes on the sheet in the other half of the frame.
+    const controls = [0.62, 0.78].flatMap((x) =>
+      [0.3, 0.7].map((y) => around(x * host.width, y * host.height, STIR_HALF)),
     );
 
     const restore = await showFieldAlone(page);
@@ -555,15 +786,10 @@ for (const setup of TIERS) {
     await restore();
     // The bar is not sticky, so the click scrolls it into view at the top of
     // the page and the field goes back to the hero's dot. The still is taken
-    // in contact again, where the cursor stirred it.
+    // on the sheet again, where the cursor stirred it.
     await calmToggle(page).click();
-    await expect(calmToggle(page)).toHaveAttribute("aria-pressed", "true");
-    await settleAt(
-      page,
-      { chapter: "contact", progress: 0.5 },
-      "contact",
-      1_500,
-    );
+    await expect(calmToggle(page)).toHaveAttribute("aria-checked", "true");
+    await settleAt(page, STIR_PLACE, STIR_PLACE.chapter, 1_500);
     await showFieldAlone(page);
     const still = await page.locator(HOST).screenshot();
     // Two blank frames would also be equal, so the still must show the field.
@@ -622,15 +848,20 @@ test("REQ-SCR-06 REQ-SCR-02 on a touch screen a finger stirs the field while the
     await waitForStory(page);
     expect(await hasLenis(page), "no Lenis on touch").toBe(false);
 
-    // The end of the page, so the drag scrolls back up inside contact.
-    const start = await goToChapter(page, "contact", 1);
+    // The middle of the sheet: the drag scrolls the page back a little,
+    // still inside the making-of chapter, while the sheet holds.
+    const start = await goToChapter(
+      page,
+      STIR_PLACE.chapter,
+      STIR_PLACE.progress,
+    );
     await page.waitForTimeout(REST_SETTLE_MS);
     const host = await hostBox(page);
     const finger = { x: Math.round(host.width / 2), y: 500 };
     const near = around(finger.x, finger.y, TOUCH_HALF);
-    // Above the finger's whole path and below where it stops.
-    const controls = [0.25, 0.75].flatMap((x) =>
-      [120, 760].map((y) => around(x * host.width, y, TOUCH_HALF)),
+    // On the sheet, above the finger's whole path and below where it stops.
+    const controls = [0.3, 0.7].flatMap((x) =>
+      [200, 640].map((y) => around(x * host.width, y, TOUCH_HALF)),
     );
 
     await showFieldAlone(page);
@@ -681,7 +912,7 @@ test("REQ-SCR-06 REQ-SCR-02 on a touch screen a finger stirs the field while the
       stir.control,
       "away from the finger the field stays",
     ).toBeGreaterThan(CONTROL_LIGHT);
-    expect(chapter).toBe("contact");
+    expect(chapter).toBe(STIR_PLACE.chapter);
     expect(errors).toEqual([]);
   } finally {
     await context.close();

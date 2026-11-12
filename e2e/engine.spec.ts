@@ -3,12 +3,15 @@ import { writeFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
 import { ENGINE_ENTRY } from "../scripts/budget-lib.mjs";
-import { studies } from "../src/content";
+import { fullStudies, shortStudies } from "../src/content";
 import { about } from "../src/content/about";
 import { headlines, heroCopy, STATIC_TIER } from "../src/content/hero";
 import { pages } from "../src/content/pages";
 import { services } from "../src/content/services";
-import { pixelStats } from "./gpu/pixels";
+import { site } from "../src/content/site";
+import { story } from "../src/content/story";
+import { RINGS } from "../src/engine/runtime/story";
+import { pixelStats, ringShare } from "./gpu/pixels";
 import { expectNoAxeViolations } from "./support/axe";
 import { goToChapter, waitForStory } from "./support/story";
 import {
@@ -157,54 +160,75 @@ function readStill(page: Page) {
   });
 }
 
-/** Every home section's heading and text, whatever the field is doing. */
+/**
+ * Every home section's heading and text, whatever the field is doing: the
+ * six chapters in the P3.5 order, each region named as the preview names it,
+ * with the services inside the contact chapter (REQ-CNT-01, REQ-CNT-11).
+ */
 async function expectHomeContent(page: Page) {
+  const { home } = pages;
   const section = (name: string) =>
     page.getByRole("region", { name, exact: true });
   const heading = (name: string) =>
     section(name).getByRole("heading", { level: 2, name, exact: true });
 
-  await expect(page.getByText(HERO.eyebrow, { exact: true })).toBeVisible();
+  const intro = section(site.names.intro);
+  await expect(intro.getByText(HERO.eyebrow, { exact: true })).toBeVisible();
   await expect(
-    page.getByText(HERO.subLine, { exact: true }).first(),
+    intro.getByText(HERO.subLine, { exact: true }).first(),
   ).toBeVisible();
   for (const name of [HERO.primaryAction, HERO.cornerControl]) {
-    await expect(page.getByRole("link", { name, exact: true })).toBeVisible();
+    await expect(intro.getByRole("link", { name, exact: true })).toBeVisible();
   }
 
-  await expect(heading("Services")).toBeVisible();
-  for (const text of [...services.offers, services.also]) {
-    await expect(
-      section("Services").getByText(text, { exact: true }),
-    ).toBeVisible();
-  }
-
-  await expect(heading(pages.work.title)).toBeVisible();
+  // The field chapter's heading is its mono label, read as its name alone.
   await expect(
-    section(pages.work.title).getByText(pages.work.intro, { exact: true }),
+    section(site.names.field).getByRole("heading", {
+      level: 2,
+      name: story.labels.bloom.name,
+      exact: true,
+    }),
   ).toBeVisible();
-  for (const study of studies) {
+
+  const work = section(home.work.title);
+  await expect(heading(home.work.title)).toBeVisible();
+  await expect(work.getByText(home.work.intro, { exact: true })).toBeVisible();
+  for (const study of [...fullStudies, ...shortStudies]) {
     await expect(
-      section(pages.work.title)
-        .getByRole("heading", { level: 3 })
-        .filter({ hasText: study.title }),
+      work.getByRole("heading", { level: 3, name: study.title, exact: true }),
     ).toBeVisible();
   }
 
-  await expect(heading(pages.about.title)).toBeVisible();
-  for (const text of [pages.about.intro, ...about.thread]) {
-    await expect(
-      section(pages.about.title).getByText(text, { exact: true }),
-    ).toBeVisible();
-  }
-
-  await expect(heading("Contact")).toBeVisible();
+  await expect(heading(home.makingOf.title)).toBeVisible();
   await expect(
-    section("Contact").getByText(pages.contact.intro, { exact: true }),
+    section(home.makingOf.title).getByText(home.makingOf.intro, {
+      exact: true,
+    }),
   ).toBeVisible();
+
+  await expect(heading(about.heading)).toBeVisible();
+  for (const text of about.paragraphs) {
+    await expect(
+      section(about.heading).getByText(text, { exact: true }),
+    ).toBeVisible();
+  }
+
+  const contact = section(home.contact.title);
+  await expect(heading(home.contact.title)).toBeVisible();
+  for (const offer of services.offers) {
+    await expect(
+      contact.getByRole("heading", { level: 3, name: offer.title }),
+    ).toBeVisible();
+    await expect(
+      contact.getByText(offer.description, { exact: true }),
+    ).toBeVisible();
+  }
+  for (const text of [services.also, services.hiring]) {
+    await expect(contact.getByText(text, { exact: true })).toBeVisible();
+  }
   await expect(
-    section("Contact").getByRole("link", {
-      name: HERO.secondaryAction,
+    contact.getByRole("link", {
+      name: home.contact.panel.action.label,
       exact: true,
     }),
   ).toBeVisible();
@@ -268,13 +292,15 @@ test("REQ-ENG-01 the host and the canvas survive client navigation, and the fiel
       { host: HOST, canvas: CANVAS },
     );
   const kept = { page: "kept", host: "kept", canvas: "kept", canvases: 1 };
-  const primary = page.getByRole("navigation", { name: "Primary" });
+  const primary = page.getByRole("navigation", {
+    name: site.names.siteControls,
+  });
   const field = page.locator(FIELD);
 
   await primary.getByRole("link", { name: "About", exact: true }).click();
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
-    pages.about.title,
+    pages.about.heading,
   );
   await expect(field).toBeHidden();
   expect(await marks()).toEqual(kept);
@@ -334,7 +360,7 @@ test("REQ-CNT-02 REQ-ENG-07 coming from the home page, the field is hidden on /w
   const shown = await bufferSize();
 
   await page
-    .getByRole("navigation", { name: "Primary" })
+    .getByRole("navigation", { name: site.names.siteControls })
     .getByRole("link", { name: "Work", exact: true })
     .click();
   await expect(page).toHaveURL(/\/work$/);
@@ -425,8 +451,8 @@ test("REQ-TIER-03 REQ-CNT-10 with Save-Data the page is tier 3: the still, no th
   expect(await readStill(page)).toEqual({
     source:
       viewport.height > viewport.width
-        ? "/still/field-tall.jpg"
-        : "/still/field-wide.jpg",
+        ? "/still/field-tall.webp"
+        : "/still/field-wide.webp",
     loaded: true,
     fit: "cover",
     covers: true,
@@ -620,6 +646,24 @@ test("REQ-ENG-07 the field stops reporting frames while the document is hidden a
   await expect(page.locator(FIELD)).toHaveAttribute("data-tier", "2");
 });
 
+// The contact rings are very faint thin lines by design, as the preview
+// draws them: their calm still lit 0.0014 of the frame at 1280 by 800 and
+// 0.0006 at 375 by 812 (12 Nov 2026, the rings thinned and made fainter;
+// 0.0042 and 0.0033 before), all of it on the rings, where the ambient field
+// of P3 lit over 0.2. Half the smaller figure.
+const CONTACT_LIT_SHARE = 0.0003;
+// A ring is 1 per cent of the shorter half thick each side; its dots snap
+// to the 8 px halftone lattice and sit at slightly different depths.
+const RING_BAND_PX = 16;
+const RINGS_SHARE = 0.9;
+
+// The halo's dots are antialiased, so a little light can fall just past the
+// dot box's edge.
+const DOT_MARGIN_PX = 4;
+// Half the core box: the solid disc's radius is 7 CSS px
+// (halftone-rules.ts HERO_DOT_PX), so this box sits inside it.
+const DOT_CORE_PX = 4;
+
 /**
  * Screenshots the page until two taken 600 ms apart are byte-identical, at
  * most five pairs. Under load the first capture can still show the frame
@@ -675,66 +719,95 @@ test("REQ-A11Y-03 with reduced motion the field draws the hero's dot and the con
   );
 
   // The hero's still is the storyboard's first frame: one dot on a black
-  // field, in the clear band between the hero's actions and Skip intro
-  // (D-066). The box is a tenth of the field's height across, centred there,
-  // in screenshot pixels.
+  // field, at the centre of the hero's empty dot box, its halo reaching the
+  // box's inscribed circle (halftone-rules.ts haloReach), beside the
+  // headline from 1024 px and above the words below that. In screenshot
+  // pixels: the box as the page lays it out at the top, and a core box round
+  // its centre that the solid disc fills.
   const hero = await stillScreenshot(page);
   await writeFile(testInfo.outputPath("calm-still-hero.png"), hero.frame);
-  const host = await page.locator(HOST).boundingBox();
-  if (host === null) throw new Error("The field's host has no box");
   const scale = await page.evaluate(() => window.devicePixelRatio);
-  const half = 0.05 * host.height * scale;
-  const bandMiddle = await page.evaluate(() => {
-    const above = document.querySelector('[data-stage="dot-above"]');
-    const below = document.querySelector('[data-stage="dot-below"]');
-    if (above === null || below === null) throw new Error("No hero band");
-    return (
-      (above.getBoundingClientRect().bottom +
-        below.getBoundingClientRect().top) /
-      2
-    );
+  const dotBox = await page.evaluate(() => {
+    const element = document.querySelector('[data-stage="dot"]');
+    if (element === null) throw new Error("No hero dot box");
+    const { x, y, width, height } = element.getBoundingClientRect();
+    return { x, y, width, height };
   });
-  const centre = {
-    x: (host.x + host.width / 2) * scale - half,
-    y: bandMiddle * scale - half,
-    width: 2 * half,
-    height: 2 * half,
+  const inBox = {
+    x: (dotBox.x - DOT_MARGIN_PX) * scale,
+    y: (dotBox.y - DOT_MARGIN_PX) * scale,
+    width: (dotBox.width + 2 * DOT_MARGIN_PX) * scale,
+    height: (dotBox.height + 2 * DOT_MARGIN_PX) * scale,
+  };
+  const core = {
+    x: (dotBox.x + dotBox.width / 2 - DOT_CORE_PX) * scale,
+    y: (dotBox.y + dotBox.height / 2 - DOT_CORE_PX) * scale,
+    width: 2 * DOT_CORE_PX * scale,
+    height: 2 * DOT_CORE_PX * scale,
   };
   const whole = await pixelStats(page, hero.frame);
-  const dot = await pixelStats(page, hero.frame, [centre]);
+  const dot = await pixelStats(page, hero.frame, [inBox]);
+  const centre = await pixelStats(page, hero.frame, [core]);
   const litPixels = whole.litShare * whole.pixels;
-  const inCentre =
+  const inDotBox =
     litPixels === 0 ? 0 : (dot.litShare * dot.pixels) / litPixels;
   const heroLine =
     `calm-still ${testInfo.project.name} hero: ${Math.round(litPixels)} lit pixels, ` +
-    `${inCentre.toFixed(4)} of them in the band's box, brightest ${whole.brightest}, ` +
-    `two identical screenshots after ${hero.pairs} pairs: ${hero.identical}`;
+    `${inDotBox.toFixed(4)} of them in the dot box ${Math.round(dotBox.width)} x ${Math.round(dotBox.height)} at ` +
+    `(${Math.round(dotBox.x)}, ${Math.round(dotBox.y)}), the core lit share ${centre.litShare.toFixed(4)}, ` +
+    `brightest ${whole.brightest}, two identical screenshots after ${hero.pairs} pairs: ${hero.identical}`;
   console.log(heroLine);
   testInfo.annotations.push({ type: "calm-still", description: heroLine });
 
   expect(hero.identical, "nothing moves in the hero's still").toBe(true);
   expect(litPixels, "the dot is drawn").toBeGreaterThan(20);
+  expect(inDotBox, "the light is the dot in its box").toBeGreaterThan(0.95);
   expect(
-    inCentre,
-    "the light is the dot in the hero's clear band",
-  ).toBeGreaterThan(0.95);
+    centre.litShare,
+    "the solid disc sits at the box's centre",
+  ).toBeGreaterThan(0.9);
 
   // A new chapter while calm: the field settles into that chapter's still
-  // and draws it once. Contact is the field at rest across the frame.
+  // and draws it once. In contact the field rests in three faint dotted
+  // rings centred on the contact panel as it shows at the page's end, the
+  // contact stage (story-stage.ts), with radii of 0.667, 0.978 and 1.289 of
+  // the frame's shorter half (runtime/story.ts RINGS).
   await goToChapter(page, "contact");
   const contact = await stillScreenshot(page);
   await writeFile(testInfo.outputPath("calm-still.png"), contact.frame);
   const stats = await pixelStats(page, contact.frame);
+  const panel = await page.evaluate(() => {
+    const element = document.querySelector('[data-stage="contact"]');
+    if (element === null) throw new Error("No contact stage");
+    const box = element.getBoundingClientRect();
+    const end = document.documentElement.scrollHeight - window.innerHeight;
+    return {
+      x: box.left + box.width / 2,
+      y: box.top + window.scrollY - end + box.height / 2,
+      short: Math.min(window.innerWidth, window.innerHeight) / 2,
+    };
+  });
+  const rings = await ringShare(page, contact.frame, {
+    x: panel.x * scale,
+    y: panel.y * scale,
+    radii: RINGS.map((ring) => ring.radius * panel.short * scale),
+    band: RING_BAND_PX * scale,
+  });
   const line =
     `calm-still ${testInfo.project.name}: lit share ${stats.litShare.toFixed(4)}, ` +
+    `${rings.share.toFixed(4)} of ${rings.lit} lit pixels on the rings round (${Math.round(panel.x)}, ${Math.round(panel.y)}), ` +
     `brightest ${stats.brightest}, two identical screenshots after ${contact.pairs} pairs: ${contact.identical}`;
   console.log(line);
   testInfo.annotations.push({ type: "calm-still", description: line });
 
   expect(contact.identical, "nothing moves between two screenshots").toBe(true);
-  expect(stats.litShare, "the still frame shows the field").toBeGreaterThan(
-    0.2,
+  expect(stats.litShare, "the still frame shows the rings").toBeGreaterThan(
+    CONTACT_LIT_SHARE,
   );
+  expect(
+    rings.share,
+    "the light lies on the rings round the panel",
+  ).toBeGreaterThan(RINGS_SHARE);
   expect(await frameRateEvents(page, QUIET_MS)).toBe(0);
 });
 

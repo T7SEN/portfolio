@@ -16,7 +16,10 @@ async function boundaryErrors(code: string, filePath: string) {
   );
 }
 
-describe("engine and tokens boundary", () => {
+// The first lint loads the whole config, its plugins and the TypeScript
+// parser. Beside forty other test files in the full run that took longer than
+// Vitest's 5 s default, so the boundary tests get more room.
+describe("engine and tokens boundary", { timeout: 30_000 }, () => {
   it.each([
     'import "@/app/layout";',
     'import "@/components/hero";',

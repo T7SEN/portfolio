@@ -29,7 +29,7 @@ export const ROUTES: readonly SiteRoute[] = [
   {
     path: "/work",
     name: "work",
-    h1: pages.work.title,
+    h1: pages.work.heading,
     body: pages.work.intro,
   },
   ...studies.map((study) => ({
@@ -41,13 +41,13 @@ export const ROUTES: readonly SiteRoute[] = [
   {
     path: "/about",
     name: "about",
-    h1: pages.about.title,
+    h1: pages.about.heading,
     body: pages.about.intro,
   },
   {
     path: "/contact",
     name: "contact",
-    h1: pages.contact.title,
+    h1: pages.contact.heading,
     body: pages.contact.intro,
   },
   { path: "/v1", name: "v1", h1: pages.v1.title, body: pages.v1.intro },

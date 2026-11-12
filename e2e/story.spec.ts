@@ -1,8 +1,9 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
-import { studies } from "../src/content";
+import { fullStudies, shortStudies, studyNumber } from "../src/content";
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { pages } from "../src/content/pages";
+import { site } from "../src/content/site";
 import { story } from "../src/content/story";
 import { expectNoAxeViolations } from "./support/axe";
 import {
@@ -71,36 +72,20 @@ async function expectTitlesShown(page: Page) {
     .toEqual([]);
 }
 
-/** Scrolls to the middle of the services block, between hero and bloom. */
-async function goToServices(page: Page) {
-  await page.evaluate(() => {
-    const services = document.getElementById("services");
-    if (services === null) throw new Error("No #services section");
-    const box = services.getBoundingClientRect();
-    window.scrollTo({
-      top: box.top + window.scrollY + box.height / 2 - window.innerHeight / 2,
-      behavior: "instant",
-    });
-  });
-}
-
 test("REQ-SCR-01 the six chapters run in order, start near the storyboard's shares, and the field's wrapper follows the scroll into each", async ({
   page,
 }, testInfo) => {
   test.setTimeout(ENGINE_TIMEOUT_MS + 90_000);
   await page.goto("/");
 
-  // The services block sits between hero and bloom and is not a chapter.
+  // Every section of the page is a chapter, in story order: the services
+  // left the top of the page for the contact chapter (P3.5).
   const sections = await page
     .locator("main > section")
     .evaluateAll((elements) =>
       elements.map((element) => element.getAttribute("data-chapter")),
     );
-  expect(sections).toEqual([
-    "hero",
-    null,
-    ...chapterOrder.filter((chapter) => chapter !== "hero"),
-  ]);
+  expect(sections).toEqual([...chapterOrder]);
   // The first chapter reaches the wrapper from layout, before the story runs.
   await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", "hero");
 
@@ -132,19 +117,135 @@ test("REQ-SCR-01 the six chapters run in order, start near the storyboard's shar
       path: testInfo.outputPath(`story-${chapter}.png`),
     });
     if (chapter === "hero") {
-      // The services block counts as the hero, at its end. Reached from the
-      // bloom, so the story has to write the hero again.
+      // The hero's own room after its first screen, where the dot pulses
+      // alone, is still the hero. Reached from the field chapter, so the
+      // story has to write the hero again.
       await goToChapter(page, "bloom");
-      await goToServices(page);
-      await expect(page.locator(FIELD), "services").toHaveAttribute(
-        "data-chapter",
-        "hero",
-      );
+      await goToChapter(page, "hero", 0.9);
     }
   }
 
   // Every title the story revealed on the way is whole (REQ-CNT-01).
   await expectTitlesShown(page);
+});
+
+test("REQ-SCR-01 REQ-NAV-01 REQ-A11Y-05 the chapters carry their labels 01 to 05 in story order, each region and heading named by its words", async ({
+  page,
+}) => {
+  await page.goto("/", { waitUntil: "domcontentloaded" });
+
+  // The label as written, before CSS sets it in capitals: the number and its
+  // slash, hidden from assistive technology, then the chapter's name.
+  const labels = await page
+    .locator("main > section[data-chapter]")
+    .evaluateAll((sections) =>
+      sections.map((section) => {
+        const number = [
+          ...section.querySelectorAll('span[aria-hidden="true"]'),
+        ].find((span) => /^\d\d \/ $/.test(span.textContent ?? ""));
+        return {
+          chapter: section.getAttribute("data-chapter"),
+          label: number?.parentElement?.textContent ?? null,
+        };
+      }),
+    );
+  expect(labels).toEqual(
+    chapterOrder.map((chapter) => ({
+      chapter,
+      label:
+        chapter === "hero"
+          ? null
+          : `${story.labels[chapter].number} / ${story.labels[chapter].name}`,
+    })),
+  );
+  expect(
+    chapterOrder
+      .filter((chapter) => chapter !== "hero")
+      .map((chapter) => story.labels[chapter].number),
+  ).toEqual(["01", "02", "03", "04", "05"]);
+
+  // Each region by the name the preview gives it; the field chapter's heading
+  // is its label, read as the name alone.
+  const { home } = pages;
+  const regions: Array<{ chapter: string; region: string; heading: string }> = [
+    { chapter: "hero", region: site.names.intro, heading: "" },
+    {
+      chapter: "bloom",
+      region: site.names.field,
+      heading: story.labels.bloom.name,
+    },
+    { chapter: "work", region: home.work.title, heading: home.work.title },
+    {
+      chapter: "making-of",
+      region: home.makingOf.title,
+      heading: home.makingOf.title,
+    },
+    {
+      chapter: "about",
+      region: pages.about.heading,
+      heading: pages.about.heading,
+    },
+    {
+      chapter: "contact",
+      region: home.contact.title,
+      heading: home.contact.title,
+    },
+  ];
+  for (const { chapter, region, heading } of regions) {
+    const section = page.getByRole("region", { name: region, exact: true });
+    await expect(section, chapter).toHaveAttribute("data-chapter", chapter);
+    if (heading !== "") {
+      await expect(
+        section.getByRole("heading", { level: 2, name: heading, exact: true }),
+        chapter,
+      ).toHaveCount(1);
+    }
+  }
+
+  // The work chapter: one framed row per full study, the steps of the
+  // chapter in study order, then the short studies, which are not steps.
+  const work = page.locator('main > section[data-chapter="work"]');
+  const steps = work.locator("[data-work-step]");
+  expect(
+    await steps.evaluateAll((items) =>
+      items.map((item) => item.getAttribute("data-work-step")),
+    ),
+  ).toEqual(fullStudies.map((_study, index) => String(index)));
+  for (const [index, study] of fullStudies.entries()) {
+    const row = steps.nth(index);
+    await expect(row.locator('[data-stage="frame"]')).toHaveCount(1);
+    await expect(row.locator('[data-stage="frame"]')).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    await expect(
+      row.getByRole("heading", { level: 3, name: study.title, exact: true }),
+    ).toHaveCount(1);
+    // The row's mono label: its number, a hidden dot, its kind.
+    expect(
+      await row
+        .locator("p")
+        .first()
+        .evaluate((label) => label.textContent),
+    ).toBe(`${studyNumber(study.slug)} · ${study.listing.kind}`);
+  }
+  for (const study of shortStudies) {
+    const card = work.getByRole("article", { name: study.title, exact: true });
+    await expect(card).toHaveCount(1);
+    await expect(card.locator("[data-stage]")).toHaveCount(0);
+    expect(
+      await card.evaluate(
+        (element) => element.closest("[data-work-step]") === null,
+      ),
+      `${study.title} is not a step`,
+    ).toBe(true);
+  }
+  await expect(
+    work.getByRole("link", {
+      name: home.work.archive.link.label,
+      exact: true,
+    }),
+  ).toHaveAttribute("href", home.work.archive.link.href);
 });
 
 test("REQ-SCR-01 REQ-TIER-03 on forced tier 3 the field's wrapper follows the story through every chapter", async ({
@@ -231,7 +332,7 @@ test("REQ-SCR-02 the story pins nothing, snaps nothing and never moves the page 
     { chapter: "bloom", progress: 0.02 },
     { chapter: "bloom", progress: 0.97 },
     { step: 1, local: 0.03 },
-    { step: 3, local: 0.95 },
+    { step: 2, local: 0.95 },
     { chapter: "making-of", progress: 0.5 },
     { chapter: "about", progress: 0.98 },
   ];
@@ -264,11 +365,11 @@ test("REQ-SCR-03 REQ-A11Y-04 Lenis starts after first content on desktop, leaves
 
   const toggle = calmToggle(page);
   await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(html).not.toHaveClass(LENIS_CLASS);
 
   await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(html).toHaveClass(LENIS_CLASS);
 });
 
@@ -285,9 +386,9 @@ test("REQ-SCR-03 a touch screen never gets Lenis, calm mode or not", async ({
 
   const toggle = calmToggle(page);
   await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
   await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
   await page.waitForTimeout(1_000);
 
   expect(await hasLenis(page)).toBe(false);
@@ -304,18 +405,19 @@ test("REQ-A11Y-03 with reduced motion the field reports no frames, Lenis never s
 
   // The toggle shows the OS setting and says why it stays on.
   const toggle = calmToggle(page);
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(toggle).toHaveAccessibleDescription(/reduced motion/);
   await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
 
   expect((await waitForField(page)).tier).toBe(2);
   expect(await waitForStory(page), "titles fade, never split").toBe("fade");
   expect(await frameRateEvents(page, QUIET_MS)).toBe(0);
   expect(await page.locator(FIELD).getAttribute("data-fps")).toBeNull();
 
-  // The titles the story reveals: the work, about and contact chapters'.
-  const chapters = ["work", "about", "contact"] as const;
+  // The titles the story reveals: the work, making-of, about and contact
+  // chapters'. The field chapter's heading is its label, never revealed.
+  const chapters = ["work", "making-of", "about", "contact"] as const;
   expect(
     await page
       .locator("main [data-story-title]")
@@ -346,7 +448,7 @@ test("REQ-A11Y-04 the calm toggle sits in the bar with a 44 px target, stops the
 
   const toggle = calmToggle(page);
   await expect(toggle).toBeInViewport({ ratio: 1 });
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
   const box = await toggle.boundingBox();
   expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
   expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
@@ -355,7 +457,7 @@ test("REQ-A11Y-04 the calm toggle sits in the bar with a 44 px target, stops the
   await nextFrameRateEvent(page);
 
   await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
   await afterTwoFrames(page);
   expect(await frameRateEvents(page, QUIET_MS), "calm stops the field").toBe(0);
   expect(
@@ -364,7 +466,7 @@ test("REQ-A11Y-04 the calm toggle sits in the bar with a 44 px target, stops the
 
   // Remembered for the visit: the same tab, reloaded.
   await page.reload();
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
   expect((await waitForField(page)).tier).toBe(2);
   expect(
     await frameRateEvents(page, QUIET_MS),
@@ -372,7 +474,7 @@ test("REQ-A11Y-04 the calm toggle sits in the bar with a 44 px target, stops the
   ).toBe(0);
 
   await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
   await nextFrameRateEvent(page);
 });
 
@@ -608,10 +710,12 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 with Lenis running, keys wor
   const field = page.locator(FIELD);
   const lines: string[] = [`field tier ${report.tier}, ${report.reason}`];
 
-  // The bar in Tab order, from the skip link to the Calm toggle, its last
-  // stop (accessibility.md section 3).
+  // The bar in Tab order, from the skip link to the Calm switch, the last
+  // stop in the nav named Site controls (accessibility.md section 3).
   const banner = page.getByRole("banner");
-  const primary = banner.getByRole("navigation", { name: "Primary" });
+  const primary = banner.getByRole("navigation", {
+    name: site.names.siteControls,
+  });
   const toggle = calmToggle(page);
   for (const stop of [
     page.getByRole("link", { name: "Skip to content", exact: true }),
@@ -627,10 +731,10 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 with Lenis running, keys wor
 
   // Enter turns calm on and Space turns it off again; neither moves the page.
   await page.keyboard.press("Enter");
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
   await expect(html).not.toHaveClass(LENIS_CLASS);
   await page.keyboard.press("Space");
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(toggle).toHaveAttribute("aria-checked", "false");
   await expect(toggle).toBeFocused();
   await expect(html).toHaveClass(LENIS_CLASS);
   expect(
@@ -685,10 +789,12 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 with Lenis running, keys wor
   expect(classes).toContain("lenis-scrolling");
   expect(classes).not.toContain("lenis-smooth");
 
-  // From the toggle, Tab goes on into the page: the hero's links, then each
-  // study in the work chapter in order. Each stop is scrolled into view as it
-  // takes focus and shows whole, and the field's wrapper follows the scroll.
+  // From the switch, Tab goes on into the page: the hero's links and its
+  // own Calm switch, the work chapter's boxed index link, then each full
+  // study's row in order. Each stop is scrolled into view as it takes focus
+  // and shows whole, and the field's wrapper follows the scroll.
   const hero = page.locator('main section[data-chapter="hero"]');
+  const work = page.locator('main section[data-chapter="work"]');
   const heroStop = (name: string) => ({
     name,
     link: hero.getByRole("link", { name, exact: true }),
@@ -697,11 +803,21 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 with Lenis running, keys wor
     heroStop(HERO.primaryAction),
     heroStop(HERO.secondaryAction),
     heroStop(HERO.cornerControl),
-    ...studies.map((study, step) => ({
-      name: study.title,
+    {
+      name: "the hero's Calm switch",
+      link: hero.getByRole("switch", { name: "Calm mode", exact: true }),
+    },
+    {
+      name: pages.home.work.index.label,
+      link: work.getByRole("link", {
+        name: new RegExp(`^${pages.home.work.index.label}`),
+      }),
+    },
+    ...fullStudies.map((study, step) => ({
+      name: `${study.title}: ${pages.home.work.readFull}`,
       link: page
         .locator(`main [data-work-step="${step}"]`)
-        .getByRole("link", { name: study.title, exact: true }),
+        .getByRole("link", { name: pages.home.work.readFull, exact: true }),
     })),
   ];
   for (const { name, link } of stops) {
@@ -769,7 +885,7 @@ test("REQ-SCR-04 after / to /work and back, one story drives the field and nothi
   await goToChapter(page, "hero", 0);
 
   await page
-    .getByRole("navigation", { name: "Primary" })
+    .getByRole("navigation", { name: site.names.siteControls })
     .getByRole("link", { name: "Work", exact: true })
     .click();
   await page.waitForURL("**/work");

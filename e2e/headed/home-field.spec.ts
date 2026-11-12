@@ -306,8 +306,8 @@ for (const { title, viewport, hideWebGpu } of FIELD_CASES) {
 }
 
 const STILL_CASES = [
-  { viewport: { width: 1280, height: 800 }, file: "/still/field-wide.jpg" },
-  { viewport: { width: 375, height: 812 }, file: "/still/field-tall.jpg" },
+  { viewport: { width: 1280, height: 800 }, file: "/still/field-wide.webp" },
+  { viewport: { width: 375, height: 812 }, file: "/still/field-tall.webp" },
 ] as const;
 
 for (const { viewport, file } of STILL_CASES) {
@@ -397,7 +397,7 @@ test("REQ-ENG-01 REQ-ENG-07 leaving home pauses the field and coming back shows 
   expect(running).toBeGreaterThan(0);
 
   await page
-    .getByRole("navigation", { name: "Primary" })
+    .getByRole("navigation", { name: "Site controls" })
     .getByRole("link", { name: "Work" })
     .click();
   await page.waitForURL("**/work");

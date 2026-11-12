@@ -1,5 +1,11 @@
 import { devices, expect, test, type Page } from "@playwright/test";
 
+import {
+  BLOOM_MARK_AT,
+  BLOOM_ROOM,
+  BLOOM_SCREENS,
+  calmProgress,
+} from "../../src/engine/runtime/story";
 import { colors } from "../../src/tokens/colors";
 import { pixelStats, type Box } from "../gpu/pixels";
 
@@ -17,6 +23,9 @@ const HIDE_TEXT =
   "header, main, footer { visibility: hidden !important; } " +
   "main [data-part='own-plate'] { visibility: visible !important; }";
 const FRAMES = Number(process.env.CONTRAST_FRAMES ?? 12);
+// From the top of the page, the field leaves its starting haze and gathers
+// into the hero's dot in under this.
+const HERO_SETTLE_MS = 3_000;
 const FRAME_GAP_MS = 250;
 // Extra veil strengths to measure beside the shipped one, as "0.5,0.7".
 const EXTRA_VEILS = (process.env.CONTRAST_VEILS ?? "")
@@ -36,10 +45,14 @@ function contrast(textHex: string, backgroundLuminance: number): number {
   return (luminance(textHex) + 0.05) / (backgroundLuminance + 0.05);
 }
 
+type NamedBox = Box & { name: string };
+
 /** The boxes of the bar's and the hero's text that sit straight on the field. */
-async function textBoxes(page: Page): Promise<{ boxes: Box[]; own: number }> {
+async function textBoxes(
+  page: Page,
+): Promise<{ boxes: NamedBox[]; own: number }> {
   return page.evaluate(() => {
-    const boxes: Box[] = [];
+    const boxes: NamedBox[] = [];
     let own = 0;
     const elements = document.querySelectorAll(
       'header :is(a, button), section[data-chapter="hero"] :is(p, h1, a, button)',
@@ -59,7 +72,13 @@ async function textBoxes(page: Page): Promise<{ boxes: Box[]; own: number }> {
         own += 1;
         continue;
       }
-      boxes.push({ x: box.x, y: box.y, width: box.width, height: box.height });
+      boxes.push({
+        x: box.x,
+        y: box.y,
+        width: box.width,
+        height: box.height,
+        name: `${element.tagName.toLowerCase()} "${(element.textContent ?? "").trim().slice(0, 24)}"`,
+      });
     }
     return { boxes, own };
   });
@@ -145,19 +164,25 @@ for (const { name, viewport, tier, setup } of CASES) {
         `This machine gave tier ${await field.getAttribute("data-tier")} (${reason}), not tier ${tier}`,
       );
       await expect(field).toHaveCSS("opacity", "1");
+      // The window is on a real screen, where a stray wheel or key can
+      // scroll it; the hero must be the part that is measured, so the page
+      // goes to the top and the field to the hero's state before anything
+      // is sampled.
+      await page.evaluate(() =>
+        window.scrollTo({ top: 0, behavior: "instant" }),
+      );
+      await expect(field).toHaveAttribute("data-chapter", "hero");
       if (tier === 3) {
         await expect(field.locator('img[data-part="still"]')).toHaveCSS(
           "opacity",
           "1",
         );
       } else {
-        // The field needs a moment to leave its even starting haze.
-        await page.waitForTimeout(3_000);
+        // The field needs a moment to leave its even starting haze, and to
+        // gather into the hero's dot after any scroll.
+        await page.waitForTimeout(HERO_SETTLE_MS);
       }
-
-      // The window is on a real screen, where a stray wheel or key can
-      // scroll it; the hero must be the part that is measured.
-      await page.evaluate(() => window.scrollTo(0, 0));
+      expect(await page.evaluate(() => window.scrollY)).toBe(0);
       const { boxes, own } = await textBoxes(page);
       expect(
         boxes.length,
@@ -186,20 +211,29 @@ for (const { name, viewport, tier, setup } of CASES) {
             ),
           veil,
         );
-        // The veil's plates behind the text (story-veil.ts) are part of the
-        // shipped veil, so they stay for every measured strength. The control
-        // looks at the bare background alone: void plates blended over void
-        // come back a level or two brighter (#09090B on 11 Nov 2026).
+        // The veil's plates behind the text (story-veil.ts) and the plates
+        // the held words bring (held-plate.tsx) are part of the shipped
+        // veil, so they stay for every measured strength. The control looks
+        // at the bare background alone: void plates blended over void come
+        // back a level or two brighter (#09090B on 11 Nov 2026), and the
+        // field chapter's held plates start at the fold, so their soft edge
+        // reaches up into the hero's last row. HIDE_TEXT shows the held
+        // plates with an important rule, which only an important inline
+        // rule outranks.
         await page.evaluate((isControl) => {
-          const plates = document.querySelector<HTMLElement>(
-            '[data-part="veil-plates"]',
-          );
-          if (plates !== null) {
-            plates.style.visibility = isControl ? "hidden" : "";
+          for (const plate of document.querySelectorAll<HTMLElement>(
+            '[data-part="veil-plates"], main [data-part="own-plate"]',
+          )) {
+            if (isControl) {
+              plate.style.setProperty("visibility", "hidden", "important");
+            } else {
+              plate.style.removeProperty("visibility");
+            }
           }
         }, veil === 1);
         let maxLuminance = 0;
         let brightest = "";
+        let where = "nowhere";
         // A still picture and the bare background do not change.
         const frames = tier === 3 || veil === 1 ? 1 : FRAMES;
         for (let frame = 0; frame < frames; frame += 1) {
@@ -208,6 +242,12 @@ for (const { name, viewport, tier, setup } of CASES) {
           if (stats.maxLuminance >= maxLuminance) {
             maxLuminance = stats.maxLuminance;
             brightest = stats.brightest;
+            const at = stats.brightestAt;
+            const box = at === null ? undefined : boxes[at.box];
+            where =
+              at === null || box === undefined
+                ? "nowhere"
+                : `(${at.x}, ${at.y}) in ${box.name} at (${Math.round(box.x)}, ${Math.round(box.y)}) ${Math.round(box.width)} x ${Math.round(box.height)}, frame ${frame + 1}`;
           }
         }
         const result = {
@@ -217,7 +257,7 @@ for (const { name, viewport, tier, setup } of CASES) {
         worst.set(veil, result);
         console.log(
           `contrast ${name} (${reason}) veil ${veil}${veil === shipped ? " shipped" : ""}: ` +
-            `brightest ${brightest} luminance ${maxLuminance.toFixed(4)} in ` +
+            `brightest ${brightest} at ${where}, luminance ${maxLuminance.toFixed(4)} in ` +
             `${boxes.length} text boxes over ${frames} frames; text ${colors.text} ` +
             `${result.text.toFixed(2)} to 1, muted ${colors.muted} ${result.muted.toFixed(2)} to 1` +
             (own > 0 ? `; ${own} filled elements left out` : ""),
@@ -336,26 +376,28 @@ const CHAPTER_CASES = [
 // measure, so a broken selector fails instead of passing on nothing; a
 // field-only state must find none, so the flag cannot go stale. The field
 // chapter's label, tier readout and note hold on screen through the
-// chapter with their own plates, over the mark and the formed wordmark;
-// the making-of words sit at the top of their section and the sheet holds
-// below them.
+// chapter with their own plates, over the mark gathering out of the dot,
+// the mark and the formed wordmark (runtime/story.ts, BLOOM_SCREENS); the
+// making-of words sit at the top of their section, and further down the
+// pass cards' labels sit under their faces, where the field draws the live
+// passes, over the sheet.
 const FORMED_STATES = [
   {
-    name: "field 0.2, the label, readout and note over the opening field",
+    name: "field, the label and readout over the mark gathering out of the dot",
     chapter: "bloom",
-    progress: 0.2,
+    progress: BLOOM_SCREENS.gathered / BLOOM_ROOM,
     text: true,
   },
   {
-    name: "field 0.46, the label, readout and note held over the mark",
+    name: "field, the label, readout and note held over the mark",
     chapter: "bloom",
-    progress: 0.46,
+    progress: BLOOM_MARK_AT,
     text: true,
   },
   {
-    name: "field 0.74, the label, readout and note held over the formed wordmark",
+    name: "field, the label, readout and note held over the formed wordmark",
     chapter: "bloom",
-    progress: 0.74,
+    progress: calmProgress("bloom", 0),
     text: true,
     held: 3,
   },
@@ -369,10 +411,10 @@ const FORMED_STATES = [
     text: true,
   },
   {
-    name: "making-of 0.6, the sheet",
+    name: "making-of 0.6, the pass cards' labels over the sheet",
     chapter: "making-of",
     progress: 0.6,
-    text: false,
+    text: true,
   },
   {
     name: "about 0.4, the strands",

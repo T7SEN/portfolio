@@ -11,6 +11,7 @@ import {
   gridFor,
 } from "../../src/engine/runtime/halftone-rules";
 import {
+  BLOOM_MARK_AT,
   RINGS,
   SHEET_FIT,
   bloomStage,
@@ -79,9 +80,10 @@ const TIERS = [
   { tier: 2, count: 250_000, backend: "webgl2" },
 ] as const;
 
-// The bloom's states (runtime/story.ts): the T7 mark is whole from 0.42 to
-// 0.5, the wordmark from 0.64 to 0.84, and the calm still is the wordmark.
-const MARK_AT = 0.46;
+// The bloom's states (runtime/story.ts, BLOOM_SCREENS): the T7 mark in the
+// middle of its hold, and the wordmark at the calm still, the middle of its
+// own hold.
+const MARK_AT = BLOOM_MARK_AT;
 const WORDMARK_AT = calmProgress("bloom", 0);
 // The share of the frame's light inside the wordmark's box, at least, one
 // limit per frame shape: half the lines that may keep go on streaming round
@@ -389,6 +391,39 @@ function settled(page: Page, tier: 1 | 2) {
   return page.locator(`${VIEW}[data-tier="${tier}"][data-ready="true"]`);
 }
 
+/** The drawing buffer's pixel ratio: its width over the canvas's CSS width. */
+function ratioOf(page: Page) {
+  return page
+    .locator(CANVAS)
+    .evaluate((element) =>
+      element instanceof HTMLCanvasElement
+        ? element.width / element.clientWidth
+        : 0,
+    );
+}
+
+/**
+ * Waits for the field to be drawn at its full pixel ratio and returns the
+ * ratio it had before. A slow start (a cold page on the development server)
+ * lowers the ratio to 0.75, and it rises again only after four seconds of
+ * fast frames (adaptive.ts, RAISE_AFTER_MS), so a state measured three
+ * seconds in may still be drawn small. At 0.75 the faint dots of the lines
+ * fall under the lit line while the white ones stay: on 12 Nov 2026 the
+ * wordmark measured 444 white of 1732 lit cells (25.6%) at 0.75 and 446 to
+ * 457 of 2069 to 2114 (21.1 to 21.9%) at 1. The burn limits are for the
+ * full ratio, so each state is measured there.
+ */
+async function atFullRatio(page: Page): Promise<number> {
+  const before = await ratioOf(page);
+  await expect
+    .poll(() => ratioOf(page), {
+      message: "the field is drawn at its full pixel ratio",
+      timeout: 15_000,
+    })
+    .toBe(1);
+  return before;
+}
+
 /** requestAnimationFrame intervals over a short window, after a warm-up. */
 async function shortFrames(page: Page) {
   const deltas = await page.evaluate(
@@ -515,6 +550,7 @@ for (const { tier, count, backend } of TIERS) {
         String(count),
       );
       await page.waitForTimeout(SETTLE_MS);
+      const ratioBefore = await atFullRatio(page);
 
       const measured = await frameOf(
         page,
@@ -527,6 +563,7 @@ for (const { tier, count, backend } of TIERS) {
 
       const line =
         `story tier ${tier} ${measuredText(entry, measured)}; ` +
+        `pixel ratio ${ratioBefore} after the settle, measured at 1; ` +
         `frames ${frames.frames}, median ${frames.medianMs.toFixed(2)} ms, ` +
         `p95 ${frames.p95Ms.toFixed(2)} ms`;
       console.log(line);
@@ -567,6 +604,7 @@ test("REQ-SCR-01 REQ-TIER-02 on a portrait phone frame, 375 x 812, forced tier 2
     );
     await expect(settled(page, 2)).toHaveCount(1, { timeout: 90_000 });
     await page.waitForTimeout(SETTLE_MS);
+    const ratioBefore = await atFullRatio(page);
     const measured = await frameOf(
       page,
       entry,
@@ -574,7 +612,9 @@ test("REQ-SCR-01 REQ-TIER-02 on a portrait phone frame, 375 x 812, forced tier 2
       height,
       testInfo.outputPath(`portrait-${index}.png`),
     );
-    console.log(`story portrait ${measuredText(entry, measured)}`);
+    console.log(
+      `story portrait ${measuredText(entry, measured)}; pixel ratio ${ratioBefore} after the settle, measured at 1`,
+    );
     expectFrame(entry, measured);
   }
   expect(errors).toEqual([]);
@@ -680,12 +720,13 @@ for (const { tier, count } of TIERS) {
   });
 }
 
-// Once released, the field is the flow and the mark gathering: lit dots in
-// every quarter of the frame. The halftone lights far fewer pixels than the
-// field of P3 did (0.049 against the old line of 0.1), so the cells are
-// counted instead: 0.306 to 0.483 of each quarter's cells were lit on 12
-// Nov 2026 on both tiers, and the line is half the lowest.
-const QUARTER_LIT_CELLS = 0.15;
+// The dot lets the field go as the chapter arrives, and the released
+// particles fly straight on into the T7 mark (runtime/story.ts,
+// BLOOM_SCREENS), so the sweep runs from the dot through the release and
+// the gathering into the mark's hold. Once released, the field has left the
+// dot: far more cells are lit than the dot and its halo light.
+const BLOOM_SWEEP = [0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4];
+const RELEASED_CELLS = 4;
 
 for (const { tier, count } of TIERS) {
   test(`REQ-SCR-07 REQ-SCR-05 on tier ${tier} the field leaves the dot in a bloom without burning`, async ({
@@ -703,8 +744,10 @@ for (const { tier, count } of TIERS) {
     const lattice = latticeOf(box.width, box.height);
     await page.waitForTimeout(1_000);
 
-    // Scrolled down through the bloom's first third, about a second for
-    // each tenth, the way a reader moves.
+    const atDot = await cellStats(page, await canvas.screenshot(), lattice);
+
+    // Scrolled down through the release and the gathering into the mark's
+    // hold, about a second for each step, the way a reader moves.
     const progress = page.getByRole("slider", { name: "Progress" });
     await page.getByRole("combobox", { name: "Chapter" }).selectOption("bloom");
     let worst: CellStats | null = null;
@@ -712,7 +755,7 @@ for (const { tier, count } of TIERS) {
     let mostWhite = 0;
     let mostWhiteAt = "";
     let shot = 0;
-    for (const value of ["0.05", "0.1", "0.15", "0.2", "0.25", "0.3", "0.35"]) {
+    for (const value of BLOOM_SWEEP.map(String)) {
       await progress.fill(value);
       for (const wait of [150, 350, 500]) {
         await page.waitForTimeout(wait);
@@ -745,30 +788,16 @@ for (const { tier, count } of TIERS) {
     await page.waitForTimeout(2_000);
     const released = await canvas.screenshot();
     writeFileSync(testInfo.outputPath(`bloom-${tier}-released.png`), released);
-    const half = { width: box.width / 2, height: box.height / 2 };
-    const quarters: number[] = [];
-    for (const [x, y] of [
-      [0, 0],
-      [half.width, 0],
-      [0, half.height],
-      [half.width, half.height],
-    ] as const) {
-      const cells = await cellStats(page, released, lattice, [
-        { x, y, ...half },
-      ]);
-      quarters.push(cells.litCells / Math.max(cells.cells, 1));
-    }
+    const left = await cellStats(page, released, lattice);
     console.log(
       `story bloom tier ${tier}: while the field left the dot, the brightest cell at ${worstAt}: ` +
         `${worst === null ? "none" : cellText(worst)}; most white cells ${(mostWhite * 100).toFixed(2)}% of the lit${mostWhiteAt === "" ? "" : ` at ${mostWhiteAt}`}; ` +
-        `once released, lit cells per quarter ${quarters.map((value) => value.toFixed(4)).join(", ")}`,
+        `lit cells at the dot ${atDot.litCells} of ${atDot.cells}, once released ${left.litCells}`,
     );
-    for (const value of quarters) {
-      expect(
-        value,
-        "the field reaches every quarter once released",
-      ).toBeGreaterThan(QUARTER_LIT_CELLS);
-    }
+    expect(
+      left.litCells,
+      "the field has left the dot once released",
+    ).toBeGreaterThan(RELEASED_CELLS * Math.max(atDot.litCells, 1));
     expect(errors).toEqual([]);
   });
 }

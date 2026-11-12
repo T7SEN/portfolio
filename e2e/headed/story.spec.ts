@@ -7,9 +7,12 @@ import {
 } from "@playwright/test";
 
 import { PARTICLES } from "../../src/engine/config";
-import { WORK_SHAPES, type ShapeId } from "../../src/engine/story";
+import { LIVE_PASSES, WORK_SHAPES, type ShapeId } from "../../src/engine/story";
 import { packAtlas } from "../../src/engine/runtime/atlas";
 import {
+  BLOOM_MARK_AT,
+  BLOOM_ROOM,
+  BLOOM_SCREENS,
   bloomStage,
   calmProgress,
   fitScale,
@@ -284,18 +287,21 @@ const CHAPTER_STATES: ReadonlyArray<{
 }> = [
   { name: "hero", place: { chapter: "hero", progress: 0 }, chapter: "hero" },
   {
-    name: "bloom 0.2, leaving the dot",
-    place: { chapter: "bloom", progress: 0.2 },
+    name: "bloom, leaving the dot",
+    place: {
+      chapter: "bloom",
+      progress: BLOOM_SCREENS.released / 2 / BLOOM_ROOM,
+    },
     chapter: "bloom",
   },
   {
-    name: "bloom 0.46, the mark",
-    place: { chapter: "bloom", progress: 0.46 },
+    name: "bloom, the mark",
+    place: { chapter: "bloom", progress: BLOOM_MARK_AT },
     chapter: "bloom",
   },
   {
-    name: "bloom 0.74, the wordmark",
-    place: { chapter: "bloom", progress: 0.74 },
+    name: "bloom, the wordmark",
+    place: { chapter: "bloom", progress: calmProgress("bloom", 0) },
     chapter: "bloom",
   },
   { name: "work, making-of", place: { step: 0 }, chapter: "work" },
@@ -378,18 +384,20 @@ for (const setup of TIERS) {
   });
 }
 
-// The bloom (REQ-SCR-07, runtime/story.ts): the T7 mark is whole from 0.42
-// to 0.5 of the field chapter, it turns into the T7SEN wordmark by 0.64, the
-// wordmark holds to 0.84 (its calm still is 0.74) and is gone by 0.97. The
-// field chapter forms inside its bloom stage, the middle 0.8 of a landscape
-// screen.
-const MARK_FORMED_AT = 0.46;
+// The bloom (REQ-SCR-07, runtime/story.ts, BLOOM_SCREENS): the T7 mark
+// gathers as the field chapter arrives and is measured in the middle of its
+// hold (BLOOM_MARK_AT); it turns into the T7SEN wordmark, measured at its
+// calm still in the middle of its own hold, which is gone just before the
+// chapter ends. The field chapter forms inside its bloom stage, the middle
+// 0.8 of a landscape screen.
+const MARK_FORMED_AT = BLOOM_MARK_AT;
 // The landscape frame's limit for the share of the light in the wordmark's
 // box, as e2e/gpu/story.spec.ts sets it: measured there at 0.959 on tiers 1
 // and 2 on 12 Nov 2026 (the line was 0.5 then); a little under it.
 const WORDMARK_SHARE_LANDSCAPE = 0.9;
 const WORDMARK_FORMED_AT = calmProgress("bloom", 0);
-const DISSOLVED_AT = 0.99;
+// Between the wordmark gone and the end of the chapter.
+const DISSOLVED_AT = (BLOOM_SCREENS.gone + BLOOM_ROOM) / 2 / BLOOM_ROOM;
 const atlas = packAtlas();
 
 /** Where a fitted bloom shape sits in a host of this size, with room for noise. */
@@ -709,12 +717,36 @@ for (const setup of TIERS) {
   });
 }
 
-// Stirring (REQ-SCR-06) is measured on the making-of sheet, where the field
-// lies evenly over the middle 0.7 of the frame (runtime/story.ts SHEET_FIT),
-// so a hole the pointer opens shows against the sheet around it. Since P3.5
-// the contact chapter is three faint rings, too sparse to measure a hole in.
-// The box at the pointer sits well inside the hole.
+// Stirring (REQ-SCR-06) is measured on the making-of sheet, which lies
+// evenly over the middle 0.7 of the frame (runtime/story.ts SHEET_FIT), so a
+// hole the pointer opens shows against the sheet around it. Since P3.5 the
+// contact chapter is three faint rings, too sparse to measure a hole in.
+// Since P4 the field also draws each live pass inside its card over the
+// sheet, a picture of the whole sheet in a small window, which shows no hole
+// where the pointer is; so the test takes the live passes off first
+// (stopLivePasses), every card then showing its still as on tier 3, and the
+// sheet is bare under every box. The box at the pointer sits well inside
+// the hole.
 const STIR_PLACE = { chapter: "making-of", progress: 0.5 } as const;
+
+/**
+ * Takes the making-of's live passes off the field: each live face loses its
+ * data-live mark, so the story reads no card and sends the field none
+ * (story-passes.ts). React leaves the mark off, since nothing it renders
+ * changes during the test. Waits for the faces the tier draws first, so the
+ * marks are there to take.
+ */
+async function stopLivePasses(page: Page, tier: 1 | 2) {
+  const faces = page.locator("main [data-pass-face][data-live]");
+  const look = await page.locator(FIELD).getAttribute("data-look");
+  await expect(faces).toHaveCount(
+    look === "halftone" ? LIVE_PASSES[tier].length : 0,
+  );
+  await faces.evaluateAll((elements) => {
+    for (const element of elements) element.removeAttribute("data-live");
+  });
+  await expect(faces).toHaveCount(0);
+}
 const STIR_HALF = 50;
 // What the box at the pointer keeps of its light, against the field around
 // it, at most. Measured on the ambient field on 10 Nov 2026: 0.64 to 0.69
@@ -734,6 +766,7 @@ for (const setup of TIERS) {
     test.setTimeout(180_000);
     const { errors } = watchErrors(page);
     await openHome(page, setup);
+    await stopLivePasses(page, tier);
     await settleAt(page, STIR_PLACE, STIR_PLACE.chapter, REST_SETTLE_MS);
     const host = await hostBox(page);
     const point = { x: 0.3 * host.width, y: 0.5 * host.height };
@@ -847,6 +880,7 @@ test("REQ-SCR-06 REQ-SCR-02 on a touch screen a finger stirs the field while the
     }).toEqual({ tier: 2, reason: "phone" });
     await waitForStory(page);
     expect(await hasLenis(page), "no Lenis on touch").toBe(false);
+    await stopLivePasses(page, 2);
 
     // The middle of the sheet: the drag scrolls the page back a little,
     // still inside the making-of chapter, while the sheet holds.

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Stages } from "@/engine/types";
+import type { PassCard, Stages } from "@/engine/types";
 
 import { createStoryBridge, type StoryTarget } from "./story-bridge";
 
@@ -20,8 +20,26 @@ function recorder() {
     setVeil: vi.fn((veil: number | null) => {
       calls.push(`veil ${veil}`);
     }),
+    setPasses: vi.fn((cards: readonly PassCard[] | null) => {
+      calls.push(
+        `passes ${cards === null ? "none" : cards.map((card) => card.pass).join(",")}`,
+      );
+    }),
   } satisfies StoryTarget;
   return { calls, target };
+}
+
+/** A card whose face fills the screen's middle, in its corner order. */
+function card(pass: PassCard["pass"], x = 0): PassCard {
+  return {
+    pass,
+    corners: [
+      { x: x - 0.2, y: 0.3 },
+      { x: x + 0.2, y: 0.3 },
+      { x: x + 0.2, y: -0.3 },
+      { x: x - 0.2, y: -0.3 },
+    ],
+  };
 }
 
 describe("story bridge", () => {
@@ -197,6 +215,66 @@ describe("story bridge", () => {
     expect(second.calls).toEqual(["story contact 0.9"]);
   });
 
+  it("REQ-ENG-09 the pass cards reach the target as sent, and none is null", () => {
+    const bridge = createStoryBridge();
+    const { calls, target } = recorder();
+    bridge.connect(target);
+    const cards = [card("points", -0.5), card("final", 0.5)];
+
+    bridge.setPasses(cards);
+    expect(target.setPasses).toHaveBeenLastCalledWith(cards);
+    bridge.setPasses([]);
+    bridge.setPasses(null);
+    expect(calls).toEqual([
+      "passes points,final",
+      "passes none",
+      "passes none",
+    ]);
+  });
+
+  it("REQ-ENG-09 a card off the screen keeps its corners; a card with a corner that is not finite is left out", () => {
+    const bridge = createStoryBridge();
+    const { target } = recorder();
+    bridge.connect(target);
+    const below = card("density", 1.6);
+    const broken: PassCard = {
+      pass: "glow",
+      corners: [
+        { x: Number.NaN, y: 0 },
+        { x: 0.1, y: 0 },
+        { x: 0.1, y: -0.1 },
+        { x: 0, y: Number.POSITIVE_INFINITY },
+      ],
+    };
+
+    bridge.setPasses([below, broken]);
+    expect(target.setPasses).toHaveBeenLastCalledWith([below]);
+    bridge.setPasses([broken]);
+    expect(target.setPasses).toHaveBeenLastCalledWith(null);
+  });
+
+  it("REQ-ENG-09 a target connected late gets the latest cards after the stage and before the story; a sent none is replayed too", () => {
+    const bridge = createStoryBridge();
+    const hero = { x: 0, y: -0.6, halfWidth: 0, halfHeight: 0 };
+    bridge.setPasses([card("points")]);
+    bridge.setStory("making-of", 0.4);
+    bridge.setStage({ hero });
+    bridge.setPasses([card("velocity"), card("glow", 0.4)]);
+
+    const first = recorder();
+    bridge.connect(first.target);
+    expect(first.calls).toEqual([
+      "stage hero",
+      "passes velocity,glow",
+      "story making-of 0.4",
+    ]);
+
+    bridge.setPasses(null);
+    const second = recorder();
+    bridge.connect(second.target);
+    expect(second.calls).toContain("passes none");
+  });
+
   it("REQ-ENG-07 reset forgets the values and the target", () => {
     const bridge = createStoryBridge();
     const first = recorder();
@@ -204,6 +282,7 @@ describe("story bridge", () => {
     bridge.setStory("making-of", 0.5);
     bridge.setPointer(0.3, 0.3, true);
     bridge.setStage({});
+    bridge.setPasses([card("final")]);
     bridge.setVeil(0.4);
     first.calls.length = 0;
 

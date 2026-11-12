@@ -86,7 +86,11 @@ export function createEngineSession(
       wrapper.dataset.tierReason = event.reason;
       applyVeil();
     }
-    wrapper.dataset.ready = String(tierStore.getSnapshot().ready);
+    const { ready, look } = tierStore.getSnapshot();
+    wrapper.dataset.ready = String(ready);
+    // How the live field draws, once it has; none on tier 3.
+    if (look === null) delete wrapper.dataset.look;
+    else wrapper.dataset.look = look;
   }
 
   // Story progress arrives on every scrolled frame, so the attribute is
@@ -102,12 +106,14 @@ export function createEngineSession(
   const mirrorOnly: StoryTarget = {
     setStory: (chapter) => mirrorChapter(chapter),
     setStage: () => undefined,
+    setPasses: () => undefined,
     setPointer: () => undefined,
     setVeil,
   };
 
-  // The engine keeps the latest story, stage and pointer itself, tier 3
-  // included, and hands them to a GPU tier that a later setTier brings back.
+  // The engine keeps the latest story, stage, passes and pointer itself,
+  // tier 3 included, and hands them to a GPU tier that a later setTier
+  // brings back.
   function forwardTo(live: Engine): StoryTarget {
     return {
       setStory(chapter, progress) {
@@ -115,6 +121,7 @@ export function createEngineSession(
         live.setStory(chapter, progress);
       },
       setStage: (stages) => live.setStage(stages),
+      setPasses: (cards) => live.setPasses(cards),
       setPointer: (x, y, active) => live.setPointer(x, y, active),
       setVeil,
     };
@@ -150,7 +157,8 @@ export function createEngineSession(
       isCalm = calm.getSnapshot().calm;
       engine = createEngine(host, { calm: isCalm });
       engine.on(report);
-      // The latest story and pointer reach the engine before it starts.
+      // The latest story, stage, passes and pointer reach the engine before
+      // it starts.
       connect(forwardTo(engine));
       await engine.start();
     } catch (error) {
@@ -173,6 +181,7 @@ export function createEngineSession(
     delete wrapper.dataset.tier;
     delete wrapper.dataset.tierReason;
     delete wrapper.dataset.ready;
+    delete wrapper.dataset.look;
     delete wrapper.dataset.fps;
     delete wrapper.dataset.chapter;
     wrapper.style.removeProperty("--field-veil");

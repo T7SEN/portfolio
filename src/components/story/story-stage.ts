@@ -66,7 +66,11 @@ function clamp(value: number, limit: number) {
   return Math.min(Math.max(value, -limit), limit);
 }
 
-function pageRect(element: Element, view: LayoutView): PageRect {
+/** An element's box in page coordinates. */
+export function pageRect(
+  element: Element,
+  view: Pick<LayoutView, "scrollX" | "scrollY">,
+): PageRect {
   const rect = element.getBoundingClientRect();
   return {
     top: rect.top + view.scrollY,
@@ -77,7 +81,7 @@ function pageRect(element: Element, view: LayoutView): PageRect {
 }
 
 /** A box with an area: an element that is not laid out has none. */
-function hasArea(box: PageRect) {
+export function hasArea(box: PageRect) {
   return box.right - box.left > 0 && box.bottom - box.top > 0;
 }
 
@@ -164,12 +168,16 @@ const TEXT_ELEMENTS =
   "h1, h2, h3, h4, h5, h6, p, a, button, label, dt, dd, figcaption, blockquote";
 
 /**
- * The box that holds a run of text: its outermost text element (a link in a
- * paragraph is covered by the paragraph, a title's split words by the
- * title), else the list item it sits in directly, else null for the run's
- * own line boxes.
+ * The box that holds a run of text: an element marked data-plate="box"
+ * round it, else its outermost text element (a link in a paragraph is
+ * covered by the paragraph, a title's split words by the title), else the
+ * list item it sits in directly, else null for the run's own line boxes.
+ * A pass card is a button whose box also holds its face, where the field
+ * draws, so its label marks its own box.
  */
 function holderOf(text: Node, body: Element): Element | null {
+  const marked = text.parentElement?.closest('[data-plate="box"]');
+  if (marked) return marked;
   let outermost: Element | null = null;
   for (
     let element = text.parentElement;

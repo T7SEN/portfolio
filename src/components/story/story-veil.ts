@@ -9,6 +9,8 @@ import { colors } from "@/tokens/colors";
 // so the contrast spec, which hides those three, still sees them. A study
 // frame holds no text and is where the field forms the study's shape, so no
 // plate reaches into it: the frame shows the field under the open veil alone.
+// The face of a making-of card the field draws a pass in is kept clear the
+// same way.
 
 /**
  * The veil behind text. 0.7 until the halftone: a full glow cell behind
@@ -67,9 +69,10 @@ function grown(box: PageRect, by: number): PageRect {
 
 /**
  * The parts of the page the plates keep clear: the study frames, where the
- * field forms each study's shape on tiers 1 and 2. A frame that any line of
- * text reaches into is left out, so a plate is never cut where text sits
- * and text keeps the measured veil behind it (REQ-A11Y-06).
+ * field forms each study's shape on tiers 1 and 2, and the live pass cards'
+ * faces, where it draws each pass. A frame that any line of text reaches
+ * into is left out, so a plate is never cut where text sits and text keeps
+ * the measured veil behind it (REQ-A11Y-06).
  */
 export function clearAreas(
   frames: readonly ClearRect[],

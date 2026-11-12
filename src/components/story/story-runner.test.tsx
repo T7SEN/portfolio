@@ -10,7 +10,7 @@ import {
 } from "vitest";
 
 import HomePage from "@/app/page";
-import type { ChapterId, Stages } from "@/engine/types";
+import type { ChapterId, PassCard, Stages } from "@/engine/types";
 import type { CalmSnapshot } from "@/lib/calm-store";
 
 import { REVEAL_START } from "./motion-timing";
@@ -255,6 +255,7 @@ let page: { position: number; spans: Map<Element, Span> };
 let bridge: {
   setStory: Mock<(chapter: ChapterId, progress: number) => void>;
   setStage: Mock<(stages: Stages) => void>;
+  setPasses: Mock<(cards: readonly PassCard[] | null) => void>;
   setVeil: Mock<(veil: number | null) => void>;
 };
 
@@ -320,6 +321,7 @@ beforeEach(() => {
   bridge = {
     setStory: vi.fn<(chapter: ChapterId, progress: number) => void>(),
     setStage: vi.fn<(stages: Stages) => void>(),
+    setPasses: vi.fn<(cards: readonly PassCard[] | null) => void>(),
     setVeil: vi.fn<(veil: number | null) => void>(),
   };
   placeTitles(3000);
@@ -707,6 +709,7 @@ describe("the field's layout", () => {
       reason: null,
       ready: true,
       particles: live === 3 ? 0 : 250_000,
+      look: (live === 3 ? null : "halftone") as "halftone" | "soft" | null,
     };
     return {
       store: {
@@ -977,5 +980,177 @@ describe("the field's layout", () => {
     expect(beside?.style.clipPath).toContain("A 16 16 0 0 1 -40");
     expect(far?.style.clipPath).toBe("");
     stop();
+  });
+
+  describe("the pass viewer", () => {
+    // The making-of chapter's viewer on the page, and one live card in it,
+    // its face 166 by 270 px as the turned face shows from 1024 px.
+    const VIEWER = { top: 4100, bottom: 4900, left: 88, right: 1192 };
+    const FACE = { top: 4124, bottom: 4394, left: 300, right: 466, radius: 12 };
+
+    /** The live card where the screen shows it with the page at position. */
+    function cardAt(position: number): PassCard {
+      const x = (value: number) => (2 * value) / WIDTH - 1;
+      const y = (value: number) =>
+        1 - (2 * (value - position)) / VIEW.innerHeight;
+      return {
+        pass: "velocity",
+        corners: [
+          { x: x(FACE.left), y: y(FACE.top) },
+          { x: x(FACE.right), y: y(FACE.top) },
+          { x: x(FACE.right), y: y(FACE.bottom) },
+          { x: x(FACE.left), y: y(FACE.bottom) },
+        ],
+      };
+    }
+
+    function startViewer({
+      calm = createCalm(false),
+      isLive = true,
+      lines = [] as PageLayout["lines"],
+    } = {}) {
+      const state = { isLive, reads: 0 };
+      const fake = createFakeMotion(page);
+      const tier = fakeTier(1);
+      const stop = startStory(fake.motion, {
+        root,
+        bridge,
+        calm: calm.store,
+        view: VIEW,
+        fonts: null,
+        tier: tier.store,
+        measure: () => ({
+          stages: { hero },
+          frames: [],
+          width: WIDTH,
+          lines,
+          viewer: VIEWER,
+          faces: state.isLive ? [FACE] : [],
+        }),
+        passes: () => {
+          state.reads += 1;
+          return state.isLive ? [cardAt(page.position)] : [];
+        },
+      });
+      const scrollTo = (position: number) => {
+        page.position = position;
+        fake.triggers[0]?.vars.onUpdate?.();
+      };
+      return { stop, scrollTo, tier, state };
+    }
+
+    it("REQ-ENG-09 REQ-SCR-01 while the viewer is near, each scroll frame sends the live cards where the screen shows them, only when they moved; well off screen the field gets none, once", () => {
+      page.position = 1000;
+      const { stop, scrollTo, state } = startViewer();
+      // Far above the viewer: nothing read, nothing sent.
+      expect(bridge.setPasses).not.toHaveBeenCalled();
+      expect(state.reads).toBe(0);
+
+      // Half a screen before its top reaches the screen.
+      scrollTo(2901);
+      expect(bridge.setPasses).toHaveBeenLastCalledWith([cardAt(2901)]);
+      scrollTo(3800);
+      expect(bridge.setPasses).toHaveBeenLastCalledWith([cardAt(3800)]);
+      // A card that did not move sends nothing.
+      scrollTo(3800);
+      expect(bridge.setPasses).toHaveBeenCalledTimes(2);
+
+      // Well past the viewer: none, once.
+      scrollTo(5400);
+      expect(bridge.setPasses).toHaveBeenLastCalledWith(null);
+      const reads = state.reads;
+      scrollTo(5600);
+      scrollTo(6000);
+      expect(bridge.setPasses).toHaveBeenCalledTimes(3);
+      expect(state.reads).toBe(reads);
+      stop();
+    });
+
+    it("REQ-ENG-09 REQ-SCR-01 the cards go out before the story moves on", () => {
+      page.position = 3000;
+      const { stop, scrollTo } = startViewer();
+      scrollTo(3600);
+      const [passesOrder] = bridge.setPasses.mock.invocationCallOrder.slice(-1);
+      const [storyOrder] = bridge.setStory.mock.invocationCallOrder.slice(-1);
+      expect(passesOrder).toBeLessThan(storyOrder ?? 0);
+      expect(bridge.setStory).toHaveBeenLastCalledWith("making-of", 0.125);
+      stop();
+    });
+
+    it("REQ-A11Y-03 REQ-ENG-09 in calm the cards still go to the field as they scroll, so its still keeps each pass in its card", () => {
+      const calm = createCalm(true);
+      page.position = 4000;
+      const { stop, scrollTo } = startViewer({ calm });
+      expect(bridge.setPasses).toHaveBeenLastCalledWith([cardAt(4000)]);
+      scrollTo(4010);
+      expect(bridge.setPasses).toHaveBeenLastCalledWith([cardAt(4010)]);
+
+      // A change of calm alone moves no card.
+      calm.set(false);
+      calm.set(true);
+      expect(bridge.setPasses).toHaveBeenCalledTimes(2);
+      stop();
+    });
+
+    it("REQ-ENG-09 A14 cards that turn live once the field is ready are read on the next task, and none is sent while every card shows its still", () => {
+      vi.useFakeTimers();
+      try {
+        page.position = 4000;
+        const { stop, tier, state } = startViewer({ isLive: false });
+        expect(bridge.setPasses).not.toHaveBeenCalled();
+
+        // React draws the live faces after the tier store reports.
+        state.isLive = true;
+        tier.set(2);
+        expect(bridge.setPasses).not.toHaveBeenCalled();
+        vi.runOnlyPendingTimers();
+        expect(bridge.setPasses).toHaveBeenLastCalledWith([cardAt(4000)]);
+
+        // Tier 3: the faces show stills again.
+        state.isLive = false;
+        tier.set(3);
+        vi.runOnlyPendingTimers();
+        expect(bridge.setPasses).toHaveBeenLastCalledWith(null);
+        stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("REQ-SCR-04 teardown takes the passes off the field, and no scroll after it sends any", () => {
+      page.position = 4000;
+      const { stop, scrollTo } = startViewer();
+      expect(bridge.setPasses).toHaveBeenLastCalledWith([cardAt(4000)]);
+
+      stop();
+      expect(bridge.setPasses).toHaveBeenLastCalledWith(null);
+      const count = bridge.setPasses.mock.calls.length;
+      scrollTo(4100);
+      stop();
+      expect(bridge.setPasses).toHaveBeenCalledTimes(count);
+    });
+
+    it("REQ-SCR-04 a story stopped away from the viewer sends nothing on teardown", () => {
+      page.position = 1000;
+      const { stop } = startViewer();
+      stop();
+      expect(bridge.setPasses).not.toHaveBeenCalled();
+    });
+
+    it("REQ-A11Y-06 REQ-ENG-09 a plate whose soft edge reaches a live face is cut there, so the pass shows; with the card on its still the plate keeps its edge", () => {
+      // The chapter's intro above the cards, past the row's 24 px.
+      const intro = { top: 3990, bottom: 4040, left: 88, right: 648 };
+      page.position = 4000;
+      const live = startViewer({ lines: [intro] });
+      const [plate] = [...(layer()?.children ?? [])] as HTMLElement[];
+      expect(plate?.style.clipPath).toMatch(/^path\(evenodd, /);
+      expect(plate?.style.clipPath).toContain("A 12 12 0 0 1");
+      live.stop();
+
+      const still = startViewer({ lines: [intro], isLive: false });
+      const [kept] = [...(layer()?.children ?? [])] as HTMLElement[];
+      expect(kept?.style.clipPath).toBe("");
+      still.stop();
+    });
   });
 });

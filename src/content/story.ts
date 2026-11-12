@@ -54,7 +54,7 @@ export const story = {
       "Where your device draws the field live, the dot opens into a field of violet and lavender light; the light gathers into the T7SEN mark, the mark turns into the T7SEN wordmark, and the wordmark dissolves into flow lines that curve across the screen.",
     work: "Where your device draws the field live, each full study's shape forms inside its frame as its row comes into view: layered sheets for the making-of, five fanned cards for Coup Online and a chat bubble with three lines for ArcheLab.",
     "making-of":
-      "Where your device draws the field live, the light flattens into one sheet the shape of the screen, facing you.",
+      "Where your device draws the field live, the light flattens into one sheet behind the pass cards and the panel, and each card it draws live shows that pass of the frame as it is drawn.",
     about:
       "Where your device draws the field live, three thin strands of light, one bright and two faint, wave slowly across the full width of the screen.",
     contact:

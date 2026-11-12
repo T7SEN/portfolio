@@ -354,6 +354,43 @@ describe("the page's text, for the plates", () => {
     expect(lines).toEqual([{ top: 10, bottom: 30, left: 0, right: 200 }]);
   });
 
+  it("REQ-A11Y-06 REQ-ENG-09 a pass card's label is its own text box, so the card's face, where the field draws, adds no line", () => {
+    root.innerHTML = `
+      <div role="group">
+        <button id="card" type="button">
+          <span id="face" aria-hidden="true" data-pass-face="velocity" data-live=""></span>
+          <span id="label" data-plate="box"><span>2 <span aria-hidden="true">·</span> Velocity</span></span>
+        </button>
+      </div>
+      <button id="plain" type="button">Calm mode</button>`;
+    place(root.querySelector("#card")!, {
+      top: 4100,
+      bottom: 4410,
+      left: 300,
+      right: 500,
+    });
+    place(root.querySelector("#label")!, {
+      top: 4392,
+      bottom: 4410,
+      left: 350,
+      right: 450,
+    });
+    place(root.querySelector("#plain")!, {
+      top: 10,
+      bottom: 54,
+      left: 0,
+      right: 120,
+    });
+
+    const { lines } = measureLayout(root, view(4000));
+    // One line for the label, once for its three runs of text, and a button
+    // with no marked box keeps its whole box.
+    expect(lines).toEqual([
+      { top: 4392, bottom: 4410, left: 350, right: 450 },
+      { top: 10, bottom: 54, left: 0, right: 120 },
+    ]);
+  });
+
   it("REQ-A11Y-06 a study frame holds no text, so it adds no line", () => {
     const { lines, frames } = measureLayout(root, view());
     // The three titles beside the frames, and nothing from the frames.

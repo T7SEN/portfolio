@@ -1,4 +1,4 @@
-import type { ChapterId, Stages } from "@/engine/types";
+import type { ChapterId, PassCard, Stages } from "@/engine/types";
 import { calmStore, type CalmStore } from "@/lib/calm-store";
 import { tierStore, type TierStore } from "@/lib/tier-store";
 import type { Motion } from "@/lib/load-motion";
@@ -15,6 +15,13 @@ import {
   TITLE_REVEAL,
 } from "./motion-timing";
 import { readStoryElements } from "./story-dom";
+import {
+  isViewerNear,
+  measurePassCards,
+  measurePassLayout,
+  samePasses,
+  type PassLayout,
+} from "./story-passes";
 import {
   isReached,
   resolveStory,
@@ -106,13 +113,21 @@ export type StoryMotion = {
 export type StoryOptions = {
   /** The page's main element: every chapter and title sits inside it. */
   root: HTMLElement;
-  bridge?: Pick<StoryBridge, "setStory" | "setStage" | "setVeil">;
+  bridge?: Pick<StoryBridge, "setStory" | "setStage" | "setPasses" | "setVeil">;
   calm?: Pick<CalmStore, "getSnapshot" | "subscribe">;
   /** The screen's height, read on every scroll frame. */
   view?: Pick<Window, "innerHeight">;
   fonts?: Pick<FontFaceSet, "ready"> | null;
-  /** The page's layout for the field: stages and text (story-stage.ts). */
-  measure?: () => PageLayout;
+  /**
+   * The page's layout for the field: stages and text (story-stage.ts), and
+   * the pass viewer with its live faces (story-passes.ts).
+   */
+  measure?: () => PageLayout & Partial<PassLayout>;
+  /**
+   * The live pass cards as the screen shows them now, read on every scroll
+   * frame while the viewer is near (story-passes.ts).
+   */
+  passes?: () => readonly PassCard[];
   /** The tier the field runs on: plates and the open veil need a live one. */
   tier?: Pick<TierStore, "getSnapshot" | "subscribe">;
 };
@@ -150,15 +165,17 @@ function contained(run: () => void) {
  * the same way, through setStage only (REQ-ENG-03): measured from the
  * layout on every refresh, and while the work chapter is on screen the work
  * stage again on every scroll frame, so each study's shape forms inside its
- * row's frame and moves with it. Nothing is pinned or snapped, and
- * scrolling keeps its native speed (REQ-SCR-02).
+ * row's frame and moves with it. While the making-of pass viewer is near,
+ * every scroll frame sends its live cards' corners through setPasses, so
+ * each pass draws inside its card (REQ-ENG-09). Nothing is pinned or
+ * snapped, and scrolling keeps its native speed (REQ-SCR-02).
  * Chapter titles below the fold rise into view once; in calm mode or under
  * reduced motion they fade in whole instead (REQ-SCR-05, REQ-A11Y-03).
  *
- * The teardown reverts every animation and split, kills every trigger and
- * removes every listener (REQ-SCR-04). If setting up fails part way, the
- * same teardown runs before the error is passed on, so no text stays hidden
- * (REQ-CNT-01).
+ * The teardown reverts every animation and split, kills every trigger,
+ * removes every listener and takes the passes off the field (REQ-SCR-04).
+ * If setting up fails part way, the same teardown runs before the error is
+ * passed on, so no text stays hidden (REQ-CNT-01).
  */
 export function startStory(
   motion: StoryMotion,
@@ -171,7 +188,11 @@ export function startStory(
     calm = calmStore,
     view = window,
     fonts = "fonts" in document ? document.fonts : null,
-    measure = () => measureLayout(root, window),
+    measure = () => ({
+      ...measureLayout(root, window),
+      ...measurePassLayout(root, window),
+    }),
+    passes = () => measurePassCards(root, window),
     tier = tierStore,
   } = options;
   const { chapters, steps, titles } = readStoryElements(root);
@@ -192,7 +213,9 @@ export function startStory(
   let isReady = false;
   let isStopped = false;
   let sentStages: Stages | null = null;
-  let layout: PageLayout | null = null;
+  // The cards last sent; null before any and once the viewer is away.
+  let sentPasses: readonly PassCard[] | null = null;
+  let layout: (PageLayout & Partial<PassLayout>) | null = null;
   let plateLayer: HTMLElement | null = null;
   let unsubscribeTier: (() => void) | null = null;
   let remeasureTimer: ReturnType<typeof setTimeout> | null = null;
@@ -219,6 +242,23 @@ export function startStory(
     if (sameStages(sentStages, next)) return;
     sentStages = next;
     bridge.setStage(next);
+  }
+
+  // The making-of cards the field draws a pass in (REQ-ENG-09), read from
+  // the page on every scroll frame while the viewer is near, since the
+  // field's canvas is fixed and the cards move with the page. In calm too:
+  // the field then draws its still again, so each pass keeps to its card.
+  // Away from the viewer the field gets none. Sent only when they moved
+  // (samePasses).
+  function sendPasses(position: number) {
+    if (layout === null || isStopped) return;
+    const cards = isViewerNear(layout.viewer, position, view.innerHeight)
+      ? passes()
+      : [];
+    const next = cards.length > 0 ? cards : null;
+    if (samePasses(sentPasses, next)) return;
+    sentPasses = next;
+    bridge.setPasses(next);
   }
 
   // Any part of the work chapter is on screen: its top is above the
@@ -248,6 +288,7 @@ export function startStory(
     // goes first, so a new study already has its frame. In calm the stage
     // does not move with the scroll, so nothing is sent (REQ-A11Y-03).
     if (isWorkInView(position)) sendStages(position, steps);
+    sendPasses(position);
     const next = resolveStory(
       position,
       chapterTriggers.map(({ chapter, trigger }) => ({
@@ -279,9 +320,12 @@ export function startStory(
       layout.lines,
       layout.width > 0 ? layout.width : undefined,
     );
-    const frames = layout.frames.flatMap((frame) =>
-      frame === null ? [] : [frame],
-    );
+    // The study frames and the live pass faces hold no text and show the
+    // field, so the plates keep clear of them.
+    const frames = [
+      ...layout.frames.flatMap((frame) => (frame === null ? [] : [frame])),
+      ...(layout.faces ?? []),
+    ];
     const clear = clearAreas(frames, layout.lines);
     if (plateLayer === null) {
       plateLayer = createPlateLayer(root.ownerDocument);
@@ -291,6 +335,7 @@ export function startStory(
     } else {
       drawPlates(plateLayer, blocks, clear);
     }
+    sendPasses(currentPosition());
   }
 
   // After every refresh the layout is read again, then the story sent.
@@ -414,6 +459,11 @@ export function startStory(
     unsubscribeTier = null;
     if (remeasureTimer !== null) clearTimeout(remeasureTimer);
     remeasureTimer = null;
+    // The field draws no pass once the page has gone.
+    if (sentPasses !== null) {
+      sentPasses = null;
+      bridge.setPasses(null);
+    }
     // The field outside the story keeps its own veil, closed before the
     // plates go.
     if (plateLayer !== null) {

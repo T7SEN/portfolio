@@ -84,6 +84,45 @@ export type Pages = {
   v1: PageCopy & { archive: Marker };
 };
 
+/** The words of every study page's interface: the study's own words are in its file. */
+export type StudyPageCopy = {
+  breadcrumb: { name: Text; work: Link & { href: "/work" } };
+  /** The first words of a study's label, before its number ("Full study 02"). */
+  label: { full: Text; short: Text };
+  inProgress: Text;
+  /** The mono label over the list of parts, which also names that list. */
+  contents: Text;
+  /** A full study's seven parts, in the order of the page (REQ-CNT-03). */
+  parts: {
+    summary: Text;
+    problem: Text;
+    approach: Text;
+    hardPart: Text;
+    results: Text;
+    wouldChange: Text;
+    links: Text;
+  };
+  /** The subheads inside part 2. */
+  problem: { constraints: Text; role: Text };
+  /** A short study's four parts (REQ-CNT-04). */
+  shortParts: { what: Text; why: Text; stack: Text; links: Text };
+  /** The mono labels of the facts row under a full study's summary. */
+  facts: {
+    role: Text;
+    builtWith: Text;
+    live: Text;
+    code: Text;
+    /** Code's value when a study's repository is not public. */
+    codeOnRequest: Text;
+  };
+  /** Before each result's source ("Source: ..."). */
+  source: Text;
+  /** Before who allowed a quote and when (REQ-CNT-06). */
+  permission: Text;
+  /** The previous and next study cards. */
+  more: { name: Text; previous: Text; next: Text };
+};
+
 const message = { label: "Send a message", href: "/contact" } as const;
 
 // /v1 holds its marker until P8 builds the archive, so the /work table's v1
@@ -110,13 +149,14 @@ export const pages = {
         link: { label: "t7sen.com v1 lives in the archive", href: "/v1" },
       },
     },
-    // The pass viewer comes with P4, so nothing here asks the visitor to
-    // choose a pass yet.
+    // Every card of the pass viewer is a button on every tier, so the line
+    // that asks for a pass holds everywhere; it never speaks of a field the
+    // visitor stirred, which tier 3 and calm do not let them do (A14).
     makingOf: {
       title: "How one frame is built",
       intro:
-        "The render passes that draw this field, and what each device tier shows.",
-      link: { label: "Read the making-of", href: studyHref("making-of") },
+        "The render passes that draw this field, and what each device tier shows. Select a pass to read how it works.",
+      link: { label: "Read the full making-of", href: studyHref("making-of") },
     },
     contact: {
       title: "Send a message.",
@@ -192,3 +232,36 @@ export const pages = {
     archive: "[FILL: v1 screenshots and a short before and after, built at P8]",
   },
 } satisfies Pages;
+
+export const studyPage = {
+  breadcrumb: { name: "Breadcrumb", work: { label: "Work", href: "/work" } },
+  label: { full: "Full study", short: "Short study" },
+  inProgress: "In progress",
+  contents: "In this study",
+  parts: {
+    summary: "Summary",
+    problem: "Problem and role",
+    approach: "Approach",
+    hardPart: "The hard part",
+    results: "Results",
+    wouldChange: "What I would change",
+    links: "Links",
+  },
+  problem: { constraints: "Constraints", role: "Role" },
+  shortParts: {
+    what: "What it is",
+    why: "Why it exists",
+    stack: "Stack",
+    links: "Links",
+  },
+  facts: {
+    role: "Role",
+    builtWith: "Built with",
+    live: "Live",
+    code: "Code",
+    codeOnRequest: "On request",
+  },
+  source: "Source",
+  permission: "Quoted with permission from",
+  more: { name: "More studies", previous: "Previous", next: "Next" },
+} satisfies StudyPageCopy;

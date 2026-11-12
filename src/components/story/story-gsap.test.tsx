@@ -64,6 +64,7 @@ describe("story with the pinned GSAP", () => {
       const bridge = {
         setStory: vi.fn(),
         setStage: vi.fn(),
+        setPasses: vi.fn(),
         setVeil: vi.fn(),
       };
 

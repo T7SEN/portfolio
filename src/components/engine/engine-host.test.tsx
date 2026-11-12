@@ -96,6 +96,7 @@ function createFakeEngine(host: HTMLElement, options?: EngineOptions) {
     setTier: vi.fn(),
     setStory: vi.fn(),
     setStage: vi.fn(),
+    setPasses: vi.fn(),
     setPointer: vi.fn(),
     setCalm: vi.fn(),
     on: (listener) => {
@@ -295,6 +296,63 @@ describe("engine session", () => {
     expect(engine.setStage).toHaveBeenLastCalledWith({});
   });
 
+  it("REQ-ENG-09 the pass cards reach the engine as it is created, ahead of the story, and later ones follow", async () => {
+    const { bridge, session } = setUp();
+    const corners = [
+      { x: -0.4, y: 0.2 },
+      { x: -0.1, y: 0.2 },
+      { x: -0.1, y: -0.3 },
+      { x: -0.4, y: -0.3 },
+    ] as const;
+    const cards = [{ pass: "velocity" as const, corners }];
+    bridge.setPasses(cards);
+    bridge.setStory("making-of", 0.5);
+    session.request();
+    await passFirstContent();
+
+    const engine = engines[0];
+    if (engine === undefined) throw new Error("No engine was created");
+    expect(engine.setPasses).toHaveBeenCalledExactlyOnceWith(cards);
+    const [passesOrder] = vi.mocked(engine.setPasses).mock.invocationCallOrder;
+    const [storyOrder] = vi.mocked(engine.setStory).mock.invocationCallOrder;
+    expect(passesOrder).toBeLessThan(storyOrder ?? 0);
+
+    bridge.setPasses(null);
+    expect(engine.setPasses).toHaveBeenLastCalledWith(null);
+  });
+
+  it("REQ-ENG-08 REQ-ENG-09 with no engine the cards go nowhere, and the bridge keeps them for the page", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.loadEngine.mockRejectedValue(new Error("chunk failed"));
+    const { bridge, session } = setUp();
+    session.request();
+    await passFirstContent();
+
+    const cards = [
+      {
+        pass: "glow" as const,
+        corners: [
+          { x: 0, y: 0 },
+          { x: 0.2, y: 0 },
+          { x: 0.2, y: -0.2 },
+          { x: 0, y: -0.2 },
+        ] as const,
+      },
+    ];
+    expect(() => bridge.setPasses(cards)).not.toThrow();
+    expect(engines).toHaveLength(0);
+
+    const later = {
+      setStory: vi.fn(),
+      setStage: vi.fn(),
+      setPasses: vi.fn(),
+      setPointer: vi.fn(),
+      setVeil: vi.fn(),
+    };
+    bridge.connect(later);
+    expect(later.setPasses).toHaveBeenCalledExactlyOnceWith(cards);
+  });
+
   it("REQ-A11Y-06 the page's veil lies over a live field only; tier 3's still and a closed session keep the measured one", async () => {
     const { bridge, session, wrapper } = setUp();
     const veil = () => wrapper.style.getPropertyValue("--field-veil");
@@ -393,12 +451,21 @@ describe("engine session", () => {
       reason: "probe-pass",
       ready: false,
       particles: null,
+      look: null,
     });
+    expect(wrapper.hasAttribute("data-look")).toBe(false);
 
-    engines[0]?.emit({ type: "ready", tier: 1, particles: 1_000_000 });
+    engines[0]?.emit({
+      type: "ready",
+      tier: 1,
+      particles: 1_000_000,
+      look: "halftone",
+    });
     expect(wrapper.dataset.ready).toBe("true");
+    expect(wrapper.dataset.look).toBe("halftone");
     expect(tierStore.getSnapshot().ready).toBe(true);
     expect(tierStore.getSnapshot().particles).toBe(1_000_000);
+    expect(tierStore.getSnapshot().look).toBe("halftone");
   });
 
   it("REQ-ENG-08 a change of tier is not ready until the new tier reports ready", async () => {
@@ -406,12 +473,19 @@ describe("engine session", () => {
     session.request();
     await passFirstContent();
     engines[0]?.emit({ type: "tierChosen", tier: 1, reason: "probe-pass" });
-    engines[0]?.emit({ type: "ready", tier: 1, particles: 1_000_000 });
+    engines[0]?.emit({
+      type: "ready",
+      tier: 1,
+      particles: 1_000_000,
+      look: "halftone",
+    });
+    expect(wrapper.dataset.look).toBe("halftone");
 
     engines[0]?.emit({ type: "tierChosen", tier: 2, reason: "device-lost" });
     expect(wrapper.dataset.tier).toBe("2");
     expect(wrapper.dataset.tierReason).toBe("device-lost");
     expect(wrapper.dataset.ready).toBe("false");
+    expect(wrapper.hasAttribute("data-look")).toBe(false);
 
     expect(tierStore.getSnapshot().particles).toBeNull();
 
@@ -452,6 +526,7 @@ describe("engine session", () => {
       reason: "no-backend",
       ready: true,
       particles: 0,
+      look: null,
     });
     expect(wrapper.dataset.tier).toBe("3");
     expect(wrapper.dataset.tierReason).toBe("no-backend");

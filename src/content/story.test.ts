@@ -126,8 +126,19 @@ describe("scene descriptions", () => {
         study.slug === "making-of" ? "the making-of" : study.title,
       );
     }
+    expect(story.scenes["making-of"]).toContain("one sheet");
     expect(story.scenes.about).toContain("three thin strands");
     expect(story.scenes.contact).toContain("rings behind the contact panel");
+  });
+});
+
+describe("making-of scene", () => {
+  it("REQ-A11Y-05 REQ-ENG-09 A14 the making-of scene says the pass cards are drawn live only where the device draws them", () => {
+    const scene = story.scenes["making-of"];
+    expect(scene).toContain("pass cards");
+    // A card the tier does not draw live shows a still, so the line claims
+    // a live pass only for the cards the device draws.
+    expect(scene).toContain("each card it draws live");
   });
 });
 

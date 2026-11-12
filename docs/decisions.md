@@ -580,3 +580,9 @@ T7SEN added this phase after the design review and approved its plan as written 
 ### D-091 Focus, link names and copy
 
 - REQ-A11Y-01, REQ-A11Y-02, A14, A15. Every focusable element holds the glow outline colour at rest, so Tailwind's colour transitions never fade the focus ring in: focus changes only the outline's style, which does not animate. Study links in the short cards and the /work table carry the study's title in their names ("Full study, Coup Online"), starting with the visible words. The tier readouts are plain text, not live regions. Copy corrected: the making-of row says the field re-forms into each full study; /contact's intro promises only a reply until P6 builds the form; the /work note reads "No 3D · Static HTML" in place of a claim nothing measured; the v1 row takes /v1's own intro. links.t7sen.com joins /about's Elsewhere. Scene lines name nothing only the halftone draws, so they stay true on the soft field. Code that nothing used was removed.
+
+## After P3.5, 12 Nov 2026
+
+### D-092 Development builds say why the field could not start
+
+- REQ-ENG-08, REQ-ENG-10. On 12 Nov 2026 a browser session whose graphics had been turned off showed the still frame on the development server with the reason no-backend, and nothing said which renderer had failed or why; a restart of the browser fixed it. The engine now writes a console warning, outside production only, for each renderer that cannot start ("engine: the webgpu renderer could not start", then webgl2), with the error it threw, and a console error when anything unforeseen stops the field. The events and their reasons are unchanged, so the contract keeps its three events. Each call site tests NODE_ENV itself, so the production build drops the messages whole: no built chunk holds them and the engine entry stays 2.9 KB gzip. Renderer failures reach analytics at P6.

@@ -20,6 +20,7 @@ import { pages } from "@/content/pages";
 import { services } from "@/content/services";
 import { site } from "@/content/site";
 import { chapterOrder, story } from "@/content/story";
+import { BLOOM_ROOM } from "@/engine/runtime/story";
 import type { EngineEvent } from "@/engine/types";
 import {
   PLATE_ALPHA,
@@ -56,6 +57,11 @@ function render(element: ReactElement) {
 
 function classesOf(element: Element | null | undefined) {
   return (element?.getAttribute("class") ?? "").split(/\s+/);
+}
+
+/** A height set on an element itself: a minimum or a fixed one, at any width. */
+function heightClasses(element: Element | null | undefined) {
+  return classesOf(element).filter((name) => /(?:^|:)(?:min-h|h)-/.test(name));
 }
 
 function allClasses(host: Element) {
@@ -695,11 +701,13 @@ describe("BloomSection, the field chapter", () => {
     }
   });
 
-  it("REQ-SCR-01 REQ-SCR-07 one screen holds through the chapter, label and readout at the top, the note at the bottom, in room for the dot, the mark and the wordmark", () => {
+  it("REQ-SCR-01 REQ-SCR-07 one screen holds through the chapter, label and readout at the top, the note at the bottom, in a room as long as the field's timeline", () => {
     const field = section();
-    expect(classesOf(field)).toEqual(
-      expect.arrayContaining(["min-h-[260svh]", "lg:min-h-[220svh]"]),
-    );
+    // The engine times the mark and the wordmark in screens of this room,
+    // at every width (runtime/story.ts, BLOOM_ROOM).
+    expect(heightClasses(field)).toEqual([
+      `min-h-[${Math.round(BLOOM_ROOM * 100)}svh]`,
+    ]);
     // Sticky, so the three stay on screen while the wordmark forms, and a
     // stacking context of its own, so their plates sit under the words.
     const screen = field?.querySelector('[data-part="field-screen"]');
@@ -831,7 +839,7 @@ describe("WorkSection", () => {
 });
 
 describe("MakingOfSection", () => {
-  it("REQ-SCR-01 REQ-SCR-05 shows its label, its revealed title, a line true on every tier and the link to its study, in room for the sheet", () => {
+  it("REQ-SCR-01 REQ-SCR-05 shows its label, its revealed title, a line true on every tier and the link to its study, as tall as its content", () => {
     const section = render(<MakingOfSection />).querySelector("section");
     expect(section?.dataset.chapter).toBe("making-of");
     const heading = section?.querySelector("h2");
@@ -850,9 +858,8 @@ describe("MakingOfSection", () => {
     expect(links).toEqual([
       [pages.home.makingOf.link.label, pages.home.makingOf.link.href],
     ]);
-    expect(classesOf(section)).toEqual(
-      expect.arrayContaining(["min-h-[210svh]", "lg:min-h-[180svh]"]),
-    );
+    // No room of its own after the pass viewer: no height on the section.
+    expect(heightClasses(section)).toEqual([]);
   });
 });
 
@@ -894,12 +901,11 @@ describe("AboutSection", () => {
     expect(about_?.textContent).toContain(`${stream.label} ${stream.href}`);
   });
 
-  it("REQ-SCR-01 leaves room above the words for the field's strands", () => {
+  it("REQ-SCR-01 leaves room above the words for the field's strands, and none after them", () => {
     const inner = section()?.firstElementChild;
     expect(classesOf(inner)).toContain("pt-[45svh]");
-    expect(classesOf(section())).toEqual(
-      expect.arrayContaining(["min-h-[190svh]", "lg:min-h-[160svh]"]),
-    );
+    expect(heightClasses(section())).toEqual([]);
+    expect(heightClasses(inner)).toEqual([]);
   });
 });
 
@@ -937,15 +943,11 @@ describe("ContactSection", () => {
     expect(contact?.querySelectorAll("form, input, textarea")).toHaveLength(0);
   });
 
-  it("REQ-SCR-01 the last chapter keeps its words at the bottom of its room", () => {
-    expect(classesOf(section())).toEqual(
-      expect.arrayContaining([
-        "min-h-[130svh]",
-        "lg:min-h-[135svh]",
-        "flex-col",
-        "justify-end",
-      ]),
-    );
+  it("REQ-SCR-01 the last chapter is as tall as its words, with no room above them", () => {
+    const contact = section();
+    expect(heightClasses(contact)).toEqual([]);
+    expect(classesOf(contact)).not.toContain("justify-end");
+    expect(heightClasses(contact?.firstElementChild)).toEqual([]);
   });
 });
 
@@ -969,11 +971,27 @@ describe("HomePage", () => {
     }
   });
 
-  it("REQ-SCR-01 the hero keeps empty room after its first screen, before the field chapter", () => {
+  it("REQ-SCR-01 REQ-NAV-01 the hero is its first screen below the bar and no more, with no room after it before the field chapter", () => {
     const hero = page().querySelector('section[data-chapter="hero"]');
-    expect(classesOf(hero)).toEqual(
-      expect.arrayContaining(["pb-[46svh]", "lg:pb-[31svh]"]),
-    );
+    expect(
+      classesOf(hero).filter((name) =>
+        /(?:^|:)(?:min-h|h|p|py|pb)-/.test(name),
+      ),
+    ).toEqual([]);
+    // Nothing after its one screen, the box the hero's own test sizes to
+    // the screen below the bar.
+    expect(hero?.children).toHaveLength(1);
+  });
+
+  it("REQ-SCR-01 every chapter is as tall as its content but the field chapter, the only one with a held stretch", () => {
+    for (const section of page().querySelectorAll("section")) {
+      const heights = heightClasses(section);
+      if (section.dataset.chapter === "bloom") {
+        expect(heights).toHaveLength(1);
+      } else {
+        expect(heights, section.dataset.chapter).toEqual([]);
+      }
+    }
   });
 
   it("REQ-A11Y-05 each chapter holds one visually hidden scene line, true on every tier", () => {

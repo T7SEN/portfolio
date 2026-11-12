@@ -24,9 +24,11 @@ import { TierReadout } from "./tier-readout";
 // is taller than this minimum, so Skip intro can end below the fold there
 // (D-063).
 //
-// Below the first screen the hero keeps some empty room, where the dot
-// pulses alone before the field chapter: it puts the field chapter's start
-// near its storyboard share of the scroll (app/page.tsx has the sums).
+// The hero is that first screen and no more: the field chapter starts at its
+// foot, and the bloom begins as its top reaches the middle of the screen.
+// This replaces the empty room the hero kept after its first screen, where
+// the dot pulsed alone (D-081); every chapter is now as tall as its content
+// (app/page.tsx).
 //
 // The layout is one grid per breakpoint, so the links keep one order for
 // the keyboard everywhere: See the work, Send a message, Skip intro, Calm.
@@ -40,11 +42,7 @@ export function Hero() {
   const copy = heroCopy(STATIC_TIER);
 
   return (
-    <section
-      aria-label={site.names.intro}
-      data-chapter="hero"
-      className="pb-[46svh] lg:pb-[31svh]"
-    >
+    <section aria-label={site.names.intro} data-chapter="hero">
       <Container
         width="full"
         className={cx(

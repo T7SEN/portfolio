@@ -18,16 +18,20 @@ import { TierReadout } from "./tier-readout";
 // label at the top start, the tier at the top end and the note at the bottom
 // start, clear of the formation in the middle. Each brings its own plate,
 // since the veil's plates scroll with the page (held-plate.tsx). The
-// chapter's room is long enough for the dot, the mark and the wordmark, and
-// puts the work chapter near its storyboard start (app/page.tsx has the
-// sums). On tier 3 the screen shows the wordmark's still.
+// chapter is the one with a held stretch: its room is the field's timeline,
+// BLOOM_ROOM screens in src/engine/runtime/story.ts (200svh for 2), in
+// which the mark gathers as the chapter arrives, holds whole while this
+// screen fills the view, and turns into the wordmark, which holds on as the
+// work chapter comes up under it. The two change
+// together; a test holds them equal. On tier 3 the screen shows the
+// wordmark's still.
 export function BloomSection() {
   return (
     <HomeSection
       id="bloom"
       chapter="bloom"
       name={site.names.field}
-      className="relative min-h-[260svh] lg:min-h-[220svh]"
+      className="relative min-h-[200svh]"
     >
       <div data-part="field-screen" className="sticky top-0 isolate h-svh">
         <FieldStill />

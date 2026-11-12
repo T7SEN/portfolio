@@ -6,6 +6,9 @@ import { outline } from "./shapes";
 import {
   AMBIENT,
   BLOOM_KEEP,
+  BLOOM_MARK_AT,
+  BLOOM_ROOM,
+  BLOOM_SCREENS,
   BLOOM_STAGE,
   FLOW_FROM,
   FLOW_LINES,
@@ -86,6 +89,9 @@ const KEYS = [
   "noise",
   "push",
 ] as const;
+
+/** A point of the bloom's timeline, in screens, as progress through it. */
+const bloomAt = (screens: number) => screens / BLOOM_ROOM;
 
 // Half frames at the focus plane: 1280 x 800, 1920 x 1080 and 375 x 812.
 const landscape: Frame = { halfWidth: 2.33 * 1.6, halfHeight: 2.33 };
@@ -210,29 +216,67 @@ describe("hero and bloom", () => {
     }
   });
 
-  test("REQ-SCR-07 the bloom lets the field go from the dot by 0.3, before any formation", () => {
-    expect(chapterTargets("bloom", 0).release).toBe(0);
-    const opening = chapterTargets("bloom", 0.15).release;
-    expect(opening).toBeGreaterThan(0);
-    expect(opening).toBeLessThan(1);
-    expect(chapterTargets("bloom", 0.3).release).toBe(1);
-    for (const progress of sweep) {
-      if (progress > 0.3) break;
-      expect(chapterTargets("bloom", progress).shape).toBe(0);
+  test("REQ-SCR-07 as soon as the field chapter arrives the dot lets the field go and the mark starts to gather, the dot empty before the mark is whole", () => {
+    const arrival = chapterTargets("bloom", 0);
+    expect(arrival.release).toBe(0);
+    expect(arrival.shape).toBe(0);
+    // A few pixels in, both have begun, and the shape is the mark.
+    const arriving = chapterTargets("bloom", 0.01);
+    expect(arriving.release).toBeGreaterThan(0);
+    expect(arriving.shape).toBeGreaterThan(0);
+    expect(shapeShares(arriving).logo).toBeCloseTo(arriving.shape, 12);
+
+    // Every particle has left the dot by the time the mark is whole.
+    expect(BLOOM_SCREENS.released).toBeLessThanOrEqual(BLOOM_SCREENS.gathered);
+    expect(
+      chapterTargets("bloom", bloomAt(BLOOM_SCREENS.released)).release,
+    ).toBe(1);
+    const gathered = bloomAt(BLOOM_SCREENS.gathered);
+    expect(chapterTargets("bloom", gathered).shape).toBe(1);
+    for (const progress of fineSweep) {
+      if (progress >= gathered) break;
+      expect(chapterTargets("bloom", progress).shape).toBeLessThan(1);
     }
   });
 
+  test("REQ-SCR-01 REQ-SCR-07 the timeline fits the chapter's room: the mark whole as the held screen fills the view, each shape held whole for at least a third of a screen, and the field back in its flow before the room ends", () => {
+    const { released, gathered, morphFrom, morphTo, holdsUntil, gone } =
+      BLOOM_SCREENS;
+    const points = [0, released, gathered, morphFrom, morphTo, holdsUntil];
+    for (const [index, point] of points.entries()) {
+      expect(point).toBeLessThanOrEqual(points[index + 1] ?? gone);
+    }
+    // The held screen fills the view from half a screen in until half a
+    // screen before the room ends.
+    expect(gathered).toBeLessThanOrEqual(0.5);
+    expect(morphTo).toBeLessThanOrEqual(BLOOM_ROOM - 0.5);
+    expect(morphFrom - gathered).toBeGreaterThanOrEqual(1 / 3);
+    expect(holdsUntil - morphTo).toBeGreaterThanOrEqual(1 / 3);
+    expect(gone).toBeLessThan(BLOOM_ROOM);
+    // A held stretch: the room is longer than its one held screen.
+    expect(BLOOM_ROOM).toBeGreaterThan(1);
+  });
+
   test("REQ-SCR-07 the T7 mark gathers first, then morphs into the T7SEN wordmark, which holds and then dissolves", () => {
-    // The mark, whole.
-    for (const progress of [0.42, 0.46, 0.5]) {
+    const { gathered, morphFrom, morphTo, holdsUntil, gone } = BLOOM_SCREENS;
+    // The mark, whole across its hold.
+    expect(BLOOM_MARK_AT).toBeCloseTo(bloomAt((gathered + morphFrom) / 2), 12);
+    for (const progress of [
+      bloomAt(gathered),
+      BLOOM_MARK_AT,
+      bloomAt(morphFrom),
+    ]) {
       const mark = chapterTargets("bloom", progress);
       expect(mark.shape).toBe(1);
       expect(shapeShares(mark).logo).toBe(1);
     }
     // Turning from one into the other, the mark's share falling all the way.
     let wordmarkShare = 0;
-    for (const progress of [0.53, 0.57, 0.61]) {
-      const morph = chapterTargets("bloom", progress);
+    for (const share of [0.2, 0.5, 0.8]) {
+      const morph = chapterTargets(
+        "bloom",
+        bloomAt(morphFrom + share * (morphTo - morphFrom)),
+      );
       expect(morph.shape).toBe(1);
       expect(morph.shapeFrom).toBe("logo");
       expect(morph.shapeTo).toBe("wordmark");
@@ -242,17 +286,20 @@ describe("hero and bloom", () => {
       wordmarkShare = shares.wordmark ?? 0;
     }
     // The wordmark, whole and held.
-    for (const progress of [0.64, 0.7, 0.8, 0.84]) {
-      const held = chapterTargets("bloom", progress);
+    for (const screens of [morphTo, (morphTo + holdsUntil) / 2, holdsUntil]) {
+      const held = chapterTargets("bloom", bloomAt(screens));
       expect(held.shape).toBe(1);
       expect(shapeShares(held).wordmark).toBe(1);
     }
     // Then it dissolves into the flow.
-    const dissolving = chapterTargets("bloom", 0.9);
+    const dissolving = chapterTargets(
+      "bloom",
+      bloomAt((holdsUntil + gone) / 2),
+    );
     expect(dissolving.shape).toBeGreaterThan(0);
     expect(dissolving.shape).toBeLessThan(1);
     expect(shapeShares(dissolving).logo ?? 0).toBe(0);
-    expect(chapterTargets("bloom", 0.97).shape).toBe(0);
+    expect(chapterTargets("bloom", bloomAt(gone)).shape).toBe(0);
     expect(chapterTargets("bloom", 1).shape).toBe(0);
     expect(chapterTargets("bloom", 1).release).toBe(1);
 
@@ -265,8 +312,10 @@ describe("hero and bloom", () => {
   });
 
   test("REQ-SCR-07 the mark takes the whole flow; as it turns into the wordmark, part of the lines run round it again", () => {
-    expect(chapterTargets("bloom", 0.45).keep).toBe(0);
-    expect(chapterTargets("bloom", 0.7).keep).toBe(BLOOM_KEEP);
+    expect(chapterTargets("bloom", BLOOM_MARK_AT).keep).toBe(0);
+    expect(chapterTargets("bloom", calmProgress("bloom", 0)).keep).toBe(
+      BLOOM_KEEP,
+    );
     expect(BLOOM_KEEP).toBeGreaterThan(0);
     expect(BLOOM_KEEP).toBeLessThan(1);
   });
@@ -449,7 +498,7 @@ describe("fit and light", () => {
   test("REQ-A11Y-06 the ambient field keeps its light; a formation dims each particle by the share of the frame it packs into", () => {
     expect(formedLight(AMBIENT, extents, landscape)).toBe(1);
 
-    const mark = chapterTargets("bloom", 0.45);
+    const mark = chapterTargets("bloom", BLOOM_MARK_AT);
     const area = formedArea(mark, extents, landscape);
     expect(area).toBeGreaterThan(0);
     expect(area).toBeLessThan(1);
@@ -484,7 +533,7 @@ describe("fit and light", () => {
   });
 
   test("REQ-A11Y-06 lines that keep their particles through a formation leave fewer to form it, so each formed one gives more light", () => {
-    const held = chapterTargets("bloom", 0.7);
+    const held = chapterTargets("bloom", calmProgress("bloom", 0));
     const without = { ...held, keep: 0 };
     expect(KEPT_SHARE).toBeGreaterThan(0);
     expect(KEPT_SHARE).toBeLessThan(FLOW_SHARE);
@@ -714,11 +763,20 @@ describe("flow lines", () => {
     expect(FLOW_FROM).toBeGreaterThanOrEqual(0.9);
     expect(FLOW_FROM).toBeLessThan(FLOW_RELEASE_DONE);
     expect(FLOW_RELEASE_DONE).toBeLessThanOrEqual(1);
-    const bloom = fineSweep.find(
-      (progress) =>
-        chapterTargets("bloom", progress).release >= FLOW_RELEASE_DONE,
-    );
-    expect(bloom).toBeGreaterThan(0.25);
+    // The release takes a stretch of scroll, about a tenth of a screen, so
+    // the field is seen to leave the dot, and is complete before the mark
+    // turns and the lines are kept running round it again.
+    const released =
+      fineSweep.find(
+        (progress) =>
+          chapterTargets("bloom", progress).release >= FLOW_RELEASE_DONE,
+      ) ?? 2;
+    const kept =
+      fineSweep.find(
+        (progress) => chapterTargets("bloom", progress).keep > 0,
+      ) ?? 2;
+    expect(released * BLOOM_ROOM).toBeGreaterThan(0.075);
+    expect(released).toBeLessThan(kept);
 
     const running = flowClockStep(12, 1 / 60, 1);
     expect(running.clock).toBeCloseTo(12 + 1 / 60, 12);

@@ -21,17 +21,18 @@ export const metadata: Metadata = {
 // the services inside the contact chapter (REQ-CNT-11). The story driver and
 // the field arrive later and never hold back this text (REQ-CNT-01).
 //
-// The storyboard starts the chapters at 0, 10, 30, 55, 75 and 90 per cent of
-// the scroll, where a section's top reaches the middle of the viewport, and
-// the gate allows 5 points either way. The work chapter's length is its
-// content, estimated from the font metrics at about 2,600 px at 1280 by 800
-// and 3,100 px at 375 by 812, near 30 per cent of the scroll, so the other
-// rooms are sized round it (phone value in brackets): the hero's empty room
-// after its first screen 31svh (46svh), the field 220svh (260svh), the
-// making-of 180svh (210svh), the about 160svh (190svh) and the contact 135svh
-// (130svh). Estimated starts: 7.4, 27.6, 57.4, 74.0 and 88.6 per cent at 1280
-// by 800, 7.5, 27.7, 57.6, 73.9 and 88.7 at 375 by 812. If a measured start
-// drifts, those rooms and the gaps between the work rows are the levers.
+// Each chapter is as tall as its content and its own padding, so no screen
+// of the page goes by without words: the hero is the first screen below the
+// bar; work, making-of, about and contact are their words, rows and panels,
+// with the room above the about heading where the field draws its strands
+// as part of that content. Only the field chapter holds a stretch: one
+// screen stays put (position sticky) with its label, tier readout and note
+// while the T7 mark and then the T7SEN wordmark form behind it. Its room is
+// the field's own timeline in screens of scroll (BLOOM_ROOM in
+// src/engine/runtime/story.ts, 2 screens: 0.15 to gather the mark, 0.75
+// holding it, 0.15 to morph, 0.8 holding the wordmark, 0.12 to let it go
+// and 0.03 to spare, so each shape settles and can be read at a steady
+// scroll), so the section's 200svh changes with it.
 export default function HomePage() {
   return (
     <>

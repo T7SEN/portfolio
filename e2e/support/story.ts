@@ -9,19 +9,6 @@ import { FIELD } from "./tiers";
 
 export { chapterOrder };
 
-/**
- * Where the storyboard puts each chapter, as a share of the scroll
- * (REQ-SCR-01; scroll-and-motion.md section 5).
- */
-export const STORYBOARD_SHARE: Record<ChapterId, number> = {
-  hero: 0,
-  bloom: 0.1,
-  work: 0.3,
-  "making-of": 0.55,
-  about: 0.75,
-  contact: 0.9,
-};
-
 // The story loads GSAP after first content (REQ-PERF-04). In the gate many
 // workers share the CPU, so this is generous; a story that never starts
 // still fails.
@@ -131,37 +118,199 @@ export async function goToChapter(
   return top;
 }
 
-export interface ChapterStart {
+export interface ChapterRoom {
   chapter: ChapterId;
-  /** Scroll position at which the section's top reaches the middle. */
-  start: number;
-  /** That position as a share of the page's scroll range, 0 to 1. */
-  share: number;
+  /** The section's top on the page and its height, px. */
+  top: number;
+  height: number;
+  /**
+   * What its content needs: the span of its children in the flow, margins
+   * included, plus its own padding and borders, px.
+   */
+  content: number;
+  /**
+   * How far the page scrolls while a sticky child of the section holds
+   * still, px; 0 without one.
+   */
+  held: number;
+  /** The tallest stretch of the section with no line of text in it, px. */
+  emptiest: number;
+  /** Where that stretch starts, px below the section's top. */
+  emptiestAt: number;
 }
 
 /**
- * Where each chapter starts, as the story sees it: the scroll position at
- * which its section's top reaches the middle of the viewport, as a share of
- * the page's scroll range, the measure STORYBOARD_SHARE is compared with.
+ * Each chapter's room, measured with the page at its top, where no sticky
+ * screen is held away from its place: the section's height, what its
+ * content needs, its held stretch and the tallest stretch of it with no line
+ * of text. Text kept for assistive technology only (inside a clipping box of
+ * 1 px or less, as the scene lines are) does not count; a title waiting for
+ * its reveal does, since it is laid out and shows when it is reached. Leaves
+ * the page at its top.
  */
-export function chapterStarts(page: Page): Promise<ChapterStart[]> {
+export function chapterRooms(page: Page): Promise<ChapterRoom[]> {
   return page.evaluate(() => {
-    const max = document.documentElement.scrollHeight - window.innerHeight;
+    window.scrollTo({ top: 0, behavior: "instant" });
+    const px = (value: string) => Number.parseFloat(value) || 0;
+
     return [
-      ...document.querySelectorAll<HTMLElement>("main [data-chapter]"),
+      ...document.querySelectorAll<HTMLElement>("main > section[data-chapter]"),
     ].map((section) => {
       const box = section.getBoundingClientRect();
-      const start = Math.max(
-        box.top + window.scrollY - window.innerHeight / 2,
-        0,
-      );
+      const style = getComputedStyle(section);
+      const borders = px(style.borderTopWidth) + px(style.borderBottomWidth);
+
+      let first = Number.POSITIVE_INFINITY;
+      let last = Number.NEGATIVE_INFINITY;
+      let held = 0;
+      for (const child of section.children) {
+        const childStyle = getComputedStyle(child);
+        if (
+          childStyle.display === "none" ||
+          childStyle.display === "contents" ||
+          childStyle.position === "absolute" ||
+          childStyle.position === "fixed"
+        ) {
+          continue;
+        }
+        const rect = child.getBoundingClientRect();
+        first = Math.min(first, rect.top - px(childStyle.marginTop));
+        last = Math.max(last, rect.bottom + px(childStyle.marginBottom));
+        if (childStyle.position === "sticky") {
+          held = Math.max(
+            held,
+            box.height -
+              borders -
+              px(style.paddingTop) -
+              px(style.paddingBottom) -
+              rect.height,
+          );
+        }
+      }
+      const content =
+        (last > first ? last - first : 0) +
+        px(style.paddingTop) +
+        px(style.paddingBottom) +
+        borders;
+
+      // Every line box of visible text, from the section's top.
+      const lines: Array<{ top: number; bottom: number }> = [];
+      const range = document.createRange();
+      const walker = document.createTreeWalker(section, NodeFilter.SHOW_TEXT);
+      for (
+        let node = walker.nextNode();
+        node !== null;
+        node = walker.nextNode()
+      ) {
+        const parent = node.parentElement;
+        if (parent === null || (node.textContent ?? "").trim() === "") {
+          continue;
+        }
+        if (getComputedStyle(parent).visibility === "hidden") continue;
+        // A box of 1 px or less that clips what it holds hides it from the
+        // eye. A box with display contents has no size of its own and
+        // hides nothing.
+        let isClipped = false;
+        for (
+          let element: Element | null = parent;
+          element !== null && element !== section;
+          element = element.parentElement
+        ) {
+          const elementStyle = getComputedStyle(element);
+          if (
+            elementStyle.display === "contents" ||
+            elementStyle.overflow === "visible"
+          ) {
+            continue;
+          }
+          const rect = element.getBoundingClientRect();
+          if (rect.width <= 1 && rect.height <= 1) {
+            isClipped = true;
+            break;
+          }
+        }
+        if (isClipped) continue;
+        range.selectNodeContents(node);
+        for (const rect of range.getClientRects()) {
+          if (rect.height > 0) {
+            lines.push({
+              top: rect.top - box.top,
+              bottom: rect.bottom - box.top,
+            });
+          }
+        }
+      }
+      lines.sort((a, b) => a.top - b.top);
+      let reached = 0;
+      let emptiest = 0;
+      let emptiestAt = 0;
+      for (const line of [...lines, { top: box.height, bottom: box.height }]) {
+        if (line.top - reached > emptiest) {
+          emptiest = line.top - reached;
+          emptiestAt = reached;
+        }
+        reached = Math.max(reached, line.bottom);
+      }
+
       return {
         chapter: section.dataset.chapter as ChapterId,
-        start: Math.round(start),
-        share: max > 0 ? start / max : 0,
+        top: Math.round(box.top + window.scrollY),
+        height: Math.round(box.height),
+        content: Math.round(content),
+        held: Math.round(held),
+        emptiest: Math.round(emptiest),
+        emptiestAt: Math.round(emptiestAt),
       };
     });
   });
+}
+
+export interface HeldText {
+  text: string;
+  /** Its box in the viewport, px. */
+  top: number;
+  bottom: number;
+}
+
+/**
+ * Scrolls the field chapter to a place in its held stretch, 0 where its
+ * screen first fills the view and 1 where it starts to leave, and returns
+ * what the held screen shows there: each text that brings its own plate (the
+ * label, the tier readout and the note) with its box in the viewport.
+ */
+export function heldScreenAt(
+  page: Page,
+  share: number,
+): Promise<{ viewHeight: number; texts: HeldText[] }> {
+  return page.evaluate((at) => {
+    const section = document.querySelector<HTMLElement>(
+      'main > section[data-chapter="bloom"]',
+    );
+    const screen = section?.querySelector<HTMLElement>(
+      '[data-part="field-screen"]',
+    );
+    if (!section || !screen)
+      throw new Error("No held screen in the field chapter");
+    const box = section.getBoundingClientRect();
+    const held = box.height - screen.getBoundingClientRect().height;
+    window.scrollTo({
+      top: Math.round(box.top + window.scrollY + at * held),
+      behavior: "instant",
+    });
+    return {
+      viewHeight: window.innerHeight,
+      texts: [
+        ...screen.querySelectorAll<HTMLElement>('[data-plate="own"]'),
+      ].map((plate) => {
+        const rect = plate.getBoundingClientRect();
+        return {
+          text: (plate.textContent ?? "").trim(),
+          top: rect.top,
+          bottom: rect.bottom,
+        };
+      }),
+    };
+  }, share);
 }
 
 /**

@@ -57,20 +57,66 @@ export const AMBIENT: StoryTargets = {
   push: 0,
 };
 
-// Bloom (REQ-SCR-07): the dot lets the field go, the field gathers into the
-// T7 mark, the mark morphs into the T7SEN wordmark, the wordmark holds and
-// then dissolves back into the flow.
-const BLOOM_RELEASED = 0.3;
-const MARK_GATHERED = 0.42;
-const MORPH_FROM = 0.5;
-const MORPH_TO = 0.64;
-const WORDMARK_HOLDS_UNTIL = 0.84;
-const WORDMARK_GONE = 0.97;
+// Bloom (REQ-SCR-07): as soon as the chapter arrives (its top at the middle
+// of the screen), the dot lets the field go and the field gathers into the
+// T7 mark; the mark holds, morphs into the T7SEN wordmark, the wordmark
+// holds and then dissolves back into the flow.
+//
+// The timeline is set in screens of scroll from the chapter's arrival, so
+// each shape stays whole for the same stretch of scroll on any screen. A
+// formation's particles take about 1.3 s to settle once their targets stop
+// (FORM_PULL and FORM_DRAG in simulation.ts), so each hold is long enough
+// for a shape to settle and then be read at a steady scroll: the mark holds
+// for 0.75 of a screen and the wordmark for 0.8. The chapter's held screen
+// (bloom-section.tsx) fills the view from half a screen in until half a
+// screen before the room ends; the mark is whole before it fills the view,
+// the wordmark forms while it holds, and the wordmark holds on as the work
+// chapter comes up under it.
+export const BLOOM_SCREENS = {
+  /** The dot has let every particle go. */
+  released: 0.1,
+  /** The mark's targets are whole: it gathers straight out of the dot. */
+  gathered: 0.15,
+  /** The mark has held for 0.75 of a screen and starts to turn. */
+  morphFrom: 0.9,
+  /** The wordmark's targets are whole, 0.15 of a screen later. */
+  morphTo: 1.05,
+  /** The wordmark has held for 0.8 of a screen and dissolves. */
+  holdsUntil: 1.85,
+  /** Gone: the field is back in its flow. */
+  gone: 1.97,
+} as const;
+
+/**
+ * The field chapter's room, in screens: the section's height, as min-h in
+ * svh in bloom-section.tsx (home.test.tsx keeps the two equal, and the story
+ * gate measures it in the browser). 0.15 to gather the mark, 0.75 holding
+ * it, 0.15 morphing into the wordmark, 0.8 holding that and 0.12 letting it
+ * go make 1.97; 0.03 more leaves the field in its flow when the work chapter
+ * arrives: 2 screens, 200svh. To tune the chapter, change BLOOM_SCREENS
+ * and this, and the section's class with it.
+ */
+export const BLOOM_ROOM = 2;
+
+/** A point of the bloom's timeline, in screens, as progress through the chapter. */
+function bloomAt(screens: number): number {
+  return screens / BLOOM_ROOM;
+}
+
+const BLOOM_RELEASED = bloomAt(BLOOM_SCREENS.released);
+const MARK_GATHERED = bloomAt(BLOOM_SCREENS.gathered);
+const MORPH_FROM = bloomAt(BLOOM_SCREENS.morphFrom);
+const MORPH_TO = bloomAt(BLOOM_SCREENS.morphTo);
+const WORDMARK_HOLDS_UNTIL = bloomAt(BLOOM_SCREENS.holdsUntil);
+const WORDMARK_GONE = bloomAt(BLOOM_SCREENS.gone);
 /** While the wordmark forms, this share of the lines keeps running round it. */
 export const BLOOM_KEEP = 0.5;
 // Making-of and about: the formation takes the first quarter to gather and
 // lets go from 0.85, so the next chapter starts from the flow. Contact
 // gathers its rings the same way and keeps them to the end of the page.
+// These chapters are as tall as their content, about a screen or a little
+// more, so the strands are whole just as the room above the about heading
+// reaches the top of the screen, where they draw.
 const FORM_IN = 0.25;
 const FORM_OUT = 0.85;
 // Work: a shape is whole across the middle half of its step. Between two
@@ -81,8 +127,21 @@ const STEP_DIP = 0.55;
 // The contact field rests: its drift is gentler than the ambient flow's.
 const CONTACT_NOISE = 0.6;
 
-/** The calm frame of a bloom: the wordmark, whole, with the lines round it. */
-const BLOOM_CALM = 0.74;
+/**
+ * The middle of the mark's hold, as progress through the field chapter: the
+ * place to look at the whole T7 mark.
+ */
+export const BLOOM_MARK_AT = bloomAt(
+  (BLOOM_SCREENS.gathered + BLOOM_SCREENS.morphFrom) / 2,
+);
+
+/**
+ * The calm frame of a bloom, the middle of the wordmark's hold: the
+ * wordmark, whole, with the lines round it.
+ */
+const BLOOM_CALM = bloomAt(
+  (BLOOM_SCREENS.morphTo + BLOOM_SCREENS.holdsUntil) / 2,
+);
 
 function unit(value: number): number {
   return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0;
@@ -108,12 +167,15 @@ function bloom(progress: number): StoryTargets {
   const morph = smoothstep(MORPH_FROM, MORPH_TO, progress);
   return {
     ...AMBIENT,
+    // The release and the gathering start together: the particles the dot
+    // lets go first bloom out round it, and the later ones fly more and
+    // more straight on into the mark, so the mark grows out of the dot.
     release: smoothstep(0, BLOOM_RELEASED, progress),
     shapeFrom: "logo",
     shapeTo: "wordmark",
     shapeMix: morph,
     shape:
-      smoothstep(BLOOM_RELEASED, MARK_GATHERED, progress) *
+      smoothstep(0, MARK_GATHERED, progress) *
       (1 - smoothstep(WORDMARK_HOLDS_UNTIL, WORDMARK_GONE, progress)),
     // The mark takes the whole flow; as it turns into the wordmark, part of
     // the lines go back to running round it.

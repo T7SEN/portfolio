@@ -10,21 +10,17 @@ import { HomeSection } from "./home-section";
 import { ServicesSection } from "./services-section";
 import { StoryScene } from "./story-scene";
 
-// The last chapter takes about the last tenth of the scroll (REQ-SCR-01).
-// Its words sit at the bottom of its room, so the last screen shows them
-// above the footer. The services sit at the start; at the end, the framed
-// panel the field's rings centre on (data-stage="contact"). The form fills
-// that panel at P6; until then it leads to /contact, and a dashed box holds
-// the form's place, with no fields that do nothing.
+// The last chapter is as tall as its words, with no room above them. The
+// services sit at the start; at the end, the framed panel the field's rings
+// centre on (data-stage="contact"), measured where the panel comes to rest
+// at the page's end, so the rings draw behind it. The form fills that panel
+// at P6; until then it leads to /contact, and a dashed box holds the form's
+// place, with no fields that do nothing.
 export function ContactSection() {
   const { contact } = pages.home;
 
   return (
-    <HomeSection
-      id="contact"
-      chapter="contact"
-      className="flex min-h-[130svh] flex-col justify-end lg:min-h-[135svh]"
-    >
+    <HomeSection id="contact" chapter="contact">
       <Container className="py-20 lg:py-32">
         <ChapterHeading
           id="contact-heading"

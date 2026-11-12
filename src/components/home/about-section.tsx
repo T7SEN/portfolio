@@ -12,16 +12,12 @@ import { HomeSection } from "./home-section";
 import { StoryScene } from "./story-scene";
 
 // The field draws its three thin strands across the upper part of the
-// screen in this chapter, so the words start half a screen down and sit
-// under them when the chapter fills the view. The room after them keeps the
-// contact chapter near its storyboard start (app/page.tsx has the sums).
+// screen in this chapter, so the words start about half a screen down and
+// sit under them when the chapter fills the view. After the words the
+// chapter ends with its padding, as tall as its content.
 export function AboutSection() {
   return (
-    <HomeSection
-      id="about"
-      chapter="about"
-      className="min-h-[190svh] lg:min-h-[160svh]"
-    >
+    <HomeSection id="about" chapter="about">
       <Container className="grid gap-12 pt-[45svh] pb-20 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] lg:gap-16 lg:pb-32">
         <div>
           <ChapterHeading

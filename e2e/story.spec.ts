@@ -2,19 +2,22 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { fullStudies, shortStudies, studyNumber } from "../src/content";
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
+import { isMarker } from "../src/content/markers";
 import { pages } from "../src/content/pages";
 import { site } from "../src/content/site";
 import { story } from "../src/content/story";
+import { BLOOM_ROOM } from "../src/engine/runtime/story";
 import { expectNoAxeViolations } from "./support/axe";
 import {
   calmToggle,
   chapterInLayout,
   chapterOrder,
-  chapterStarts,
+  chapterRooms,
   fixedElements,
   focusedView,
   goToChapter,
   hasLenis,
+  heldScreenAt,
   hiddenTitleParts,
   LENIS_CLASS,
   lenisWasMade,
@@ -26,7 +29,6 @@ import {
   scrollPositionsFor,
   scrollToPlace,
   STORY_TIMEOUT_MS,
-  STORYBOARD_SHARE,
   waitForStory,
   type StoryPlace,
 } from "./support/story";
@@ -55,8 +57,11 @@ const HERO = heroCopy(STATIC_TIER);
 // Longer than two frameRate intervals, so a running field always reports
 // inside it.
 const QUIET_MS = 2_500;
-// How far a chapter may start from the storyboard's share of the scroll.
-const SHARE_TOLERANCE = 0.05;
+// Layout rounds to fractions of a pixel, and each measure is rounded again.
+const ROOM_TOLERANCE_PX = 2;
+// The least held stretch that still holds the field chapter's screen for a
+// while, as a share of the screen's height.
+const LEAST_HELD = 0.25;
 // Time for the field to glide to a chapter before its screenshot.
 const GLIDE_MS = 1_500;
 
@@ -72,7 +77,7 @@ async function expectTitlesShown(page: Page) {
     .toEqual([]);
 }
 
-test("REQ-SCR-01 the six chapters run in order, start near the storyboard's shares, and the field's wrapper follows the scroll into each", async ({
+test("REQ-SCR-01 the six chapters run in order, each as tall as its content, the field chapter alone with a held stretch whose screen keeps its words, no screen's height without text, and the field's wrapper follows the scroll into each", async ({
   page,
 }, testInfo) => {
   test.setTimeout(ENGINE_TIMEOUT_MS + 90_000);
@@ -93,21 +98,72 @@ test("REQ-SCR-01 the six chapters run in order, start near the storyboard's shar
   await waitForStory(page);
   await page.evaluate(() => document.fonts.ready);
 
-  const starts = await chapterStarts(page);
+  const view = await page.evaluate(() => window.innerHeight);
+  const rooms = await chapterRooms(page);
   const line =
-    `chapter-starts ${testInfo.project.name} (field tier ${report.tier}, ${report.reason}): ` +
-    starts
-      .map(({ chapter, share }) => `${chapter} ${(share * 100).toFixed(1)}%`)
-      .join(", ") +
-    " of the scroll range, each where its section's top reaches the middle of the viewport";
+    `chapter-rooms ${testInfo.project.name} (field tier ${report.tier}, ${report.reason}), ${view} px screen: ` +
+    rooms
+      .map(
+        ({ chapter, top, height, content, held, emptiest, emptiestAt }) =>
+          `${chapter} at ${top} px, ${height} px tall for ${content} px of content` +
+          (held > 0 ? `, held for ${held} px` : "") +
+          `, ${emptiest} px without text from ${emptiestAt} px`,
+      )
+      .join("; ");
   console.log(line);
-  testInfo.annotations.push({ type: "chapter-starts", description: line });
-  expect(starts.map(({ chapter }) => chapter)).toEqual([...chapterOrder]);
-  for (const { chapter, share } of starts) {
+  testInfo.annotations.push({ type: "chapter-rooms", description: line });
+  expect(rooms.map(({ chapter }) => chapter)).toEqual([...chapterOrder]);
+
+  for (const room of rooms) {
+    if (room.chapter === "bloom") continue;
+    // As tall as its content and its own padding, with no room of its own.
     expect(
-      Math.abs(share - STORYBOARD_SHARE[chapter]),
-      `${chapter} starts at ${(share * 100).toFixed(1)}%, storyboard ${STORYBOARD_SHARE[chapter] * 100}%`,
-    ).toBeLessThanOrEqual(SHARE_TOLERANCE);
+      room.height - room.content,
+      `${room.chapter} is taller than its content. ${line}`,
+    ).toBeLessThanOrEqual(ROOM_TOLERANCE_PX);
+    // No stretch a screen high without a line of text.
+    expect(
+      room.emptiest,
+      `${room.chapter} has a screen without text. ${line}`,
+    ).toBeLessThan(view);
+  }
+
+  // The hero is its first screen and no more: the field chapter starts at
+  // the screen's foot.
+  const hero = rooms[0];
+  expect((hero?.top ?? 0) + (hero?.height ?? 0), line).toBeLessThanOrEqual(
+    view + ROOM_TOLERANCE_PX,
+  );
+
+  // The field chapter's room is the timeline the field forms the mark and
+  // the wordmark in (runtime/story.ts), and its screen holds through part
+  // of it.
+  const field = rooms.find(({ chapter }) => chapter === "bloom");
+  expect(
+    Math.abs((field?.height ?? 0) - BLOOM_ROOM * view),
+    `the field chapter is ${BLOOM_ROOM} screens. ${line}`,
+  ).toBeLessThanOrEqual(ROOM_TOLERANCE_PX);
+  expect(field?.held ?? 0, line).toBeGreaterThan(LEAST_HELD * view);
+
+  // Through its held stretch, the screen keeps the label, the tier readout
+  // and the note in view, each with its words, so no screen there is
+  // without text.
+  for (const at of [0, 0.5, 1]) {
+    await expect
+      .poll(
+        async () => {
+          const { viewHeight, texts } = await heldScreenAt(page, at);
+          return texts.map(
+            ({ text, top, bottom }) =>
+              text !== "" && top >= 0 && bottom <= viewHeight,
+          );
+        },
+        {
+          message: `the held screen's words at ${at} of its stretch`,
+          timeout: 5_000,
+        },
+      )
+      .toEqual([true, true, true]);
   }
 
   for (const chapter of chapterOrder) {
@@ -117,9 +173,9 @@ test("REQ-SCR-01 the six chapters run in order, start near the storyboard's shar
       path: testInfo.outputPath(`story-${chapter}.png`),
     });
     if (chapter === "hero") {
-      // The hero's own room after its first screen, where the dot pulses
-      // alone, is still the hero. Reached from the field chapter, so the
-      // story has to write the hero again.
+      // Near its end, with the field chapter's top just below the middle of
+      // the screen, the hero is still the chapter. Reached from the field
+      // chapter, so the story has to write the hero again.
       await goToChapter(page, "bloom");
       await goToChapter(page, "hero", 0.9);
     }
@@ -791,7 +847,8 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 with Lenis running, keys wor
 
   // From the switch, Tab goes on into the page: the hero's links and its
   // own Calm switch, the work chapter's boxed index link, then each full
-  // study's row in order. Each stop is scrolled into view as it takes focus
+  // study's row in order: its case study link, then its second link where
+  // the row has a live one. Each stop is scrolled into view as it takes focus
   // and shows whole, and the field's wrapper follows the scroll.
   const hero = page.locator('main section[data-chapter="hero"]');
   const work = page.locator('main section[data-chapter="work"]');
@@ -813,12 +870,30 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 with Lenis running, keys wor
         name: new RegExp(`^${pages.home.work.index.label}`),
       }),
     },
-    ...fullStudies.map((study, step) => ({
-      name: `${study.title}: ${pages.home.work.readFull}`,
-      link: page
-        .locator(`main [data-work-step="${step}"]`)
-        .getByRole("link", { name: pages.home.work.readFull, exact: true }),
-    })),
+    ...fullStudies.flatMap((study, step) => {
+      const row = page.locator(`main [data-work-step="${step}"]`);
+      const second = study.listing.secondary;
+      return [
+        {
+          name: `${study.title}: ${pages.home.work.readFull}`,
+          link: row.getByRole("link", {
+            name: pages.home.work.readFull,
+            exact: true,
+          }),
+        },
+        ...(second === undefined || isMarker(second.href)
+          ? []
+          : [
+              {
+                name: `${study.title}: ${second.label}`,
+                link: row.getByRole("link", {
+                  name: second.label,
+                  exact: true,
+                }),
+              },
+            ]),
+      ];
+    }),
   ];
   for (const { name, link } of stops) {
     await page.keyboard.press("Tab");

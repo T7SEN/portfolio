@@ -36,7 +36,7 @@ export const ROUTES: readonly SiteRoute[] = [
     path: studyHref(study.slug),
     name: `work-${study.slug}`,
     h1: study.title,
-    body: study.kind === "full" ? study.leadAngle : study.what,
+    body: study.kind === "full" ? study.summary[0] : study.what,
   })),
   {
     path: "/about",

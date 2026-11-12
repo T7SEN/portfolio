@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 import { about } from "./about";
 import {
@@ -19,7 +22,8 @@ import {
   studySlugs,
 } from "./index";
 import { isMarker } from "./markers";
-import { pages } from "./pages";
+import { pages, studyPage } from "./pages";
+import { passViewer } from "./passes";
 import { services } from "./services";
 import { copyright, site } from "./site";
 import type { FullStudy, Link, ShortStudy, Tier } from "./types";
@@ -59,6 +63,7 @@ const everything = {
   services,
   about,
   pages,
+  studyPage,
   site,
 };
 
@@ -170,18 +175,26 @@ describe("study listings", () => {
     );
   });
 
-  it("REQ-CNT-05 the figure slots hold markers until P4 supplies the figures", () => {
-    const labels = fullStudies.map((study) =>
-      study.listing.metrics.map((metric) => metric.label),
-    );
-    expect(labels).toEqual([
-      ["Frame time per tier", "3D payload"],
-      ["Players", "Matches"],
-      ["Users"],
+  it("REQ-CNT-05 the row figures are the supplied and measured ones, each with its source", () => {
+    expect(
+      fullStudies.map((study) =>
+        study.listing.metrics.map((metric) => [metric.label, metric.value]),
+      ),
+    ).toEqual([
+      [
+        ["Frame time per tier", "Under 4.2 ms, capped by a 240 Hz display"],
+        ["3D payload", "238.9 KB on desktop"],
+      ],
+      [
+        ["Accounts", "6,713"],
+        ["Matches", "3,251"],
+      ],
+      [["Unique visitors", "213"]],
     ]);
     for (const study of fullStudies) {
       for (const metric of study.listing.metrics) {
-        expect(isMarker(metric.value)).toBe(true);
+        expect(metric.source.trim()).not.toBe("");
+        expect(isMarker(metric.source)).toBe(false);
       }
     }
   });
@@ -206,13 +219,14 @@ describe("study listings", () => {
     expect(short("systemseven").listing.secondary).toBeUndefined();
   });
 
-  it("REQ-CNT-06 ArcheLab's row quote stays a marker until a player quote with permission is supplied", () => {
-    // Markers are read from the content, so this file holds no marker text
-    // for the release check to count.
+  it("REQ-CNT-06 ArcheLab's row quote is the player's recorded quote, the same as on its study", () => {
     const archelabQuote = full("archelab").listing.quote;
-    expect(typeof archelabQuote).toBe("string");
-    expect(isMarker(String(archelabQuote))).toBe(true);
-    expect(String(archelabQuote)).toContain("a player quote with permission");
+    if (archelabQuote === undefined || typeof archelabQuote === "string") {
+      throw new Error("ArcheLab's row quote is recorded");
+    }
+    expect(archelabQuote.who).toBe("BunnyEnjoyer, ArcheLab player");
+    const quotes = full("archelab").quotes;
+    expect(typeof quotes === "string" ? [] : quotes).toContain(archelabQuote);
     for (const study of fullStudies) {
       const quote = study.listing.quote;
       if (quote === undefined || typeof quote === "string") {
@@ -328,13 +342,18 @@ describe("short studies", () => {
     expect(short("t7sen-url").inProgress).toBe(false);
   });
 
-  it("REQ-CNT-04 each short study has what, why, stack and links", () => {
+  it("REQ-CNT-04 each short study has what, why and stack, and a shipped one its links", () => {
     for (const study of shortStudies) {
       expect(study.what).not.toBe("");
       expect(study.why).not.toBe("");
       expect(study.stack.length).toBeGreaterThan(0);
-      expect(study.links.length).toBeGreaterThan(0);
+      if (!study.inProgress) expect(study.links.length).toBeGreaterThan(0);
     }
+  });
+
+  it("REQ-CNT-04 SystemSeven has no links: its repository is private and nothing runs yet", () => {
+    expect(short("systemseven").links).toEqual([]);
+    expect(short("systemseven").listing.secondary).toBeUndefined();
   });
 });
 
@@ -373,6 +392,10 @@ describe("no invented proof", () => {
 
   it("REQ-CNT-06 every quote carries who allowed it and when", () => {
     for (const study of fullStudies) {
+      if (typeof study.quotes === "string") {
+        expect(isMarker(study.quotes)).toBe(true);
+        continue;
+      }
       for (const quote of study.quotes ?? []) {
         expect(quote.permission.grantedBy.trim()).not.toBe("");
         expect(quote.permission.date.trim()).not.toBe("");
@@ -384,10 +407,247 @@ describe("no invented proof", () => {
   });
 });
 
+describe("study pages", () => {
+  it("REQ-CNT-03 every full study has its tag, role line, screenshot, diagram and excerpt, each complete or a marker", () => {
+    for (const study of fullStudies) {
+      expect(study.tag.trim()).not.toBe("");
+      expect(study.roleLine.trim()).not.toBe("");
+
+      const { screenshot, diagram, excerpt } = study;
+      if (typeof screenshot === "string") {
+        expect(isMarker(screenshot)).toBe(true);
+      } else {
+        expect(screenshot.src).toMatch(/^\/\S+\.(?:avif|webp|png|jpe?g)$/);
+        expect(screenshot.alt.trim()).not.toBe("");
+        expect(screenshot.caption.trim()).not.toBe("");
+        expect(screenshot.width).toBeGreaterThan(0);
+        expect(screenshot.height).toBeGreaterThan(0);
+      }
+
+      if (typeof diagram === "string") {
+        expect(isMarker(diagram)).toBe(true);
+      } else {
+        expect(diagram.name.trim()).not.toBe("");
+        expect(diagram.boxes.filter((box) => box.isKey === true)).toHaveLength(
+          1,
+        );
+      }
+
+      if (typeof excerpt === "string") {
+        expect(isMarker(excerpt)).toBe(true);
+      } else {
+        for (const text of [
+          excerpt.caption,
+          excerpt.path,
+          excerpt.language,
+          excerpt.code,
+        ]) {
+          expect(text.trim()).not.toBe("");
+        }
+      }
+    }
+  });
+
+  it("REQ-CNT-04 every short study has its tag", () => {
+    for (const study of shortStudies) {
+      expect(study.tag.trim()).not.toBe("");
+    }
+  });
+
+  it("REQ-CNT-12 ArcheLab's screenshot, while still to come, asks for its own interface with no game art", () => {
+    const { screenshot } = full("archelab");
+    if (typeof screenshot === "string") {
+      expect(screenshot).toContain("own interface");
+      expect(screenshot).toContain("no game art");
+    }
+  });
+
+  it("REQ-CNT-03 REQ-CNT-04 the study pages name the seven parts and the four short parts in order", () => {
+    expect(Object.values(studyPage.parts)).toEqual([
+      "Summary",
+      "Problem and role",
+      "Approach",
+      "The hard part",
+      "Results",
+      "What I would change",
+      "Links",
+    ]);
+    expect(Object.values(studyPage.shortParts)).toEqual([
+      "What it is",
+      "Why it exists",
+      "Stack",
+      "Links",
+    ]);
+  });
+
+  it("REQ-CNT-01 the study page's interface words follow the preview", () => {
+    expect(studyPage.label).toEqual({
+      full: "Full study",
+      short: "Short study",
+    });
+    expect(studyPage.facts).toEqual({
+      role: "Role",
+      builtWith: "Built with",
+      live: "Live",
+      code: "Code",
+      codeOnRequest: "On request",
+    });
+    expect(studyPage.breadcrumb).toEqual({
+      name: "Breadcrumb",
+      work: { label: "Work", href: "/work" },
+    });
+    expect(studyPage.contents).toBe("In this study");
+    expect(studyPage.more).toEqual({
+      name: "More studies",
+      previous: "Previous",
+      next: "Next",
+    });
+  });
+});
+
+const RESULTS = join(process.cwd(), "docs", "results");
+
+/** A text file in the repository, by its path from the root. */
+function repoFile(path: string) {
+  return readFileSync(join(process.cwd(), path), "utf8");
+}
+
+/** A WebP file's size in pixels, read from its first chunk. */
+function webpSize(bytes: Buffer) {
+  expect(bytes.toString("ascii", 0, 4)).toBe("RIFF");
+  expect(bytes.toString("ascii", 8, 12)).toBe("WEBP");
+  const chunk = bytes.toString("ascii", 12, 16);
+  if (chunk === "VP8 ") {
+    return {
+      width: bytes.readUInt16LE(26) & 0x3fff,
+      height: bytes.readUInt16LE(28) & 0x3fff,
+    };
+  }
+  if (chunk === "VP8L") {
+    const bits = bytes.readUInt32LE(21);
+    return { width: (bits & 0x3fff) + 1, height: ((bits >> 14) & 0x3fff) + 1 };
+  }
+  if (chunk === "VP8X") {
+    return {
+      width: bytes.readUIntLE(24, 3) + 1,
+      height: bytes.readUIntLE(27, 3) + 1,
+    };
+  }
+  throw new Error(`Unknown WebP chunk ${chunk}`);
+}
+
+describe("recorded facts", () => {
+  const frames = readFileSync(join(RESULTS, "2026-11-12-making-of.md"), "utf8");
+
+  it("REQ-PERF-06 REQ-TIER-05 A1 the frame times are the measured ones, the display's cap named and not shown as the cost", () => {
+    for (const tier of [1, 2]) {
+      expect(frames).toMatch(
+        new RegExp(`^making-of tier ${tier} .* median 4\\.20 ms`, "m"),
+      );
+    }
+    expect(frames).toContain("at 240 Hz");
+    const timed = full("making-of").results.filter((row) =>
+      /frame time/i.test(row.label),
+    );
+    expect(timed).toHaveLength(2);
+    for (const row of timed) {
+      expect(row.value).toBe("Under 4.2 ms");
+      expect(row.source).toContain("240 Hz display");
+      expect(row.source).toContain("docs/results/2026-11-12-making-of.md");
+    }
+    expect(passViewer.tiers.map((row) => row.value)).toEqual([
+      "Under 4.2 ms on an RTX 4060 Ti, capped by a 240 Hz display",
+      "Under 4.2 ms on an RTX 4060 Ti, capped by a 240 Hz display",
+      "Static image",
+    ]);
+    expect(frames).toContain("NVIDIA GeForce RTX 4060 Ti");
+  });
+
+  it("REQ-PERF-05 A1 the 3D payloads are the budget check's own figures, kept in the making-of results", () => {
+    const sized = full("making-of").results.filter((row) =>
+      / KB$/.test(row.value),
+    );
+    expect(sized.map((row) => row.value)).toEqual([
+      "238.9 KB",
+      "244.6 KB",
+      "877.6 KB",
+    ]);
+    // The day's budget file is written again at every gate, so the study
+    // cites the making-of results, which keep the table of one build.
+    const [desktop, phone, still] = sized.map((row) => row.value);
+    expect(frames).toContain(`| 1 | desktop | ${desktop} |`);
+    expect(frames).toContain(`| 2 | phone | ${phone} |`);
+    expect(frames).toContain(`| 3 | phone | ${still} |`);
+    for (const row of sized) {
+      expect(row.source).toContain("docs/results/2026-11-12-making-of.md");
+    }
+  });
+
+  it("REQ-CNT-03 the making-of's code excerpt is in its file as written", () => {
+    const excerpt = full("making-of").excerpt;
+    if (typeof excerpt === "string") throw new Error("the excerpt is supplied");
+    expect(repoFile(excerpt.path)).toContain(excerpt.code);
+  });
+
+  it("REQ-CNT-06 the player quotes are as recorded, each with its permission of 12 Nov 2026", () => {
+    const recorded = fullStudies.flatMap((study) =>
+      typeof study.quotes === "string" ? [] : (study.quotes ?? []),
+    );
+    expect(recorded.map((quote) => [quote.who, quote.permission])).toEqual([
+      [
+        "Rafael Borges, Coup Online player",
+        {
+          grantedBy:
+            "Rafael Borges through the coups.app post-game feedback form",
+          date: "12 Nov 2026",
+        },
+      ],
+      [
+        "BunnyEnjoyer, ArcheLab player",
+        { grantedBy: "BunnyEnjoyer by email", date: "12 Nov 2026" },
+      ],
+    ]);
+  });
+
+  it("REQ-CNT-05 REQ-PERF-01 every study screenshot is in public at the size it states, with a smaller phone file", () => {
+    for (const study of fullStudies) {
+      const shot = study.screenshot;
+      if (typeof shot === "string") continue;
+      for (const file of [shot, shot.phone]) {
+        const bytes = readFileSync(join(process.cwd(), "public", file.src));
+        expect(webpSize(bytes), file.src).toEqual({
+          width: file.width,
+          height: file.height,
+        });
+        expect(bytes.length, file.src).toBeLessThan(100 * 1024);
+      }
+      expect(shot.phone.width).toBeLessThan(shot.width);
+      expect(shot.phone.width / shot.phone.height).toBeCloseTo(
+        shot.width / shot.height,
+        1,
+      );
+    }
+  });
+
+  it("REQ-CNT-05 no marker is left in the studies, and SystemSeven's why is T7SEN's approved line", () => {
+    const markers = strings(studies).filter((text) =>
+      /\[(?:FILL|CONFIRM)/.test(text),
+    );
+    expect(markers).toEqual([]);
+    expect(short("systemseven").why).toBe(
+      "A bot of my own for my stream's Discord server, starting with stream notifications.",
+    );
+    expect(isMarker(short("systemseven").why)).toBe(false);
+  });
+});
+
 describe("ArcheLab", () => {
   it("REQ-CNT-12 says it is unofficial fan work for The First Descendant", () => {
     expect(full("archelab").notice).toBe(
       "ArcheLab is unofficial fan work for The First Descendant.",
+    );
+    expect(full("coup-online").notice).toBe(
+      "Coup Online is an unofficial fan version of Coup, the card game designed by Rikki Tahta.",
     );
     expect(full("archelab").listing.what).toMatch(/^An unofficial /);
   });
@@ -545,16 +805,18 @@ describe("pages", () => {
     expect(work.archive.link.href).toBe("/v1");
     expect(makingOf.title).toBe("How one frame is built");
     expect(makingOf.link).toEqual({
-      label: "Read the making-of",
+      label: "Read the full making-of",
       href: studyHref("making-of"),
     });
     expect(contact.title).toBe("Send a message.");
     expect(contact.panel.action.href).toBe("/contact");
   });
 
-  it("REQ-CNT-01 A14 the making-of line asks for no pass before the pass viewer exists", () => {
-    expect(pages.home.makingOf.intro).not.toMatch(/select|choose|pick/i);
-    expect(pages.home.makingOf.intro).not.toMatch(/stirred/i);
+  it("REQ-CNT-01 REQ-ENG-09 A14 the making-of line asks for a pass, as every card is a button, and claims no stirring", () => {
+    expect(pages.home.makingOf.intro).toMatch(
+      /Select a pass to read how it works.$/,
+    );
+    expect(pages.home.makingOf.intro).not.toMatch(/stirred|you stir/i);
   });
 });
 
@@ -577,7 +839,14 @@ describe("site", () => {
 });
 
 describe("copy voice", () => {
-  const texts = strings(everything);
+  // A code excerpt is the repository's own code, verbatim, so it is read as
+  // code, not as copy: an inequality such as != is not an exclamation mark.
+  const code = new Set(
+    fullStudies.flatMap((study) =>
+      typeof study.excerpt === "string" ? [] : [study.excerpt.code],
+    ),
+  );
+  const texts = strings(everything).filter((text) => !code.has(text));
 
   it("REQ-HYG-06 no dash is used as punctuation", () => {
     // The en and em dash by code point, so this file holds neither.

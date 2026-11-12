@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-import { studyHref } from "../src/content";
+import { fullStudies, studyHref } from "../src/content";
 import { ROUTES } from "./support/routes";
 import { asTier3, FIELD, STILL, waitForField } from "./support/tiers";
 
@@ -23,14 +23,17 @@ const SETTLE_MS = 1000;
 const title = (subject: string) =>
   `REQ-PERF-01 REQ-PERF-03 ${subject} keeps LCP and CLS in budget on Slow 4G with a 4x CPU slowdown`;
 // The phone gets tier 2 by itself; the last case forces the tier 3 still,
-// the one path that puts a full-screen picture on the page.
+// the one path that puts a full-screen picture on the page. Every full
+// study is measured, since each carries a screenshot.
 const VITALS_CASES = [
-  ...["/", "/work", studyHref("making-of")].map((path) => ({
-    path,
-    label: path,
-    title: title(path),
-    isTier3: false,
-  })),
+  ...["/", "/work", ...fullStudies.map((study) => studyHref(study.slug))].map(
+    (path) => ({
+      path,
+      label: path,
+      title: title(path),
+      isTier3: false,
+    }),
+  ),
   {
     path: "/",
     label: "/ tier 3",

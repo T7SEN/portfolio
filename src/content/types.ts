@@ -81,38 +81,108 @@ export type FullListing = Listing & {
   quote?: Quote | Marker;
 };
 
+/** One file of a picture, with its size in pixels. */
+export type ImageFile = {
+  src: `/${string}`;
+  width: number;
+  height: number;
+};
+
+/**
+ * A picture of the product in its own colours, shown full width under the
+ * facts row. Its size is stored, so the page keeps its place while it loads.
+ * Phones get a smaller file of the same picture, so it never slows the
+ * page's first paint on a slow network (REQ-PERF-01).
+ */
+export type Screenshot = ImageFile & {
+  alt: Text;
+  caption: Text;
+  phone: ImageFile;
+};
+
+/** One framed box of the approach diagram: its name and one muted line. */
+export type DiagramBox = {
+  title: Text;
+  line: Text;
+  /** The box the study turns on, drawn with a lavender border. One per diagram. */
+  isKey?: boolean;
+};
+
+/** A box after the first, with the mono label on the arrow that leads into it. */
+export type DiagramStep = DiagramBox & { via: Text };
+
+/** Framed boxes joined in order by labelled arrows; one box alone has no arrow, so it is not a diagram. */
+export type ApproachDiagram = {
+  /** What it shows, its name for assistive technology ("How a room works"). */
+  name: Text;
+  boxes: readonly [DiagramBox, DiagramStep, ...DiagramStep[]];
+};
+
+/** A short excerpt of the real code, named by the file it comes from. */
+export type CodeExcerpt = {
+  caption: Text;
+  /** The file's path in its repository. */
+  path: Text;
+  language: Text;
+  code: string;
+};
+
 // The seven parts run from summary to links, in this order on the page.
 export type FullStudy = {
   kind: "full";
   slug: FullSlug;
   title: Text;
+  /** One short word after the study's number in its label ("Full study 02 · Real-time"). */
+  tag: Text;
   leadAngle: Text;
   notice?: Text;
   listing: FullListing;
+  /** The role in a few words, for the facts row; part 2 tells it in full. */
+  roleLine: Text;
+  /** The picture under the facts row, or a marker until one is supplied. */
+  screenshot: Screenshot | Marker;
   summary: readonly [Text, Text, Text];
   problem: { problem: Text; constraints: NonEmpty<Text>; role: Text };
   approach: NonEmpty<Text>;
+  /** Part 3's diagram, or a marker until it is drawn from the repo. */
+  diagram: ApproachDiagram | Marker;
+  /** Part 3's code excerpt, or a marker until it is taken from the repo. */
+  excerpt: CodeExcerpt | Marker;
   hardPart: Text;
   results: NonEmpty<ResultRow>;
   wouldChange: NonEmpty<Text>;
+  /**
+   * The live link, and the repository when it is public. Without one, the
+   * facts row's Code says the code is on request.
+   */
   links: { live: Link; repo?: Link };
-  quotes?: readonly Quote[];
+  /**
+   * Shown with the results: recorded quotes, or a marker until one is
+   * supplied. A marker is shown as a marker, never in quotation marks
+   * (REQ-CNT-06).
+   */
+  quotes?: NonEmpty<Quote> | Marker;
 };
 
 type ShortStudyBase = {
   kind: "short";
   slug: ShortSlug;
   title: Text;
+  /** One short word after the study's number in its label, as on a full study. */
+  tag: Text;
   listing: Listing;
   what: Text;
   why: Text;
   stack: NonEmpty<Text>;
-  links: NonEmpty<Link>;
 };
 
 // A study in progress must say where it stands, so its page never reads as
-// a shipped product (REQ-CNT-04).
+// a shipped product (REQ-CNT-04). A shipped study always has a link; one in
+// progress may have none yet, such as a private repository and nothing live.
 export type ShortStudy = ShortStudyBase &
-  ({ inProgress: false } | { inProgress: true; status: Text });
+  (
+    | { inProgress: false; links: NonEmpty<Link> }
+    | { inProgress: true; status: Text; links: readonly Link[] }
+  );
 
 export type Study = FullStudy | ShortStudy;

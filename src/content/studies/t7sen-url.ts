@@ -11,10 +11,12 @@ export const t7senUrlSite = {
 // What, stack and links follow the project's public README as written. The
 // short stack on the card and in the table is T7SEN's own statement,
 // accepted on 11 Nov 2026 with his check still owed (phase P3.5, item 6).
+// The why is drawn from the README's own features, for his check.
 export const t7senUrl = {
   kind: "short",
   slug: "t7sen-url",
   title: "t7sen-url",
+  tag: "Links",
   listing: {
     kind: "Short-form",
     studyLabel: "Short study",
@@ -25,7 +27,7 @@ export const t7senUrl = {
     secondary: { label: "Repo", href: repo },
   },
   what: "A link-in-bio hub at links.t7sen.com: one static page with a profile, a live Twitch card with the next scheduled stream, links and a support card, plus a /go/<slug> short-link redirect that counts clicks.",
-  why: "[FILL: why t7sen-url exists, in T7SEN's words]",
+  why: "My links and stream in one place on my own domain, with short links that show what people click.",
   stack: [
     "Next.js 16 (App Router, Cache Components, React Compiler)",
     "React 19",

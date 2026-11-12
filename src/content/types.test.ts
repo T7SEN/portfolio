@@ -5,7 +5,16 @@ import { describe, expect, it } from "vitest";
 import { isMarker } from "./markers";
 import { makingOf } from "./studies/making-of";
 import { systemseven } from "./studies/systemseven";
-import type { FullStudy, Link, Marker, Quote, ShortStudy } from "./types";
+import type {
+  ApproachDiagram,
+  CodeExcerpt,
+  FullStudy,
+  Link,
+  Marker,
+  Quote,
+  Screenshot,
+  ShortStudy,
+} from "./types";
 
 function omit<T extends object, K extends keyof T>(
   value: T,
@@ -94,6 +103,96 @@ describe("full study outline", () => {
   });
 });
 
+describe("study page parts", () => {
+  it("REQ-CNT-03 a full study without its tag, role line, screenshot, diagram or excerpt does not compile", () => {
+    // @ts-expect-error REQ-CNT-03: the label's tag word
+    const noTag: FullStudy = omit(study, "tag");
+    // @ts-expect-error REQ-CNT-03: the facts row's role line
+    const noRole: FullStudy = omit(study, "roleLine");
+    // @ts-expect-error REQ-CNT-03: the screenshot, or a marker in its place
+    const noShot: FullStudy = omit(study, "screenshot");
+    // @ts-expect-error REQ-CNT-03: part 3's diagram, or a marker in its place
+    const noDiagram: FullStudy = omit(study, "diagram");
+    // @ts-expect-error REQ-CNT-03: part 3's code excerpt, or a marker
+    const noExcerpt: FullStudy = omit(study, "excerpt");
+
+    const broken = [
+      [noTag, "tag"],
+      [noRole, "roleLine"],
+      [noShot, "screenshot"],
+      [noDiagram, "diagram"],
+      [noExcerpt, "excerpt"],
+    ] as const;
+    for (const [value, part] of broken) expect(value).not.toHaveProperty(part);
+  });
+
+  it("REQ-CNT-04 a short study without its tag does not compile", () => {
+    // @ts-expect-error REQ-CNT-04: the label's tag word
+    const noTag: ShortStudy = omit(systemseven, "tag");
+    expect(noTag).not.toHaveProperty("tag");
+  });
+
+  it("REQ-CNT-05 a screenshot without its alt text or size, or words in its place, does not compile", () => {
+    const unnamed = {
+      src: "/work/shot.webp",
+      caption: "A caption.",
+      width: 1600,
+      height: 900,
+    } as const;
+    const unsized = {
+      src: "/work/shot.webp",
+      alt: "What the picture shows.",
+      caption: "A caption.",
+    } as const;
+    // @ts-expect-error REQ-CNT-05: a picture names what it shows
+    const noAlt: Screenshot = unnamed;
+    // @ts-expect-error REQ-CNT-05: its size holds its place while it loads
+    const noSize: Screenshot = unsized;
+    // @ts-expect-error REQ-CNT-05: a picture still to come is a marker
+    const words: FullStudy["screenshot"] = "a screenshot of the game";
+    expect(noAlt).not.toHaveProperty("alt");
+    expect(noSize).not.toHaveProperty("width");
+    expect(isMarker(String(words))).toBe(false);
+  });
+
+  it("REQ-PERF-01 a screenshot without its smaller phone file does not compile", () => {
+    const desktopOnly = {
+      src: "/work/shot.webp",
+      alt: "What the picture shows.",
+      caption: "A caption.",
+      width: 1168,
+      height: 620,
+    } as const;
+    // @ts-expect-error REQ-PERF-01: phones get a smaller file of the picture
+    const noPhone: Screenshot = desktopOnly;
+    expect(noPhone).not.toHaveProperty("phone");
+  });
+
+  it("REQ-CNT-03 a diagram of one box, or an arrow without its label, does not compile", () => {
+    const first = { title: "First box", line: "One line." };
+    const second = { title: "Second box", line: "One line.", via: "Calls" };
+    // @ts-expect-error REQ-CNT-03: arrows join two boxes at least
+    const one: ApproachDiagram = { name: "A", boxes: [first] };
+    // @ts-expect-error REQ-CNT-03: every arrow carries its mono label
+    const bare: ApproachDiagram = { name: "A", boxes: [first, first] };
+    const drawn: ApproachDiagram = { name: "A", boxes: [first, second] };
+    expect(one.boxes).toHaveLength(1);
+    expect(bare.boxes[1]).not.toHaveProperty("via");
+    expect(drawn.boxes[1]).toHaveProperty("via", "Calls");
+  });
+
+  it("REQ-CNT-03 a code excerpt that does not name its file does not compile", () => {
+    const unnamed = {
+      caption: "A caption.",
+      language: "TypeScript",
+      code: "export {};",
+    };
+    // @ts-expect-error REQ-CNT-03: an excerpt names the file it comes from
+    const excerpt: CodeExcerpt = unnamed;
+    expect(excerpt).not.toHaveProperty("path");
+  });
+});
+
 describe("proof rules", () => {
   it("REQ-CNT-05 a result without a source, or a bare number, does not compile", () => {
     const row = { label: "Visits", value: study.results[0].value };
@@ -116,7 +215,12 @@ describe("proof rules", () => {
     const notMarker: Marker = "FILL: the figure";
     // @ts-expect-error REQ-CNT-05: an address without its scheme is a guess
     const bare: Link = { label: "Live site", href: "links.t7sen.com" };
-    const unknown: Link = study.links.live;
+    // Built from parts, so this file holds no marker text for the release
+    // check to count.
+    const unknown: Link = {
+      label: "Live site",
+      href: `[${"FILL"}: the live link]`,
+    };
     expect(isMarker(notMarker)).toBe(false);
     expect(bare.href).not.toMatch(/^https:/);
     expect(isMarker(unknown.href)).toBe(true);
@@ -134,10 +238,35 @@ describe("proof rules", () => {
     expect(quoted.quotes).toHaveLength(2);
   });
 
+  it("REQ-CNT-06 a study's quotes are recorded quotes or a marker, never bare words", () => {
+    // @ts-expect-error REQ-CNT-06: words without permission are not a quote
+    const words: FullStudy["quotes"] = "Quoted words.";
+    // @ts-expect-error REQ-CNT-06: an unknown quote holds a marker, not nothing
+    const none: FullStudy["quotes"] = [];
+    // Built from parts, so this file holds no marker text for the release
+    // check to count.
+    const waiting: FullStudy["quotes"] = `[${"FILL"}: a player quote]` as const;
+    expect(isMarker(String(words))).toBe(false);
+    expect(none).toHaveLength(0);
+    expect(isMarker(String(waiting))).toBe(true);
+  });
+
   it("REQ-CNT-04 a short study in progress without its status does not compile", () => {
     // @ts-expect-error REQ-CNT-04: an unfinished project says where it stands
     const unclear: ShortStudy = omit(systemseven, "status");
     expect(unclear).not.toHaveProperty("status");
+  });
+
+  it("REQ-CNT-04 a shipped short study needs a link; one in progress may have none yet", () => {
+    // @ts-expect-error REQ-CNT-04: a shipped project links to where it lives
+    const shipped: ShortStudy = {
+      ...omit(systemseven, "status"),
+      inProgress: false,
+      links: [],
+    };
+    const waiting: ShortStudy = { ...systemseven, links: [] };
+    expect(shipped.links).toHaveLength(0);
+    expect(waiting.links).toHaveLength(0);
   });
 });
 

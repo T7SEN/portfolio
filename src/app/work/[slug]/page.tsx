@@ -1,7 +1,10 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 
-import { FullStudy, ShortStudy } from "@/components/study";
+// By their own paths, not the study barrel: the full study holds a client
+// island, the list of parts (REQ-PERF-04).
+import { FullStudy } from "@/components/study/full-study";
+import { ShortStudy } from "@/components/study/short-study";
 import { getStudy, studySlugs } from "@/content";
 
 // Every study is built at build time; any other slug is a 404.

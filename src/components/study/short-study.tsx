@@ -10,10 +10,11 @@ type ShortStudyProps = {
 };
 
 // One screen at 1280 by 800 and 375 by 812: what, why, stack and links
-// (REQ-CNT-04).
+// (REQ-CNT-04). Below 640 px the bar takes two rows (120 px) since P3.5, so
+// the spacing there is tighter to keep the links on the first screen.
 export function ShortStudy({ study }: ShortStudyProps) {
   return (
-    <Container className="pt-6 pb-8 sm:py-12">
+    <Container className="pt-3 pb-8 sm:py-12">
       <article>
         <div>
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -26,7 +27,7 @@ export function ShortStudy({ study }: ShortStudyProps) {
           )}
         </div>
 
-        <div className="mt-6 grid gap-5 sm:mt-8 sm:gap-6 lg:grid-cols-2 lg:gap-x-12">
+        <div className="mt-4 grid gap-4 sm:mt-8 sm:gap-6 lg:grid-cols-2 lg:gap-x-12">
           <StudyPart id="what" title="What it is" variant="compact">
             <p className="max-w-measure">{study.what}</p>
           </StudyPart>

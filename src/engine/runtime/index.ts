@@ -12,27 +12,48 @@ import { colors } from "@/tokens/colors";
 import { median } from "../tier/probe";
 import type {
   ChapterId,
+  FieldLook,
   Runtime,
   RuntimeFactory,
   RuntimeOptions,
+  Stage,
   Stages,
 } from "../types";
 import { nextResolution, startResolution } from "./adaptive";
 import { packAtlas, type Atlas } from "./atlas";
 import { liveBackend } from "./backend";
 import { createField, viewFor } from "./field";
-import { FIELD_MARGIN, createSimulation } from "./simulation";
+import { createHalftone, halftoneWorks } from "./halftone";
+import {
+  gridFor,
+  halftoneLight,
+  haloReach,
+  heroLight,
+  liveLook,
+  sprinkle,
+  stageToCss,
+  worldToCss,
+} from "./halftone-rules";
+import {
+  FIELD_MARGIN,
+  FORM_DRAG,
+  FORM_PULL,
+  createSimulation,
+} from "./simulation";
 import {
   AMBIENT,
+  FLOW_SHARE,
   calmKey,
   calmProgress,
   chapterTargets,
   fitScale,
   follow,
   formationStage,
+  formedArea,
   formedLight,
   releaseRankScale,
   stagedFrame,
+  swirlShows,
   type StoryTargets,
 } from "./story";
 
@@ -62,6 +83,30 @@ const PUSH_FOLLOW_SECONDS = 0.6;
 const LIGHT_FOLLOW_SECONDS = 0.5;
 // The hero's dot breathes once in this time.
 const PULSE_SECONDS = 2.8;
+// The swirl at the pointer winds up and lets go over this time, and the
+// lattice inside a work frame fades in and out over this one.
+const SWIRL_FOLLOW_SECONDS = 0.3;
+const FRAME_FOLLOW_SECONDS = 0.4;
+
+// The stage follow (types.ts, setStage). A stage that moves by at most
+// STAGE_STEP between two calls, in normalised device coordinates, is taken
+// at once: the work stage arrives on every scroll frame while its row moves
+// up the screen, and a shape must stay inside its frame. A longer move is a
+// jump, a new row or a new layout, and glides (REQ-SCR-05). A fast wheel or
+// a fling moves a frame well under a tenth of the screen between two
+// frames; a new row moves its stage by most of the screen.
+const STAGE_STEP = 0.2;
+// The particles still fly to a stage taken at once with their own inertia,
+// so they would trail a moving frame by about half a second of its motion.
+// The runtime follows the formed particles' own centre with the spring a
+// formed particle feels (simulation.ts FORM_PULL and FORM_DRAG), stepped
+// the way the compute node steps a particle, and draws the formed
+// particles ahead by the gap between it and the stage: the
+// trail. Every formed particle feels the same linear spring toward its own
+// point round the centre, so they all lag by the same amount, and the
+// formation is drawn on its stage with no lag while its particles catch up
+// unseen. Only the drawn place moves; the simulation is untouched, and
+// every value stays the particle's own (REQ-ENG-05).
 
 interface Loss {
   message: string | null;
@@ -98,10 +143,22 @@ function atlasTexture(atlas: Atlas): DataTexture {
   return texture;
 }
 
+/** A stage's numbers with anything not finite replaced, kept as sent. */
+function finiteStage(stage: Stage): Stage {
+  const finite = (value: number) => (Number.isFinite(value) ? value : 0);
+  return {
+    x: finite(stage.x),
+    y: finite(stage.y),
+    halfWidth: Math.max(finite(stage.halfWidth), 0),
+    halfHeight: Math.max(finite(stage.halfHeight), 0),
+  };
+}
+
 function startRuntime(
   renderer: WebGPURenderer,
   options: RuntimeOptions,
   loss: Loss,
+  look: FieldLook,
 ): Runtime {
   const { canvas } = options;
   const backend = liveBackend(renderer);
@@ -117,7 +174,8 @@ function startRuntime(
   const atlas = packAtlas();
   const shapes = atlasTexture(atlas);
   const simulation = createSimulation(particleCount, view, shapes);
-  const field = createField(simulation);
+  const field = createField(simulation, look);
+  const halftone = look === "halftone" ? createHalftone(particleCount) : null;
   renderer.setClearColor(colors.void, 1);
 
   // The step comes from three's Timer, not the TSL deltaTime node, which
@@ -150,12 +208,20 @@ function startRuntime(
     release: 1,
     push: 0,
     light: 1,
+    white: 0,
+    swirl: 0,
+    frame: 0,
     dotX: 0,
     dotY: 0,
     shapeX: 0,
     shapeY: 0,
   };
   let lightTarget = 1;
+  let formTarget = 0;
+  let whiteTarget = 0;
+  // The formed particles' own centre and its speed, in world units (see
+  // FORM_PULL).
+  const trail = { x: 0, y: 0, speedX: 0, speedY: 0 };
   // Where the page puts the dot and the work chapter's shapes (types.ts,
   // Stage); none until the page has measured its layout.
   let stages: Stages = {};
@@ -181,7 +247,11 @@ function startRuntime(
   const refit = () => {
     const dot = stagedFrame(stages.hero, view);
     const shapes = stagedFrame(
-      formationStage(story?.chapter ?? null, stages),
+      formationStage(
+        story?.chapter ?? null,
+        stages,
+        view.halfWidth / view.halfHeight,
+      ),
       view,
     );
     centre.dotX = dot.centreX;
@@ -196,7 +266,52 @@ function startRuntime(
       atlas.extents[targets.shapeTo],
       shapes.frame,
     );
-    lightTarget = formedLight(targets, atlas.extents, view, shapes.frame);
+    formTarget = Math.min(
+      targets.shape + targets.sheet + targets.strands + targets.rings,
+      1,
+    );
+    // Only a shape or the sheet turns its densest cells white. The preview
+    // draws the about strands and the contact rings in violet and glow
+    // alone, and on a phone the strands' crossings reached white under the
+    // about text, 3.18 to 1 for muted text through its plate (REQ-A11Y-06).
+    whiteTarget = Math.min(targets.shape + targets.sheet, 1);
+    // The halftone's fill lands on the glow token whatever the area the
+    // formation packs into; the soft look keeps its own rule.
+    lightTarget =
+      look === "halftone"
+        ? halftoneLight(
+            formedArea(targets, atlas.extents, view, shapes.frame),
+            formTarget,
+          )
+        : formedLight(targets, atlas.extents, view, shapes.frame);
+  };
+
+  // The halftone pass places the hero dot and the work frame's lattice in
+  // CSS pixels: the dot where the simulation's dot is, the lattice exactly
+  // on the frame the page measured, with no follow, so it moves with it.
+  const showLook = () => {
+    if (halftone === null) return;
+    const dot = worldToCss(
+      followed.dotX,
+      followed.dotY,
+      view.halfWidth,
+      view.halfHeight,
+      bufferWidth,
+      bufferHeight,
+    );
+    halftone.setHero({
+      x: dot.x,
+      y: dot.y,
+      reach: haloReach(stages.hero, bufferWidth, bufferHeight),
+      light: heroLight(followed.release),
+      pulse: simulation.pulse.value,
+    });
+    const frame =
+      stages.work === undefined
+        ? { x: 0, y: 0, halfWidth: 0, halfHeight: 0 }
+        : stageToCss(finiteStage(stages.work), bufferWidth, bufferHeight);
+    halftone.setFrame({ ...frame, light: followed.frame });
+    halftone.setFormed(followed.white);
   };
 
   const showFollowed = () => {
@@ -211,6 +326,27 @@ function startRuntime(
     const seedY = followed.dotY / (view.halfHeight * FIELD_MARGIN);
     simulation.dotSeed.value.set(seedX, seedY);
     simulation.rankScale.value = releaseRankScale(seedX, seedY);
+    field.setDrawOffset(followed.shapeX - trail.x, followed.shapeY - trail.y);
+    field.setSwirl(followed.swirl);
+    showLook();
+  };
+
+  /** Puts the formed particles' modelled centre on the stage, at rest. */
+  const seatTrail = () => {
+    trail.x = followed.shapeX;
+    trail.y = followed.shapeY;
+    trail.speedX = 0;
+    trail.speedY = 0;
+  };
+
+  /** One step of the trail, as the compute node steps a formed particle. */
+  const stepTrail = (seconds: number) => {
+    trail.speedX += (followed.shapeX - trail.x) * FORM_PULL * seconds;
+    trail.speedY += (followed.shapeY - trail.y) * FORM_PULL * seconds;
+    trail.speedX *= 1 - seconds * FORM_DRAG;
+    trail.speedY *= 1 - seconds * FORM_DRAG;
+    trail.x += trail.speedX * seconds;
+    trail.y += trail.speedY * seconds;
   };
 
   /** Puts the followed centres on their targets at once. */
@@ -219,30 +355,53 @@ function startRuntime(
     followed.dotY = centre.dotY;
     followed.shapeX = centre.shapeX;
     followed.shapeY = centre.shapeY;
+    seatTrail();
+  };
+
+  /**
+   * A stage that moved a little since the last one is taken at once (see
+   * STAGE_STEP): the followed centre moves by the same amount, so a glide
+   * still under way keeps its course and the move is not slowed by it.
+   */
+  const takeSmallMoves = (before: typeof centre) => {
+    const pairs = [
+      ["dotX", "dotY"],
+      ["shapeX", "shapeY"],
+    ] as const;
+    for (const [x, y] of pairs) {
+      const moveX = centre[x] - before[x];
+      const moveY = centre[y] - before[y];
+      const moved = Math.hypot(moveX / view.halfWidth, moveY / view.halfHeight);
+      if (moved > 0 && moved <= STAGE_STEP) {
+        followed[x] += moveX;
+        followed[y] += moveY;
+      }
+    }
   };
 
   /** Points the field at new targets; `now` skips the follow. */
   const aim = (next: StoryTargets, now: boolean) => {
     targets = next;
-    simulation.shapeFrom.value = atlas.index[next.shapeFrom];
-    simulation.shapeTo.value = atlas.index[next.shapeTo];
-    simulation.shapeMix.value = next.shapeMix;
-    simulation.shapeWeight.value = next.shape;
-    simulation.sheetWeight.value = next.sheet;
-    simulation.waveWeight.value = next.wave;
-    simulation.noiseLevel.value = next.noise;
+    simulation.applyTargets(next, atlas.index);
     refit();
     if (now) {
       followed.release = next.release;
       followed.push = next.push;
       followed.light = lightTarget;
+      followed.white = whiteTarget;
       jumpCentres();
       showFollowed();
     }
   };
 
+  // The swirl shows only while the pointer stirs a running field in the
+  // field chapter (story.ts, swirlShows); a still has none (REQ-A11Y-03).
   const applyPointer = () => {
     field.setPointer(pointer.x, pointer.y, pointer.active && !still);
+    if (still) {
+      followed.swirl = 0;
+      field.setSwirl(0);
+    }
   };
 
   const liveTargets = () =>
@@ -289,7 +448,15 @@ function startRuntime(
     bufferRatio = ratio;
     renderer.setDrawingBufferSize(width, height, ratio);
     view = field.setAspect(width / height);
+    // The cell grid comes from the CSS size alone, so a new pixel ratio
+    // draws each dot more or less finely and never moves the lattice.
+    const grid = gridFor(width, height);
+    field.setGrid(grid, width, height);
+    halftone?.resize(grid, width, height, ratio);
+    const lit = sprinkle(particleCount, width, height, FLOW_SHARE);
+    field.setSprinkle(lit.share, lit.gain);
     refit();
+    showFollowed();
     return true;
   };
 
@@ -313,8 +480,27 @@ function startRuntime(
       seconds,
       LIGHT_FOLLOW_SECONDS,
     );
-    // The centres move like the camera, so a new layout or the change from
-    // the work chapter's stage to the whole frame glides (REQ-SCR-05).
+    followed.white = follow(
+      followed.white,
+      whiteTarget,
+      seconds,
+      LIGHT_FOLLOW_SECONDS,
+    );
+    followed.swirl = follow(
+      followed.swirl,
+      swirlShows(story?.chapter ?? null, pointer.active, still) ? 1 : 0,
+      seconds,
+      SWIRL_FOLLOW_SECONDS,
+    );
+    followed.frame = follow(
+      followed.frame,
+      story?.chapter === "work" && stages.work !== undefined ? 1 : 0,
+      seconds,
+      FRAME_FOLLOW_SECONDS,
+    );
+    // The centres move like the camera, so a jump to a new layout or the
+    // change from the work chapter's stage to the whole frame glides
+    // (REQ-SCR-05).
     for (const key of ["dotX", "dotY", "shapeX", "shapeY"] as const) {
       followed[key] = follow(
         followed[key],
@@ -323,22 +509,29 @@ function startRuntime(
         PUSH_FOLLOW_SECONDS,
       );
     }
-    showFollowed();
+    stepTrail(seconds);
     // A still holds the dot at rest (REQ-A11Y-03).
     simulation.pulse.value = still
       ? 0
       : Math.sin((2 * Math.PI * elapsedSeconds) / PULSE_SECONDS);
+    showFollowed();
     simulation.stepSeconds.value = seconds;
     simulation.elapsedSeconds.value = elapsedSeconds;
+    // The flow clock runs only once the release this step simulates is
+    // complete (story.ts, flowClockStep).
+    simulation.advanceFlow(seconds, followed.release);
     void renderer.compute(simulation.update);
     steps += 1;
   };
 
   // One step of no length with reseat on puts every particle on its target
-  // with no speed; the settle steps after it start from there.
+  // with no speed; the settle steps after it start from there. The flow
+  // clock starts again with it, so a still is the same each time.
   const seat = () => {
     seatPending = false;
     elapsedSeconds = 0;
+    simulation.resetFlow();
+    seatTrail();
     simulation.reseat.value = 1;
     step(0);
     simulation.reseat.value = 0;
@@ -346,11 +539,28 @@ function startRuntime(
   };
 
   const draw = () => {
-    renderer.render(field.scene, field.camera);
+    if (halftone === null) renderer.render(field.scene, field.camera);
+    else halftone.render(renderer, field.scene, field.camera);
     frames += 1;
   };
 
   const bufferAspect = () => bufferWidth / bufferHeight;
+
+  // What a calm field still owes the screen from the commands of this task:
+  // a seat on a new stage, and a settle toward a new still. The page sends
+  // the work stage and the story together, so both wait for one microtask
+  // and the field is settled and drawn once for the pair (REQ-A11Y-03).
+  const owed = { reseat: false, settle: false };
+  let owedQueued = false;
+
+  /** Puts a calm field on the stage it owes, before it is settled. */
+  const payReseat = () => {
+    if (!owed.reseat) return;
+    owed.reseat = false;
+    jumpCentres();
+    showFollowed();
+    seat();
+  };
 
   // A frozen field cannot flow to the homes of a new frame shape, so it is
   // put on its targets and settled again, the way a fresh load at that shape
@@ -378,6 +588,37 @@ function startRuntime(
     stillKey = key;
     if (changed) steps = 0;
     return changed;
+  };
+
+  /**
+   * Settles and draws a calm field once for what this task's commands owe
+   * it. A field that something else settled in the meantime (a resize, a
+   * still drawn) owes nothing more and is not drawn again.
+   */
+  const payStill = () => {
+    owedQueued = false;
+    const isOwed = owed.reseat || owed.settle;
+    owed.settle = false;
+    if (!isOwed || !still || disposal !== null || loss.message !== null) {
+      owed.reseat = false;
+      return;
+    }
+    try {
+      payReseat();
+      if (steps >= SETTLE_STEPS) return;
+      fitStill();
+      // A hidden canvas is drawn when it is shown again (the observer).
+      if (!unseen) draw();
+    } catch (error) {
+      fail(error);
+    }
+  };
+
+  const owe = (part: keyof typeof owed) => {
+    owed[part] = true;
+    if (owedQueued) return;
+    owedQueued = true;
+    queueMicrotask(payStill);
   };
 
   // A throw from the renderer ends this runtime the way a lost device does:
@@ -466,6 +707,7 @@ function startRuntime(
       pause,
       () => simulation.update.dispose(),
       () => field.material.dispose(),
+      () => halftone?.dispose(),
       () => simulation.positions.value.dispose(),
       () => simulation.velocities.value.dispose(),
       () => simulation.seeds.value.dispose(),
@@ -504,6 +746,7 @@ function startRuntime(
   return {
     backend,
     particleCount,
+    look,
     run() {
       if (running || disposal !== null || loss.message !== null) return;
       running = true;
@@ -524,6 +767,9 @@ function startRuntime(
         applySize();
         still = true;
         applyPointer();
+        // The still pays what the field owes, so the microtask finds nothing.
+        payReseat();
+        owed.settle = false;
         aimStill();
         fitStill();
         draw();
@@ -551,20 +797,16 @@ function startRuntime(
         return;
       }
       // A calm field is drawn again only for a new chapter or study, never
-      // for a scroll inside one (REQ-A11Y-03).
-      try {
-        if (!aimStill()) return;
-        fitStill();
-        // A hidden canvas is drawn when it is shown again (the observer).
-        if (!unseen) draw();
-      } catch (error) {
-        fail(error);
-      }
+      // for a scroll inside one (REQ-A11Y-03), and once for a stage and a
+      // story sent together.
+      if (aimStill()) owe("settle");
     },
     setStage(next) {
       if (disposal !== null || loss.message !== null) return;
       stages = next;
+      const before = { ...centre };
       refit();
+      takeSmallMoves(before);
       // Before its first story a field has nothing on screen to glide from.
       if (story === null || seatPending) {
         jumpCentres();
@@ -573,16 +815,8 @@ function startRuntime(
       }
       if (!still) return;
       // A calm field cannot glide: it is put where the new stage wants it
-      // and drawn again once (REQ-A11Y-03).
-      try {
-        jumpCentres();
-        showFollowed();
-        seat();
-        fitStill();
-        if (!unseen) draw();
-      } catch (error) {
-        fail(error);
-      }
+      // and drawn again once (REQ-A11Y-03), with any story sent with it.
+      owe("reseat");
     },
     dispose() {
       disposal ??= release();
@@ -623,7 +857,12 @@ export const createRuntime: RuntimeFactory = async (options) => {
 
   try {
     if (loss.message !== null) throw new Error(loss.message);
-    return startRuntime(renderer, options, loss);
+    // The halftone needs a half-float target it can draw to and blend; a
+    // device that cannot gets the soft field, never an empty one (rule A11).
+    const works =
+      options.look === "halftone" && (await halftoneWorks(renderer));
+    if (loss.message !== null) throw new Error(loss.message);
+    return startRuntime(renderer, options, loss, liveLook(options.look, works));
   } catch (error) {
     await renderer.dispose();
     throw error;

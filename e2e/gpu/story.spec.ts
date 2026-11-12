@@ -6,21 +6,37 @@ import type { ShapeId } from "../../src/engine/story";
 import { WORK_SHAPES } from "../../src/engine/story";
 import { packAtlas } from "../../src/engine/runtime/atlas";
 import {
+  HALO_REACH_PX,
+  HERO_DOT_PX,
+  gridFor,
+} from "../../src/engine/runtime/halftone-rules";
+import {
+  RINGS,
   SHEET_FIT,
-  WAVE_AMPLITUDE,
-  WAVE_THICKNESS,
+  bloomStage,
+  calmProgress,
   fitScale,
+  stagedFrame,
+  strandsBand,
 } from "../../src/engine/runtime/story";
 import { median, percentile } from "../../src/engine/tier/probe";
-import type { ChapterId } from "../../src/engine/types";
+import type { ChapterId, Stage } from "../../src/engine/types";
 import { PASS_MEDIAN_MS, readSurface, watchErrors } from "./frame-times";
-import { pixelStats, type Box } from "./pixels";
+import {
+  cellStats,
+  pixelStats,
+  ringShare,
+  type Box,
+  type CellStats,
+  type Lattice,
+} from "./pixels";
 
 // The chapters' choreography on a real GPU, headed, on the development page:
 // each chapter state drawn on forced tier 1 (1,000,000 particles, WebGPU)
-// and forced tier 2 (250,000, WebGL2), its light where the chapter puts it,
-// and its frame times over a short window. Then calm: one still per chapter
-// and per study, drawn again only when that changes.
+// and forced tier 2 (250,000, WebGL2) in the halftone look, its light where
+// the chapter puts it, the burn rule held cell by cell, and its frame times
+// over a short window. Then calm: one still per chapter and per study. Then
+// the soft fallback look, which ?look=soft forces (rule A11).
 
 const VIEW = '[data-testid="engine-view"]';
 const HOST = `${VIEW} [data-part="host"]`;
@@ -34,82 +50,157 @@ const HEIGHT = 800;
 const SETTLE_MS = 3_000;
 const FRAMES_WARM_UP_MS = 500;
 const FRAMES_WINDOW_MS = 3_000;
-// Noise, jitter and the sprites' own size reach past a shape's sampled box.
+// Noise, jitter and the dots' own lattice reach past a shape's sampled box:
+// a point lands in the cell it falls in, up to most of a cell from it.
 const MARGIN_SHARE = 0.05;
-const MARGIN_PX = 8;
-// The glow token, the field's brightest colour, has a relative luminance of
-// about 0.34, the violet token about 0.22 and the void about 0.002. A pixel
-// past this has had violet light piled on it until it turns toward white.
-const BURN_LUMINANCE = 0.5;
+const MARGIN_PX = 16;
+
+// The burn rule for the halftone (the P3.5 plan, part A): white dots are
+// part of the look, so a single pixel may be near white. What must not
+// happen is light piling up. The brightest 8 px cell's mean relative
+// luminance stays under 0.5 (the glow token is about 0.34, the near-white
+// text token about 0.85), and white cells stay a small share of the lit
+// cells and of the frame.
+const BURN_CELL_MEAN = 0.5;
+// The two shares, set from the runs of 12 Nov 2026 on this PC (RTX 4060 Ti,
+// Chromium 158) across every state below on both tiers and the portrait
+// frame: white cells reached 21.6% of the lit cells (the wordmark, whose
+// rims are white) and 4.15% of all cells (Coup Online's front card, whose
+// outline is white, now that each study shape is drawn as outlines over its
+// front layer's fill; ArcheLab's lines were four-cell white bars at 5.2%
+// before, 1.8% now). Each limit sits a little over the worst measured, no
+// more. The brightest cell mean reached 0.336 (the hero dot's own disc on
+// the portrait frame).
+const WHITE_OF_LIT = 0.25;
+const WHITE_OF_ALL = 0.045;
 
 const TIERS = [
   { tier: 1, count: 1_000_000, backend: "webgpu" },
   { tier: 2, count: 250_000, backend: "webgl2" },
 ] as const;
 
+// The bloom's states (runtime/story.ts): the T7 mark is whole from 0.42 to
+// 0.5, the wordmark from 0.64 to 0.84, and the calm still is the wordmark.
+const MARK_AT = 0.46;
+const WORDMARK_AT = calmProgress("bloom", 0);
+// The share of the frame's light inside the wordmark's box, at least, one
+// limit per frame shape: half the lines that may keep go on streaming round
+// the wordmark, past both sides of the frame by design, and on a portrait
+// frame they cross more of it. Measured on 12 Nov 2026 on this PC: 0.959 on
+// the landscape frame on tiers 1 and 2, and 0.908 on the portrait phone
+// frame with the wordmark across its whole width (0.85 in the middle 0.8 of
+// it, when the line was 0.5). The limits sit a little under each.
+const WORDMARK_SHARE = { landscape: 0.9, portrait: 0.85 } as const;
+
 const atlas = packAtlas();
+
+/** The halftone lattice of a canvas this many CSS px across, at ratio 1. */
+function latticeOf(width: number, height: number): Lattice {
+  const grid = gridFor(width, height);
+  return { cell: grid.cell, padX: grid.padX, padY: grid.padY };
+}
 
 interface Case {
   name: string;
   chapter: ChapterId;
   progress: number;
   /** Where nearly all the light must be. */
-  inside: Box;
+  inside?: Box;
   /** Light inside the box, at least. */
-  insideLit: number;
+  insideLit?: number;
   /** Share of all lit pixels that sit inside the box, at least. */
-  share: number;
+  share?: number;
+  /** A box the solid hero dot fills. */
+  core?: Box;
+  /** The contact rings, round the frame's centre. */
+  rings?: boolean;
   /** A formation that must stay clear of the frame's side edges. */
   inFrame: boolean;
 }
 
-/** Every chapter state and where its light belongs, for one frame size. */
-function casesFor(width: number, height: number): Case[] {
+function around(x: number, y: number, half: number): Box {
+  return { x: x - half, y: y - half, width: 2 * half, height: 2 * half };
+}
+
+function marginFor(width: number, height: number): number {
+  return MARGIN_SHARE * (Math.min(width, height) / 2) + MARGIN_PX;
+}
+
+/** The box a shape fitted to a stage fills on screen, with room for its noise. */
+function shapeBoxIn(
+  id: ShapeId,
+  stage: Stage | undefined,
+  width: number,
+  height: number,
+): Box {
   // Ratios only: half the frame is the aspect wide and 1 high.
   const frame = { halfWidth: width / height, halfHeight: 1 };
-  const margin = MARGIN_SHARE * (Math.min(width, height) / 2) + MARGIN_PX;
-  const centredBox = (halfWidthPx: number, halfHeightPx: number): Box => ({
-    x: width / 2 - halfWidthPx,
-    y: height / 2 - halfHeightPx,
-    width: halfWidthPx * 2,
-    height: halfHeightPx * 2,
-  });
-  // The box a fitted shape fills on screen, with room for its noise.
-  const shapeBox = (id: ShapeId): Box => {
-    const extent = atlas.extents[id];
-    const scale = fitScale(extent, frame);
-    return centredBox(
-      ((extent.halfWidth * scale) / frame.halfWidth) * (width / 2) + margin,
-      extent.halfHeight * scale * (height / 2) + margin,
-    );
+  const staged = stagedFrame(stage, frame);
+  const extent = atlas.extents[id];
+  const scale = fitScale(extent, staged.frame);
+  const margin = marginFor(width, height);
+  const halfWidth =
+    ((extent.halfWidth * scale) / frame.halfWidth) * (width / 2) + margin;
+  const halfHeight = extent.halfHeight * scale * (height / 2) + margin;
+  const centreX = ((staged.centreX / frame.halfWidth + 1) / 2) * width;
+  const centreY = ((1 - staged.centreY / frame.halfHeight) / 2) * height;
+  return {
+    x: centreX - halfWidth,
+    y: centreY - halfHeight,
+    width: 2 * halfWidth,
+    height: 2 * halfHeight,
   };
-  const band = (WAVE_AMPLITUDE + WAVE_THICKNESS) * (height / 2) + margin;
+}
+
+/** Every chapter state and where its light belongs, for one frame size. */
+function casesFor(width: number, height: number): Case[] {
+  const frame = { halfWidth: width / height, halfHeight: 1 };
+  const bloom = bloomStage(width / height);
+  const margin = marginFor(width, height);
+  const strands = strandsBand(frame);
+  const band = strands.halfHeight * (height / 2) + margin;
+  const bandMiddle = height / 2 - strands.centreY * (height / 2);
+  const sheet = {
+    halfWidth: SHEET_FIT * (width / 2) + margin,
+    halfHeight: SHEET_FIT * (height / 2) + margin,
+  };
 
   return [
     {
-      name: "hero: one small dot at the centre",
+      // The development page sends no hero stage, so the halo reaches its
+      // own default (halftone-rules.ts HALO_REACH_PX) round the centre.
+      name: "hero: the dot, its rings and its halo at the centre",
       chapter: "hero",
       progress: 0,
-      // The dot is about 9 px across its radius at these sizes.
-      inside: centredBox(16, 16),
-      insideLit: 0.15,
+      inside: around(width / 2, height / 2, HALO_REACH_PX + MARGIN_PX),
       share: 0.97,
+      core: around(width / 2, height / 2, HERO_DOT_PX - 3),
       inFrame: true,
     },
     {
-      name: "bloom 0.6: the T7SEN mark",
+      name: `bloom ${MARK_AT}: the T7 mark`,
       chapter: "bloom",
-      progress: 0.6,
-      inside: shapeBox("logo"),
+      progress: MARK_AT,
+      inside: shapeBoxIn("logo", bloom, width, height),
       insideLit: 0.05,
       share: 0.9,
       inFrame: true,
+    },
+    {
+      name: `bloom ${WORDMARK_AT}: the T7SEN wordmark with the lines round it`,
+      chapter: "bloom",
+      progress: WORDMARK_AT,
+      inside: shapeBoxIn("wordmark", bloom, width, height),
+      insideLit: 0.05,
+      share:
+        width >= height ? WORDMARK_SHARE.landscape : WORDMARK_SHARE.portrait,
+      inFrame: false,
     },
     ...WORK_SHAPES.map((id, index) => ({
       name: `work step ${index}: ${id}`,
       chapter: "work" as const,
       progress: (index + 0.5) / WORK_SHAPES.length,
-      inside: shapeBox(id),
+      inside: shapeBoxIn(id, undefined, width, height),
       insideLit: 0.05,
       share: 0.85,
       inFrame: true,
@@ -118,22 +209,32 @@ function casesFor(width: number, height: number): Case[] {
       name: "making-of 0.5: the flat sheet",
       chapter: "making-of",
       progress: 0.5,
-      inside: centredBox(
-        SHEET_FIT * (width / 2) + margin,
-        SHEET_FIT * (height / 2) + margin,
-      ),
+      inside: {
+        x: width / 2 - sheet.halfWidth,
+        y: height / 2 - sheet.halfHeight,
+        width: 2 * sheet.halfWidth,
+        height: 2 * sheet.halfHeight,
+      },
       insideLit: 0.05,
       share: 0.9,
       inFrame: true,
     },
     {
-      name: "about 0.5: the wave's band",
+      name: "about 0.5: the three strands",
       chapter: "about",
       progress: 0.5,
-      inside: { x: 0, y: height / 2 - band, width, height: 2 * band },
-      insideLit: 0.05,
+      inside: { x: 0, y: bandMiddle - band, width, height: 2 * band },
+      insideLit: 0.02,
       share: 0.9,
-      // The band runs across the frame and past both sides by design.
+      // The strands run across the frame and past both sides by design.
+      inFrame: false,
+    },
+    {
+      name: "contact 0.5: the rings round the centre",
+      chapter: "contact",
+      progress: 0.5,
+      rings: true,
+      // The outer ring passes the top and bottom of a landscape frame.
       inFrame: false,
     },
   ];
@@ -142,6 +243,10 @@ function casesFor(width: number, height: number): Case[] {
 // A formation inside the frame leaves the outer columns dark.
 const EDGE_PX = 6;
 const EDGE_LIT = 0.002;
+// A ring is 1 per cent of the shorter half thick each side; its dots snap
+// to the lattice and sit at slightly different depths.
+const RING_BAND_PX = 16;
+const RINGS_SHARE = 0.9;
 
 /** Captures the host and measures where its light is. */
 async function frameOf(
@@ -156,50 +261,128 @@ async function frameOf(
   const png = await host.screenshot();
   writeFileSync(path, png);
   const whole = await pixelStats(page, png);
-  const inside = await pixelStats(page, png, [entry.inside]);
+  const inside =
+    entry.inside === undefined
+      ? null
+      : await pixelStats(page, png, [entry.inside]);
+  const core =
+    entry.core === undefined ? null : await pixelStats(page, png, [entry.core]);
   const sides = await pixelStats(page, png, [
     { x: 0, y: 0, width: EDGE_PX, height },
     { x: width - EDGE_PX, y: 0, width: EDGE_PX, height },
   ]);
+  const rings =
+    entry.rings === true
+      ? await ringShare(page, png, {
+          x: width / 2,
+          y: height / 2,
+          radii: RINGS.map(
+            (ring) => (ring.radius * Math.min(width, height)) / 2,
+          ),
+          band: RING_BAND_PX,
+        })
+      : null;
+  const cells = await cellStats(page, png, latticeOf(width, height));
   const litWhole = whole.litShare * whole.pixels;
   const share =
-    litWhole === 0 ? 0 : (inside.litShare * inside.pixels) / litWhole;
-  return { whole, inside, sides, litWhole, share };
+    inside === null || litWhole === 0
+      ? 0
+      : (inside.litShare * inside.pixels) / litWhole;
+  return { whole, inside, core, sides, rings, cells, litWhole, share };
 }
 
-function expectFrame(
-  entry: Case,
-  {
-    whole,
-    inside,
-    sides,
-    litWhole,
-    share,
-  }: Awaited<ReturnType<typeof frameOf>>,
-) {
-  expect(litWhole, `${entry.name}: something is drawn`).toBeGreaterThan(50);
-  expect(
-    share,
-    `${entry.name}: the light sits in its box`,
-  ).toBeGreaterThanOrEqual(entry.share);
-  expect(inside.litShare, `${entry.name}: the box is lit`).toBeGreaterThan(
-    entry.insideLit,
+type Measured = Awaited<ReturnType<typeof frameOf>>;
+
+/** The cell figures of a frame as text for a printed line. */
+function cellText(cells: CellStats): string {
+  return (
+    `brightest cell mean ${cells.brightestCellMean.toFixed(4)} at ` +
+    `(${Math.round(cells.brightestCellAt.x)}, ${Math.round(cells.brightestCellAt.y)}), ` +
+    `white cells ${cells.whiteCells} of ${cells.litCells} lit ` +
+    `(${((cells.whiteCells / Math.max(cells.litCells, 1)) * 100).toFixed(2)}%) and of ${cells.cells} ` +
+    `(${((cells.whiteCells / Math.max(cells.cells, 1)) * 100).toFixed(2)}%), ` +
+    `corner to centre ${cells.cornerToCentre.toFixed(3)}`
   );
+}
+
+function measuredText(entry: Case, measured: Measured): string {
+  const { whole, inside, core, sides, rings, cells, litWhole, share } =
+    measured;
+  return (
+    `${entry.name}: lit pixels ${Math.round(litWhole)}` +
+    (inside === null || entry.inside === undefined
+      ? ""
+      : `, ${(share * 100).toFixed(1)}% inside the box ` +
+        `${Math.round(entry.inside.width)} x ${Math.round(entry.inside.height)}, ` +
+        `lit share inside ${inside.litShare.toFixed(4)}`) +
+    (core === null ? "" : `, core lit share ${core.litShare.toFixed(4)}`) +
+    (rings === null
+      ? ""
+      : `, ${(rings.share * 100).toFixed(1)}% of the light on the rings`) +
+    `, at the side edges ${sides.litShare.toFixed(4)}, brightest pixel ${whole.brightest} ` +
+    `(${whole.maxLuminance.toFixed(4)}); ${cellText(cells)}`
+  );
+}
+
+/** The burn rule, cell by cell. */
+function expectNoBurn(name: string, cells: CellStats) {
+  expect(
+    cells.brightestCellMean,
+    `${name}: no cell's light piles up toward white`,
+  ).toBeLessThan(BURN_CELL_MEAN);
+  expect(
+    cells.whiteCells / Math.max(cells.litCells, 1),
+    `${name}: white cells as a share of the lit cells`,
+  ).toBeLessThan(WHITE_OF_LIT);
+  expect(
+    cells.whiteCells / Math.max(cells.cells, 1),
+    `${name}: white cells as a share of the frame`,
+  ).toBeLessThan(WHITE_OF_ALL);
+}
+
+function expectFrame(entry: Case, measured: Measured) {
+  const { inside, core, sides, rings, cells, litWhole, share } = measured;
+  expect(litWhole, `${entry.name}: something is drawn`).toBeGreaterThan(50);
+  if (inside !== null && entry.share !== undefined) {
+    expect(
+      share,
+      `${entry.name}: the light sits in its box`,
+    ).toBeGreaterThanOrEqual(entry.share);
+  }
+  if (inside !== null && entry.insideLit !== undefined) {
+    expect(inside.litShare, `${entry.name}: the box is lit`).toBeGreaterThan(
+      entry.insideLit,
+    );
+  }
+  if (core !== null) {
+    expect(
+      core.litShare,
+      `${entry.name}: the solid dot is at the centre`,
+    ).toBeGreaterThan(0.9);
+  }
+  if (rings !== null) {
+    expect(
+      rings.share,
+      `${entry.name}: the light lies on the three rings`,
+    ).toBeGreaterThan(RINGS_SHARE);
+  }
   if (entry.inFrame) {
     expect(
       sides.litShare,
       `${entry.name}: clear of the frame's side edges`,
     ).toBeLessThan(EDGE_LIT);
   }
-  expect(
-    whole.maxLuminance,
-    `${entry.name}: no light piles up to white`,
-  ).toBeLessThan(BURN_LUMINANCE);
+  expectNoBurn(entry.name, cells);
 }
 
 async function open(page: Page, query: string) {
   await page.goto(`/engine?${query}`);
-  await page.addStyleTag({ content: "nextjs-portal { display: none; }" });
+  // The development server's own badge, and the real cursor: on a real
+  // screen the mouse may rest over the window, and the host would read it
+  // as a pointer that stirs the field. These checks never stir.
+  await page.addStyleTag({
+    content: `nextjs-portal { display: none; } ${HOST} { pointer-events: none !important; }`,
+  });
 }
 
 function settled(page: Page, tier: 1 | 2) {
@@ -232,9 +415,12 @@ async function shortFrames(page: Page) {
   };
 }
 
-// ?stage=split sends the stages a wide home page sends (engine-view.tsx,
-// SPLIT_STAGES): the dot at y -0.6, the work stage at x 0.45 with halves
-// 0.45 and 0.9, in normalised device coordinates (D-065).
+// ?stage=split sends fixed stages (engine-view.tsx, SPLIT_STAGES): the dot
+// at y -0.6 with no size, so the halo takes its default reach, and the work
+// stage at x 0.45 with halves 0.45 and 0.9, in normalised device
+// coordinates. The home page sends the frame of the row in view instead,
+// moving with the scroll; e2e/headed/story.spec.ts checks that one on the
+// production build, since this page has no frame that scrolls.
 function splitCases(width: number, height: number): Case[] {
   const px = (x: number, y: number) => ({
     x: ((x + 1) / 2) * width,
@@ -242,7 +428,7 @@ function splitCases(width: number, height: number): Case[] {
   });
   const dot = px(0, -0.6);
   const stage = px(0.45, 0);
-  const margin = MARGIN_SHARE * (Math.min(width, height) / 2) + MARGIN_PX;
+  const margin = marginFor(width, height);
   const halfWidth = 0.45 * (width / 2) + margin;
   const halfHeight = 0.9 * (height / 2) + margin;
   return [
@@ -250,23 +436,25 @@ function splitCases(width: number, height: number): Case[] {
       name: "hero, staged: the dot low in the frame",
       chapter: "hero",
       progress: 0,
-      inside: { x: dot.x - 16, y: dot.y - 16, width: 32, height: 32 },
-      insideLit: 0.15,
+      inside: around(dot.x, dot.y, HALO_REACH_PX + MARGIN_PX),
       share: 0.97,
+      core: around(dot.x, dot.y, HERO_DOT_PX - 3),
       inFrame: true,
     },
     {
+      // The shape and the faint lattice across the stage, which the
+      // halftone draws as a work stage's frame.
       name: "work step 1, staged: coup-online in the inline-end half",
       chapter: "work",
       progress: 1.5 / WORK_SHAPES.length,
       inside: {
         x: stage.x - halfWidth,
         y: stage.y - halfHeight,
-        width: halfWidth * 2,
-        height: halfHeight * 2,
+        width: 2 * halfWidth,
+        height: 2 * halfHeight,
       },
       insideLit: 0.05,
-      share: 0.85,
+      share: 0.97,
       inFrame: true,
     },
   ];
@@ -293,11 +481,7 @@ for (const { tier, count } of TIERS) {
         HEIGHT,
         testInfo.outputPath(`staged-tier-${tier}-${index}.png`),
       );
-      console.log(
-        `story staged tier ${tier} ${entry.name}: lit pixels ${measured.litWhole}, ` +
-          `${(measured.share * 100).toFixed(1)}% inside the box, lit share inside ` +
-          `${measured.inside.litShare.toFixed(4)}, brightest ${measured.whole.brightest}`,
-      );
+      console.log(`story staged tier ${tier} ${measuredText(entry, measured)}`);
       expectFrame(entry, measured);
     }
     expect(errors).toEqual([]);
@@ -305,7 +489,7 @@ for (const { tier, count } of TIERS) {
 }
 
 for (const { tier, count, backend } of TIERS) {
-  test(`REQ-SCR-01 REQ-SCR-05 REQ-SCR-07 REQ-ENG-05 every chapter state draws where it should on forced tier ${tier}, ${count} particles`, async ({
+  test(`REQ-SCR-01 REQ-SCR-05 REQ-SCR-07 REQ-ENG-05 every chapter state draws where it should, without burning, on forced tier ${tier}, ${count} particles`, async ({
     page,
     browser,
   }, testInfo) => {
@@ -323,6 +507,13 @@ for (const { tier, count, backend } of TIERS) {
         "data-chapter",
         entry.chapter,
       );
+      // No look asked for, so the engine draws the halftone where it can;
+      // the ready event reports the count asked for.
+      await expect(page.locator(VIEW)).toHaveAttribute("data-look", "");
+      await expect(page.locator(VIEW)).toHaveAttribute(
+        "data-particles",
+        String(count),
+      );
       await page.waitForTimeout(SETTLE_MS);
 
       const measured = await frameOf(
@@ -332,14 +523,10 @@ for (const { tier, count, backend } of TIERS) {
         HEIGHT,
         testInfo.outputPath(`tier-${tier}-${index}.png`),
       );
-      const { whole, inside, sides, litWhole, share } = measured;
       const frames = await shortFrames(page);
 
       const line =
-        `story tier ${tier} ${entry.name}: lit pixels ${litWhole}, ` +
-        `${(share * 100).toFixed(1)}% inside the box ` +
-        `${Math.round(entry.inside.width)} x ${Math.round(entry.inside.height)}, ` +
-        `lit share inside ${inside.litShare.toFixed(4)}, at the side edges ${sides.litShare.toFixed(4)}, brightest ${whole.brightest}; ` +
+        `story tier ${tier} ${measuredText(entry, measured)}; ` +
         `frames ${frames.frames}, median ${frames.medianMs.toFixed(2)} ms, ` +
         `p95 ${frames.p95Ms.toFixed(2)} ms`;
       console.log(line);
@@ -350,38 +537,6 @@ for (const { tier, count, backend } of TIERS) {
         PASS_MEDIAN_MS[tier],
       );
     }
-
-    // Contact is the field at rest again: every quarter lit.
-    await open(
-      page,
-      `tier=${tier}&count=${count}&bare=1&chapter=contact&progress=0.5`,
-    );
-    await expect(settled(page, tier)).toHaveCount(1, { timeout: 90_000 });
-    await page.waitForTimeout(SETTLE_MS);
-    const rest = await page.locator(HOST).screenshot();
-    writeFileSync(testInfo.outputPath(`tier-${tier}-contact.png`), rest);
-    const half = { width: WIDTH / 2, height: HEIGHT / 2 };
-    const quarters: number[] = [];
-    for (const [x, y] of [
-      [0, 0],
-      [half.width, 0],
-      [0, half.height],
-      [half.width, half.height],
-    ] as const) {
-      quarters.push(
-        (await pixelStats(page, rest, [{ x, y, ...half }])).litShare,
-      );
-    }
-    const restFrames = await shortFrames(page);
-    const restLine = `story tier ${tier} contact 0.5: lit share per quarter ${quarters
-      .map((value) => value.toFixed(4))
-      .join(
-        ", ",
-      )}; frames ${restFrames.frames}, median ${restFrames.medianMs.toFixed(2)} ms, p95 ${restFrames.p95Ms.toFixed(2)} ms`;
-    console.log(restLine);
-    lines.push(restLine);
-    for (const value of quarters) expect(value).toBeGreaterThan(0.05);
-    expect(restFrames.medianMs).toBeLessThanOrEqual(PASS_MEDIAN_MS[tier]);
 
     const surface = await readSurface(page, CANVAS);
     const facts = `story tier ${tier}: ${surface.backend} on ${surface.gpu}, canvas ${surface.width} x ${surface.height}, browser ${browser.version()}`;
@@ -396,7 +551,7 @@ for (const { tier, count, backend } of TIERS) {
   });
 }
 
-test("REQ-SCR-01 REQ-TIER-02 on a portrait phone frame, 375 x 812, forced tier 2 with 100,000 particles keeps every formation inside the frame", async ({
+test("REQ-SCR-01 REQ-TIER-02 on a portrait phone frame, 375 x 812, forced tier 2 with 100,000 particles keeps every formation inside the frame without burning", async ({
   page,
 }, testInfo) => {
   test.setTimeout(300_000);
@@ -419,12 +574,7 @@ test("REQ-SCR-01 REQ-TIER-02 on a portrait phone frame, 375 x 812, forced tier 2
       height,
       testInfo.outputPath(`portrait-${index}.png`),
     );
-    console.log(
-      `story portrait ${entry.name}: lit pixels ${measured.litWhole}, ` +
-        `${(measured.share * 100).toFixed(1)}% inside the box ` +
-        `${Math.round(entry.inside.width)} x ${Math.round(entry.inside.height)}, ` +
-        `at the side edges ${measured.sides.litShare.toFixed(4)}, brightest ${measured.whole.brightest}`,
-    );
+    console.log(`story portrait ${measuredText(entry, measured)}`);
     expectFrame(entry, measured);
   }
   expect(errors).toEqual([]);
@@ -434,7 +584,10 @@ test("REQ-ENG-05 the transform feedback limit on forced tier 2, printed", async 
   page,
 }, testInfo) => {
   const { errors } = watchErrors(page);
-  await open(page, "tier=2&count=250000&bare=1&chapter=bloom&progress=0.6");
+  await open(
+    page,
+    `tier=2&count=250000&bare=1&chapter=bloom&progress=${WORDMARK_AT}`,
+  );
   await expect(settled(page, 2)).toHaveCount(1, { timeout: 90_000 });
   const limits = await page.locator(CANVAS).evaluate((canvas) => {
     if (!(canvas instanceof HTMLCanvasElement)) return null;
@@ -481,9 +634,10 @@ for (const { tier, count } of TIERS) {
     const first = await canvas.screenshot();
     const eventsAtFirst = await events();
 
-    // The same study: nothing is drawn again.
-    await progress.fill("0.15");
-    await expect(view).toHaveAttribute("data-progress", "0.15");
+    // The same study (the first of three runs to a third of the chapter):
+    // nothing is drawn again.
+    await progress.fill("0.2");
+    await expect(view).toHaveAttribute("data-progress", "0.2");
     await page.waitForTimeout(600);
     const sameStudy = await canvas.screenshot();
     expect(
@@ -492,7 +646,7 @@ for (const { tier, count } of TIERS) {
     ).toBe(true);
 
     // The next study: one new still.
-    await progress.fill("0.3");
+    await progress.fill("0.5");
     await page.waitForTimeout(600);
     const nextStudy = await canvas.screenshot();
     expect(nextStudy.equals(first), "the next study is a new still").toBe(
@@ -526,8 +680,15 @@ for (const { tier, count } of TIERS) {
   });
 }
 
+// Once released, the field is the flow and the mark gathering: lit dots in
+// every quarter of the frame. The halftone lights far fewer pixels than the
+// field of P3 did (0.049 against the old line of 0.1), so the cells are
+// counted instead: 0.306 to 0.483 of each quarter's cells were lit on 12
+// Nov 2026 on both tiers, and the line is half the lowest.
+const QUARTER_LIT_CELLS = 0.15;
+
 for (const { tier, count } of TIERS) {
-  test(`REQ-SCR-07 REQ-SCR-05 on tier ${tier} the field leaves the dot in a bloom without piling its light to white`, async ({
+  test(`REQ-SCR-07 REQ-SCR-05 on tier ${tier} the field leaves the dot in a bloom without burning`, async ({
     page,
   }, testInfo) => {
     const { errors } = watchErrors(page);
@@ -535,45 +696,168 @@ for (const { tier, count } of TIERS) {
     await expect(settled(page, tier)).toBeVisible({ timeout: 90_000 });
     const canvas = page.locator(CANVAS);
     await canvas.scrollIntoViewIfNeeded();
+    const box = await canvas.boundingBox();
+    if (box === null) throw new Error("The canvas has no box");
+    // The canvas sits in the page here, not over the whole window, so its
+    // lattice is its own.
+    const lattice = latticeOf(box.width, box.height);
     await page.waitForTimeout(1_000);
 
     // Scrolled down through the bloom's first third, about a second for
     // each tenth, the way a reader moves.
     const progress = page.getByRole("slider", { name: "Progress" });
     await page.getByRole("combobox", { name: "Chapter" }).selectOption("bloom");
-    let brightest = 0;
-    let brightestAt = "";
+    let worst: CellStats | null = null;
+    let worstAt = "";
+    let mostWhite = 0;
+    let mostWhiteAt = "";
     let shot = 0;
     for (const value of ["0.05", "0.1", "0.15", "0.2", "0.25", "0.3", "0.35"]) {
       await progress.fill(value);
       for (const wait of [150, 350, 500]) {
         await page.waitForTimeout(wait);
         const png = await canvas.screenshot();
-        const stats = await pixelStats(page, png);
-        if (stats.maxLuminance > brightest) {
-          brightest = stats.maxLuminance;
-          brightestAt = `progress ${value}, ${wait} ms after, ${stats.brightest}`;
+        const cells = await cellStats(page, png, lattice);
+        const at = `progress ${value}, ${wait} ms after`;
+        if (
+          worst === null ||
+          cells.brightestCellMean > worst.brightestCellMean
+        ) {
+          worst = cells;
+          worstAt = at;
           writeFileSync(
             testInfo.outputPath(`bloom-${tier}-brightest.png`),
             png,
           );
         }
+        const white = cells.whiteCells / Math.max(cells.litCells, 1);
+        if (white > mostWhite) {
+          mostWhite = white;
+          mostWhiteAt = at;
+        }
         if (wait === 500) {
           writeFileSync(testInfo.outputPath(`bloom-${tier}-${shot}.png`), png);
           shot += 1;
         }
+        expectNoBurn(at, cells);
       }
     }
     await page.waitForTimeout(2_000);
-    const open_ = await pixelStats(page, await canvas.screenshot());
+    const released = await canvas.screenshot();
+    writeFileSync(testInfo.outputPath(`bloom-${tier}-released.png`), released);
+    const half = { width: box.width / 2, height: box.height / 2 };
+    const quarters: number[] = [];
+    for (const [x, y] of [
+      [0, 0],
+      [half.width, 0],
+      [0, half.height],
+      [half.width, half.height],
+    ] as const) {
+      const cells = await cellStats(page, released, lattice, [
+        { x, y, ...half },
+      ]);
+      quarters.push(cells.litCells / Math.max(cells.cells, 1));
+    }
     console.log(
-      `story bloom tier ${tier}: brightest luminance while the field left the dot ${brightest.toFixed(4)} (${brightestAt}); lit share once released ${open_.litShare.toFixed(4)}`,
+      `story bloom tier ${tier}: while the field left the dot, the brightest cell at ${worstAt}: ` +
+        `${worst === null ? "none" : cellText(worst)}; most white cells ${(mostWhite * 100).toFixed(2)}% of the lit${mostWhiteAt === "" ? "" : ` at ${mostWhiteAt}`}; ` +
+        `once released, lit cells per quarter ${quarters.map((value) => value.toFixed(4)).join(", ")}`,
     );
-    expect(brightest).toBeLessThan(BURN_LUMINANCE);
+    for (const value of quarters) {
+      expect(
+        value,
+        "the field reaches every quarter once released",
+      ).toBeGreaterThan(QUARTER_LIT_CELLS);
+    }
+    expect(errors).toEqual([]);
+  });
+}
+
+// The soft look stays tested (rule A11): the engine draws it when a
+// half-float target cannot be rendered, and the development page forces it
+// with ?look=soft. The live look is not an event (REQ-ENG-03), so the two
+// are told apart by what they draw: the halftone puts one disc at each
+// cell's centre and leaves the cell's corners nearly dark, while the soft
+// sprites have no lattice. Measured on 12 Nov 2026 at the wordmark: the
+// halftone's corners held 0.025 of its centres' light on both tiers, the
+// soft field's 0.99 to 1.01. The lines sit well apart from both.
+const LATTICE_CORNERS = 0.1;
+const SOFT_CORNERS = 0.5;
+// The soft look is the field before P3.5, held to that look's burn rule:
+// no pixel past this relative luminance.
+const SOFT_BURN_LUMINANCE = 0.5;
+
+for (const { tier, count } of TIERS) {
+  test(`REQ-ENG-05 REQ-PERF-06 rule A11: on forced tier ${tier} the default draws the halftone and ?look=soft the soft field, both forming the wordmark on the pass line`, async ({
+    page,
+  }, testInfo) => {
+    test.setTimeout(180_000);
+    const { errors } = watchErrors(page);
+    const entry: Case = {
+      name: `bloom ${WORDMARK_AT}: the wordmark`,
+      chapter: "bloom",
+      progress: WORDMARK_AT,
+      inside: shapeBoxIn("wordmark", bloomStage(WIDTH / HEIGHT), WIDTH, HEIGHT),
+      inFrame: false,
+    };
+    const results = new Map<string, Measured>();
+    for (const look of ["halftone", "soft"] as const) {
+      await open(
+        page,
+        `tier=${tier}&count=${count}&bare=1${look === "soft" ? "&look=soft" : ""}` +
+          `&chapter=${entry.chapter}&progress=${entry.progress}`,
+      );
+      await expect(settled(page, tier)).toHaveCount(1, { timeout: 90_000 });
+      await expect(page.locator(VIEW)).toHaveAttribute(
+        "data-look",
+        look === "soft" ? "soft" : "",
+      );
+      await page.waitForTimeout(SETTLE_MS);
+      const measured = await frameOf(
+        page,
+        entry,
+        WIDTH,
+        HEIGHT,
+        testInfo.outputPath(`look-${look}-tier-${tier}.png`),
+      );
+      const frames = await shortFrames(page);
+      const line =
+        `story look ${look} tier ${tier} ${measuredText(entry, measured)}; ` +
+        `frames ${frames.frames}, median ${frames.medianMs.toFixed(2)} ms, p95 ${frames.p95Ms.toFixed(2)} ms`;
+      console.log(line);
+      testInfo.annotations.push({ type: "look", description: line });
+      results.set(look, measured);
+
+      expect(measured.litWhole, `${look}: something is drawn`).toBeGreaterThan(
+        50,
+      );
+      expect(
+        measured.inside?.litShare ?? 0,
+        `${look}: the wordmark's box is lit`,
+      ).toBeGreaterThan(0.05);
+      expect(frames.medianMs, `${look}: frame time`).toBeLessThanOrEqual(
+        PASS_MEDIAN_MS[tier],
+      );
+    }
+
+    const halftone = results.get("halftone");
+    const soft = results.get("soft");
+    if (halftone === undefined || soft === undefined) {
+      throw new Error("A look was not measured");
+    }
     expect(
-      open_.litShare,
-      "the field fills the frame once released",
-    ).toBeGreaterThan(0.1);
+      halftone.cells.cornerToCentre,
+      "the default look draws its dots on the lattice",
+    ).toBeLessThan(LATTICE_CORNERS);
+    expect(
+      soft.cells.cornerToCentre,
+      "?look=soft draws soft sprites, off any lattice",
+    ).toBeGreaterThan(SOFT_CORNERS);
+    expectNoBurn("halftone", halftone.cells);
+    expect(
+      soft.whole.maxLuminance,
+      "the soft look piles no light to white",
+    ).toBeLessThan(SOFT_BURN_LUMINANCE);
     expect(errors).toEqual([]);
   });
 }

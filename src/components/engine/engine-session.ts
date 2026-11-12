@@ -55,7 +55,8 @@ export function createEngineSession(
   let pageVeil: number | null = null;
 
   // Only a live field takes the page's veil. Tier 3's still is one picture
-  // behind every chapter and keeps the measured 0.7 of the wrapper's class.
+  // behind every chapter and keeps the wrapper's own measured veil (0.75
+  // on tier 3, engine-host.tsx).
   function applyVeil() {
     const tier = wrapper.dataset.tier;
     if (!isDisposed && pageVeil !== null && (tier === "1" || tier === "2")) {
@@ -156,7 +157,7 @@ export function createEngineSession(
       // A field that cannot load is tier 3, shown as itself (REQ-ENG-08).
       logFailure("no-backend", error);
       report({ type: "tierChosen", tier: 3, reason: "no-backend" });
-      report({ type: "ready", tier: 3 });
+      report({ type: "ready", tier: 3, particles: 0 });
       if (!isDisposed) connect(mirrorOnly);
     }
   }

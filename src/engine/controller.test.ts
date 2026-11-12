@@ -59,6 +59,8 @@ function stubRuntimes(outcomes: readonly Outcome[] = []) {
       options,
       backend: outcome,
       particleCount: options.particleCount[outcome],
+      // The stub draws the look it was asked for.
+      look: options.look,
       log: [],
       running: false,
       isDisposed: false,
@@ -249,7 +251,7 @@ describe("commands and events", () => {
 
     expect(events).toEqual([
       { type: "tierChosen", tier: 2, reason: "no-webgpu" },
-      { type: "ready", tier: 2 },
+      { type: "ready", tier: 2, particles: PARTICLES.tier2Desktop },
       { type: "frameRate", fps: 60 },
     ]);
   });
@@ -342,7 +344,7 @@ describe("commands and events", () => {
 
     expect(heard).toEqual([
       { type: "tierChosen", tier: 3, reason: "save-data" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(errors).toHaveBeenCalledTimes(2);
   });
@@ -425,7 +427,7 @@ describe("commands and events", () => {
     expect(runtime.isDisposed).toBe(true);
     expect(events.slice(-2)).toEqual([
       { type: "tierChosen", tier: 3, reason: "device-lost" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(canvas()).toBeNull();
   });
@@ -441,7 +443,7 @@ describe("commands and events", () => {
 
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "no-backend" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(stubs.loadRuntime).not.toHaveBeenCalled();
   });
@@ -455,7 +457,7 @@ describe("tier flow", () => {
 
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "save-data" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(stubs.loadRuntime).not.toHaveBeenCalled();
     expect(canvas()).toBeNull();
@@ -469,7 +471,7 @@ describe("tier flow", () => {
 
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "forced" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(stubs.loadRuntime).not.toHaveBeenCalled();
     expect(canvas()).toBeNull();
@@ -527,6 +529,58 @@ describe("tier flow", () => {
     expect(request.particleCount).toEqual({ webgpu: 5000, webgl2: 5000 });
   });
 
+  test("REQ-ENG-08 every runtime is asked for the halftone, and for the soft field when the options ask for it (?look=soft)", async () => {
+    const plain = await startTier2();
+    expect(nth(plain.stubs.requests, 0).look).toBe("halftone");
+
+    const soft = await startTier2({ look: "soft" });
+    expect(nth(soft.stubs.requests, 0).look).toBe("soft");
+
+    // A rebuild after a loss asks for the same look.
+    const lost = await startWith({ environment: facts(), look: "soft" }, [
+      "webgpu",
+    ]);
+    await playProbe(nth(lost.stubs.built, 0), 10);
+    nth(lost.stubs.built, 0).lose();
+    await settle();
+    expect(lost.stubs.requests.map((request) => request.look)).toEqual([
+      "soft",
+      "soft",
+    ]);
+  });
+
+  test("REQ-ENG-03 ready carries the live runtime's own particle count: the count of the backend that came up, or the option's", async () => {
+    // WebGPU asked for, WebGL2 live: the WebGL2 count.
+    const fellBack = await startWith({ environment: facts() }, ["webgl2"]);
+    nth(fellBack.stubs.built, 0).frame();
+    await settle();
+    expect(fellBack.events).toEqual([
+      { type: "tierChosen", tier: 2, reason: "webgpu-init-fallback" },
+      { type: "ready", tier: 2, particles: PARTICLES.tier2Desktop },
+    ]);
+
+    const counted = await startTier2({ particleCount: 5000 });
+    counted.runtime.frame();
+    await settle();
+    expect(counted.events.at(-1)).toEqual({
+      type: "ready",
+      tier: 2,
+      particles: 5000,
+    });
+
+    // The phone count on a coarse pointer.
+    const phone = await startWith({
+      environment: facts({ coarsePointer: true }),
+    });
+    nth(phone.stubs.built, 0).frame();
+    await settle();
+    expect(phone.events.at(-1)).toEqual({
+      type: "ready",
+      tier: 2,
+      particles: PARTICLES.tier2Phone,
+    });
+  });
+
   test("REQ-TIER-01 a passing probe gives tier 1 on the canvas it ran on, shown and ready with tier 1's first frame", async () => {
     const { events, stubs, canvas } = await startWith({
       environment: facts(),
@@ -556,7 +610,7 @@ describe("tier flow", () => {
     expect(probeCanvas?.style.visibility).toBe("");
     expect(events).toEqual([
       { type: "tierChosen", tier: 1, reason: "probe-pass" },
-      { type: "ready", tier: 1 },
+      { type: "ready", tier: 1, particles: PARTICLES.tier1 },
     ]);
   });
 
@@ -664,7 +718,11 @@ describe("tier flow", () => {
     expect(canvas()?.style.visibility).toBe("");
 
     nth(stubs.built, 1).frame();
-    expect(nth(events, 1)).toEqual({ type: "ready", tier: 2 });
+    expect(nth(events, 1)).toEqual({
+      type: "ready",
+      tier: 2,
+      particles: PARTICLES.tier2Desktop,
+    });
   });
 
   test("REQ-TIER-01 a probe that draws too few frames gives tier 2 with probe-failed", async () => {
@@ -692,7 +750,7 @@ describe("tier flow", () => {
     ]);
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "no-backend" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(canvas()).toBeNull();
   });
@@ -730,7 +788,7 @@ describe("tier flow", () => {
     ]);
     expect(webgl2.events).toEqual([
       { type: "tierChosen", tier: 3, reason: "no-backend" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(webgl2.canvas()).toBeNull();
 
@@ -744,7 +802,7 @@ describe("tier flow", () => {
     ]);
     expect(webgpu.events).toEqual([
       { type: "tierChosen", tier: 3, reason: "no-backend" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(webgpu.canvas()).toBeNull();
   });
@@ -768,7 +826,11 @@ describe("tier flow", () => {
     ]);
 
     nth(stubs.built, 0).frame();
-    expect(events.at(-1)).toEqual({ type: "ready", tier: 2 });
+    expect(events.at(-1)).toEqual({
+      type: "ready",
+      tier: 2,
+      particles: PARTICLES.tier2Desktop,
+    });
   });
 
   test("REQ-ENG-03 REQ-TIER-04 a tier forced from a tier 3 tierChosen listener still gets its own ready", async () => {
@@ -792,7 +854,7 @@ describe("tier flow", () => {
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "save-data" },
       { type: "tierChosen", tier: 2, reason: "forced" },
-      { type: "ready", tier: 2 },
+      { type: "ready", tier: 2, particles: PARTICLES.tier2Desktop },
     ]);
   });
 
@@ -806,7 +868,7 @@ describe("tier flow", () => {
 
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "no-backend" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(canvas()).toBeNull();
   });
@@ -822,7 +884,11 @@ describe("tier flow", () => {
     expect(events).toEqual([{ type: "tierChosen", tier: 1, reason: "forced" }]);
 
     runtime.frame();
-    expect(nth(events, 1)).toEqual({ type: "ready", tier: 1 });
+    expect(nth(events, 1)).toEqual({
+      type: "ready",
+      tier: 1,
+      particles: PARTICLES.tier1,
+    });
   });
 
   test("REQ-TIER-04 a forced tier 1 that comes back on WebGL2 is tier 2 with webgpu-init-fallback", async () => {
@@ -931,7 +997,9 @@ describe("tier flow", () => {
       { type: "tierChosen", tier: 1, reason: "forced" },
     ]);
     nth(stubs.built, 1).frame();
-    expect(events.slice(3)).toEqual([{ type: "ready", tier: 1 }]);
+    expect(events.slice(3)).toEqual([
+      { type: "ready", tier: 1, particles: PARTICLES.tier1 },
+    ]);
 
     engine.setTier(3);
     await settle();
@@ -940,7 +1008,7 @@ describe("tier flow", () => {
     expect(canvas()).toBeNull();
     expect(events.slice(4)).toEqual([
       { type: "tierChosen", tier: 3, reason: "forced" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(stubs.requests).toHaveLength(2);
   });
@@ -975,7 +1043,7 @@ describe("tier flow", () => {
     await engine.start();
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "forced" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(stubs.loadRuntime).not.toHaveBeenCalled();
   });
@@ -1004,7 +1072,7 @@ describe("tier flow", () => {
     expect(late.log).not.toContain("run");
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "forced" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(canvas()).toBeNull();
   });
@@ -1076,7 +1144,7 @@ describe("pausing and teardown", () => {
     expect(runtime.log).toEqual(["drawStill"]);
     expect(events).toEqual([
       { type: "tierChosen", tier: 2, reason: "no-webgpu" },
-      { type: "ready", tier: 2 },
+      { type: "ready", tier: 2, particles: PARTICLES.tier2Desktop },
     ]);
 
     await vi.advanceTimersByTimeAsync(FRAME_RATE_INTERVAL_MS * 2);
@@ -1089,7 +1157,7 @@ describe("pausing and teardown", () => {
     expect(runtime.log).toEqual(["run", "pause", "drawStill"]);
     expect(events).toEqual([
       { type: "tierChosen", tier: 1, reason: "probe-pass" },
-      { type: "ready", tier: 1 },
+      { type: "ready", tier: 1, particles: PARTICLES.tier1 },
     ]);
   });
 
@@ -1219,7 +1287,11 @@ describe("lost device", () => {
 
     const rebuilt = nth(stubs.built, 1);
     rebuilt.frame();
-    expect(nth(events, 1)).toEqual({ type: "ready", tier: 2 });
+    expect(nth(events, 1)).toEqual({
+      type: "ready",
+      tier: 2,
+      particles: PARTICLES.tier2Desktop,
+    });
 
     rebuilt.lose();
     await settle();
@@ -1229,7 +1301,7 @@ describe("lost device", () => {
     expect(canvas()).toBeNull();
     expect(events.slice(2)).toEqual([
       { type: "tierChosen", tier: 3, reason: "device-lost" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
   });
 
@@ -1245,7 +1317,7 @@ describe("lost device", () => {
     expect(canvas()).toBeNull();
     expect(events.slice(2)).toEqual([
       { type: "tierChosen", tier: 3, reason: "device-lost" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
   });
 
@@ -1274,7 +1346,7 @@ describe("lost device", () => {
 
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "no-backend" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(canvas()).toBeNull();
   });
@@ -1332,7 +1404,7 @@ describe("lost device", () => {
     expect(nth(stubs.built, 0).log).not.toContain("run");
     expect(events).toEqual([
       { type: "tierChosen", tier: 3, reason: "device-lost" },
-      { type: "ready", tier: 3 },
+      { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(canvas()).toBeNull();
   });

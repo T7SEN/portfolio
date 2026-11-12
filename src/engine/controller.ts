@@ -116,7 +116,10 @@ export function createEngine(
 
   function sendReady(tier: Tier): void {
     readySent = true;
-    emit({ type: "ready", tier });
+    // The page's tier readout states this count, so it is the live
+    // runtime's own, never a configured one (A14).
+    const particles = tier === 3 ? 0 : (field?.runtime.particleCount ?? 0);
+    emit({ type: "ready", tier, particles });
     releaseWaiters();
   }
 
@@ -341,6 +344,7 @@ export function createEngine(
             options.particleCount ??
             tier2ParticleCount(environment.coarsePointer),
         },
+        look: options.look ?? "halftone",
         onFrame: (frameMs) => {
           if (target !== null) onFrame(target, frameMs);
         },

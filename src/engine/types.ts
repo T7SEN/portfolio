@@ -31,8 +31,17 @@ export type TierReason =
   | "no-backend"
   | "device-lost";
 
+/**
+ * How the live field is drawn. halftone: particles splat into a coarse
+ * density target and one dot is drawn per cell (phase P3.5). soft: each
+ * particle drawn as a soft sprite, the look before P3.5, kept as the fallback
+ * where a half-float target cannot be rendered.
+ */
+export type FieldLook = "halftone" | "soft";
+
 export type EngineEvent =
-  | { type: "ready"; tier: Tier }
+  // particles: how many the live field draws; 0 for the tier 3 still.
+  | { type: "ready"; tier: Tier; particles: number }
   | { type: "tierChosen"; tier: Tier; reason: TierReason }
   | { type: "frameRate"; fps: number };
 
@@ -53,9 +62,12 @@ export interface Stage {
 }
 
 /**
- * The stages the page has measured. hero places the dot at the stage's
- * centre and grows the bloom from there; work fits each study's shape inside
- * its stage. A chapter with no stage uses the whole screen.
+ * The stages the page has measured. hero: the dot's place beside the
+ * headline, its centre the dot's and its halves the halo's reach; the bloom
+ * grows from there. work: the frame of the study row in view, sent again on
+ * every scroll frame while the row moves, and each shape forms inside it.
+ * contact: the panel the contact rings centre on. A chapter with no stage
+ * uses the whole screen.
  */
 export type Stages = Partial<Record<ChapterId, Stage>>;
 
@@ -71,9 +83,12 @@ export interface Engine {
   /** Scroll position: the chapter in view and how far through it, 0 to 1. */
   setStory(chapter: ChapterId, progress: number): void;
   /**
-   * Where the hero's dot sits and where the work chapter's shapes form, from
-   * the page's layout. Sent again when the layout changes; each call
-   * replaces the last.
+   * Where the hero's dot sits, where the work chapter's shapes form and where
+   * the contact rings centre, from the page's layout. Sent again when the
+   * layout changes and on every scroll frame while the work row moves; each
+   * call replaces the last. A stage that moves a little between frames is
+   * taken at once, so a shape stays inside its frame while the page scrolls;
+   * a jump glides (REQ-SCR-05).
    */
   setStage(stages: Stages): void;
   /** Pointer in normalised device coordinates: -1 to 1 on both axes, y up. */
@@ -120,6 +135,8 @@ export interface EngineOptions {
   forcedTier?: Tier;
   /** Replaces a tier's particle count. The development page uses it. */
   particleCount?: number;
+  /** Asks for the soft field. The development page uses it (?look=soft). */
+  look?: FieldLook;
   /** Replaced by fakes in unit tests. */
   environment?: () => Promise<Environment>;
   loadRuntime?: () => Promise<RuntimeFactory>;
@@ -138,6 +155,12 @@ export interface RuntimeOptions {
   backend: Backend;
   /** Particles for whichever backend is live after the renderer starts. */
   particleCount: Record<Backend, number>;
+  /**
+   * The look asked for. Asking for halftone can still give soft, when a
+   * half-float target cannot be rendered; read Runtime.look for the one
+   * that is live.
+   */
+  look: FieldLook;
   /** Called after each drawn frame with the time since the one before, in ms. */
   onFrame(frameMs: number): void;
   /** The device or context is gone for good; the runtime must be disposed. */
@@ -147,6 +170,7 @@ export interface RuntimeOptions {
 export interface Runtime {
   readonly backend: Backend;
   readonly particleCount: number;
+  readonly look: FieldLook;
   /** Starts or resumes the frame loop. Safe to call twice. */
   run(): void;
   /** Stops simulating and drawing. Safe to call twice. */

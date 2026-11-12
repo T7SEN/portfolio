@@ -6,6 +6,8 @@ export type TierSnapshot = {
   reason: TierReason | null;
   /** The chosen tier has drawn its first frame, or shows its still. */
   ready: boolean;
+  /** Particles the live field draws, from its ready event; null until then. */
+  particles: number | null;
 };
 
 export type TierStore = {
@@ -22,6 +24,7 @@ const INITIAL: TierSnapshot = Object.freeze({
   tier: null,
   reason: null,
   ready: false,
+  particles: null,
 });
 
 // A plain store with no React import, read through useSyncExternalStore. The
@@ -50,9 +53,14 @@ export function createTierStore(): TierStore {
       if (event.type === "tierChosen") {
         // A tier is not ready until its own ready event arrives, so a change
         // of tier takes the field out of view until the new one has drawn.
-        set({ tier: event.tier, reason: event.reason, ready: false });
+        set({
+          tier: event.tier,
+          reason: event.reason,
+          ready: false,
+          particles: null,
+        });
       } else if (event.type === "ready" && !snapshot.ready) {
-        set({ ...snapshot, ready: true });
+        set({ ...snapshot, ready: true, particles: event.particles });
       }
     },
 

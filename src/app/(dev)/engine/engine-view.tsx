@@ -47,6 +47,10 @@ function readOptions(search: string) {
     options.particleCount = count;
   }
 
+  // ?look=soft keeps the fallback field tested (rule A11); the engine draws
+  // the halftone otherwise, where the device can.
+  if (params.get("look") === "soft") options.look = "soft";
+
   const chapter = CHAPTERS.find((value) => value === params.get("chapter"));
   const progress = Number(params.get("progress") ?? 0);
 
@@ -153,8 +157,17 @@ export function EngineView() {
       chapter: "",
       progress: "",
       stage: stages === null ? "" : "split",
+      look: options.look ?? "",
+      particles: "",
     });
-    if (isBare) view.dataset.bare = "true";
+    // A bare view covers the window, so the page under it must not scroll:
+    // its scrollbar would take its width from the host and the canvas.
+    const root = document.documentElement;
+    const rootOverflow = root.style.overflow;
+    if (isBare) {
+      view.dataset.bare = "true";
+      root.style.overflow = "hidden";
+    }
     select.value = chapter ?? "";
     range.value = String(progress);
     calm.setAttribute("aria-pressed", String(isCalm));
@@ -175,6 +188,7 @@ export function EngineView() {
       } else {
         view.dataset.ready = "true";
         view.dataset.status = event.tier === 3 ? "still" : "running";
+        view.dataset.particles = String(event.particles);
       }
 
       const { status, tier, tierReason, fps } = view.dataset;
@@ -205,6 +219,7 @@ export function EngineView() {
       isCancelled = true;
       engineRef.current = null;
       delete view.dataset.bare;
+      root.style.overflow = rootOverflow;
       // Disposed at once, not after start: start resolves only when the field
       // has drawn, and a field that has left the page never draws.
       void engine?.dispose();
@@ -225,6 +240,8 @@ export function EngineView() {
       data-chapter=""
       data-progress=""
       data-stage=""
+      data-look=""
+      data-particles=""
       className="group mt-4"
     >
       <div className="flex flex-wrap gap-3 group-data-[bare=true]:hidden">

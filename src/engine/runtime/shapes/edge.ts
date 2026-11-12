@@ -1,4 +1,4 @@
-import type { Ring } from "./draw";
+import type { Layer, Ring } from "./draw";
 
 // How near each sampled point lies to its shape's outline, for the rim light
 // (field.ts). Measuring every point against every segment of a drawn mark
@@ -12,7 +12,8 @@ export const EDGE_GRID = 256;
 // The grid reaches a little past the sample square of -1 to 1: every fitted
 // shape touches that square on two sides, and the cells beyond them must be
 // outside, or those sides would have no rim.
-const EXTENT = 1.02;
+export const GRID_EXTENT = 1.02;
+const EXTENT = GRID_EXTENT;
 
 const FAR = 1e20;
 
@@ -157,5 +158,39 @@ export function edgeWeights(
     const t = Math.min(inward / depth, 1);
     weights[point] = 1 - t * t * (3 - 2 * t);
   }
+  return weights;
+}
+
+/**
+ * Edge weights for a layered shape: each point is measured against its own
+ * layer's outline, so every sheet of a stack keeps its rim where another
+ * sheet lies over it. layerOf gives each point's index in `layers`; a point
+ * whose layer is missing weighs 0.
+ */
+export function layerEdgeWeights(
+  layers: readonly Layer[],
+  points: Float32Array,
+  layerOf: Uint8Array,
+  depth: number,
+  grid = EDGE_GRID,
+): Float32Array {
+  const count = Math.floor(points.length / 2);
+  const weights = new Float32Array(count);
+  layers.forEach((layer, index) => {
+    const members: number[] = [];
+    for (let point = 0; point < count; point += 1) {
+      if (layerOf[point] === index) members.push(point);
+    }
+    if (members.length === 0) return;
+    const own = new Float32Array(members.length * 2);
+    members.forEach((point, at) => {
+      own[at * 2] = points[point * 2] ?? 0;
+      own[at * 2 + 1] = points[point * 2 + 1] ?? 0;
+    });
+    const measured = edgeWeights(layer.rings, own, depth, grid);
+    members.forEach((point, at) => {
+      weights[point] = measured[at] ?? 0;
+    });
+  });
   return weights;
 }

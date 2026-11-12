@@ -4,6 +4,30 @@
  */
 export type Ring = number[];
 
+/**
+ * One layer of a shape: rings filled by the even-odd rule, and how far
+ * forward the layer sits, 1 for the front. A layer's fill hides behind any
+ * layer with a greater weight, as the preview's sheets and cards cover the
+ * ones behind them; its outline shows through, so the overlap of two
+ * outlines, or of an outline and the fill in front, reads brighter.
+ */
+export interface Layer {
+  rings: Ring[];
+  weight: number;
+  /**
+   * How dense the layer's fill is against a front layer's fill of 1, before
+   * its weight: low for the faint dotted fill of a sheet or card behind.
+   * 1 when left out.
+   */
+  fill?: number;
+  /**
+   * How dense its outline is, in the same terms, along a band EDGE_BAND
+   * wide (shapes/index.ts): the dotted border the preview draws round each
+   * sheet, card and the bubble. 0 when left out.
+   */
+  edge?: number;
+}
+
 const DEGREE = Math.PI / 180;
 
 function push(out: Ring, x: number, y: number) {
@@ -39,12 +63,6 @@ export function arc(
     push(out, cx + radius * Math.cos(angle), cy + radius * Math.sin(angle));
   }
   return out;
-}
-
-export function circle(cx: number, cy: number, radius: number): Ring {
-  const ring = arc(cx, cy, radius, 0, 360);
-  ring.length -= 2;
-  return ring;
 }
 
 /**
@@ -119,112 +137,6 @@ export function turn(ring: Ring, degrees: number, cx = 0, cy = 0): Ring {
     const dx = (ring[index] ?? 0) - cx;
     const dy = (ring[index + 1] ?? 0) - cy;
     out.push(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos);
-  }
-  return out;
-}
-
-/**
- * The part of a convex ring on the left of the line from (ax, ay) to (bx, by)
- * as drawn on screen, cut along that line.
- */
-export function clip(
-  ring: Ring,
-  ax: number,
-  ay: number,
-  bx: number,
-  by: number,
-): Ring {
-  const side = (px: number, py: number) =>
-    (bx - ax) * (py - ay) - (by - ay) * (px - ax);
-  const out: Ring = [];
-  const count = ring.length / 2;
-  for (let index = 0; index < count; index += 1) {
-    const next = (index + 1) % count;
-    const px = ring[index * 2] ?? 0;
-    const py = ring[index * 2 + 1] ?? 0;
-    const qx = ring[next * 2] ?? 0;
-    const qy = ring[next * 2 + 1] ?? 0;
-    const sideP = side(px, py);
-    const sideQ = side(qx, qy);
-    if (sideP <= 0) push(out, px, py);
-    if (sideP < 0 !== sideQ < 0 && sideP !== 0 && sideQ !== 0) {
-      const t = sideP / (sideP - sideQ);
-      push(out, px + (qx - px) * t, py + (qy - py) * t);
-    }
-  }
-  return out;
-}
-
-/**
- * An open path made from a closed one by leaving out the points within
- * `size` of (x, y), so another stroke can pass through the gap. The points
- * near the gap must be close together, as they are along an arc.
- */
-export function gap(path: Ring, x: number, y: number, size: number): Ring {
-  const count = path.length / 2;
-  const kept = (index: number) =>
-    Math.hypot(
-      (path[(index % count) * 2] ?? 0) - x,
-      (path[(index % count) * 2 + 1] ?? 0) - y,
-    ) > size;
-  let start = 0;
-  while (start < count && kept(start)) start += 1;
-  while (start < count * 2 && !kept(start)) start += 1;
-  const out: Ring = [];
-  for (let index = start; index < start + count && kept(index); index += 1) {
-    out.push(
-      path[(index % count) * 2] ?? 0,
-      path[(index % count) * 2 + 1] ?? 0,
-    );
-  }
-  return out;
-}
-
-/**
- * The band of `width` along a path, as rings. A closed path gives an outer
- * and an inner ring, and the even-odd rule fills the band between them. An
- * open path gives one ring with square ends. Corners are mitred, so a path
- * should turn by less than about 120 degrees at any one point.
- */
-export function stroke(path: Ring, width: number, closed = false): Ring[] {
-  const left = offset(path, width / 2, closed);
-  const right = offset(path, -width / 2, closed);
-  if (closed) return [left, right];
-  for (let index = right.length - 2; index >= 0; index -= 2) {
-    left.push(right[index] ?? 0, right[index + 1] ?? 0);
-  }
-  return [left];
-}
-
-function offset(path: Ring, distance: number, closed: boolean): Ring {
-  const count = path.length / 2;
-  const out: Ring = [];
-  const normal = (from: number, to: number): [number, number] => {
-    const dx = (path[to * 2] ?? 0) - (path[from * 2] ?? 0);
-    const dy = (path[to * 2 + 1] ?? 0) - (path[from * 2 + 1] ?? 0);
-    const length = Math.hypot(dx, dy);
-    return [-dy / length, dx / length];
-  };
-
-  for (let index = 0; index < count; index += 1) {
-    const hasBefore = closed || index > 0;
-    const hasAfter = closed || index < count - 1;
-    const [ix, iy] = normal(
-      hasBefore ? (index + count - 1) % count : index,
-      hasBefore ? index : index + 1,
-    );
-    const [ox, oy] = normal(
-      hasAfter ? index : index - 1,
-      hasAfter ? (index + 1) % count : index,
-    );
-    const mx = ix + ox;
-    const my = iy + oy;
-    const length = Math.hypot(mx, my);
-    const scale = distance / ((mx / length) * ix + (my / length) * iy);
-    out.push(
-      (path[index * 2] ?? 0) + (mx / length) * scale,
-      (path[index * 2 + 1] ?? 0) + (my / length) * scale,
-    );
   }
   return out;
 }

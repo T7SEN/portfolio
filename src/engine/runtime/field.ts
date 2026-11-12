@@ -1,14 +1,20 @@
 import {
-  abs,
   color,
+  cos,
+  exp,
   float,
+  fract,
   instanceIndex,
   max,
   mix,
+  sin,
   smoothstep,
   step,
   uniform,
   uv,
+  vec2,
+  vec3,
+  vec4,
   vertexStage,
 } from "three/tsl";
 import {
@@ -18,11 +24,27 @@ import {
   Scene,
   Sprite,
   SpriteNodeMaterial,
+  Vector2,
+  type Node,
 } from "three/webgpu";
 
 import { colors } from "@/tokens/colors";
 
-import { DOT_RADIUS, homeFor, releasedFor, shapeTexel } from "./simulation";
+import type { FieldLook } from "../types";
+import {
+  BACKDROP_GAIN,
+  LINE_GAIN,
+  RIM_WEIGHT,
+  SPEED_FOR_GLOW,
+  SPRINKLE_MIX,
+  SWIRL_BREATH,
+  SWIRL_GLOW,
+  SWIRL_RADIUS,
+  SWIRL_TURN,
+  splatSize,
+  type Grid,
+} from "./halftone-rules";
+import { DOT_RADIUS, homeFor, releasedFor } from "./simulation";
 import type { Simulation, View } from "./simulation";
 
 const CAMERA_DISTANCE = 5;
@@ -44,14 +66,14 @@ const DISC_FILL = 0.31;
 // is as calm behind text on a phone as on a desktop.
 const COVERAGE = 0.06;
 const MAX_SPRITE_OPACITY = 0.6;
-const SPEED_FOR_GLOW = 0.8;
 const POINTER_FORCE = 0.15;
 
 // The hero's dot: the first DOT_PARTICLES particles are lit, the rest wait
 // unseen inside it. The dot's sprites are larger than the field's so a few
 // hundred make one soft disc, and their light is set so the disc adds about
 // DOT_LIGHT of full violet: additive sprites that overlap past 1 would burn
-// it to white.
+// it to white. The halftone look draws the dot as a disc of its own
+// (halftone.ts) and keeps every parked particle out of the splat.
 export const DOT_PARTICLES = 400;
 const DOT_SPRITE_SIZE = 0.022;
 const DOT_LIGHT = 0.7;
@@ -78,17 +100,15 @@ const FLIGHT_SLOW = 1.2;
 const FLIGHT_FAST = 3;
 const FLIGHT_DIM = 0.8;
 
-// The rim light: a formed particle on its shape's outline adds up to
-// 1 + RIM_GAIN times the light of one inside, and its colour leans toward
-// glow, so a formation reads as a lit edge around a quieter fill rather than
-// a flat silhouette. Shapes carry their edge weight in the atlas (atlas.ts);
-// the sheet lights the outer SHEET_RIM of its half size, and the wave the
-// outer WAVE_RIM of its band's half thickness on each side. Every value is
-// the particle's own, so WebGL2 runs it as WebGPU does (REQ-ENG-05).
+// The rim light of the soft look: a formed particle on its shape's outline
+// adds up to 1 + RIM_GAIN times the light of one inside, and its colour
+// leans toward glow, so a formation reads as a lit edge around a quieter
+// fill rather than a flat silhouette. The rim is the simulation's own per
+// particle value (simulation.ts look), so WebGL2 runs it as WebGPU does
+// (REQ-ENG-05). The halftone look carries the rim to its cells instead,
+// where it turns the edge white.
 const RIM_GAIN = 1.8;
 const RIM_GLOW = 0.6;
-const SHEET_RIM = 0.06;
-const WAVE_RIM = 0.4;
 
 /** The frame at the camera's focus plane, where the pointer and shapes live. */
 export function viewFor(aspect: number): View {
@@ -99,33 +119,45 @@ export function viewFor(aspect: number): View {
   };
 }
 
-export function createField(simulation: Simulation) {
+/** The fract of a mix of the seed: one of the particle's own numbers, 0 to 1. */
+function mixOf(
+  mixes: readonly [number, number, number],
+  seed: Node<"vec3">,
+): Node<"float"> {
+  const [x, y, z] = mixes;
+  return fract(seed.x.mul(x).add(seed.y.mul(y)).add(seed.z.mul(z)));
+}
+
+export function createField(simulation: Simulation, look: FieldLook) {
   const growth = Math.min(
     Math.cbrt(REFERENCE_COUNT / simulation.count),
     MAX_SPRITE_GROWTH,
   );
   const spriteSize = SPRITE_SIZE * growth;
   const spriteOpacity = uniform(0);
-  // Each sprite's share of its light while a formation packs the field
-  // (runtime/story.ts, formedLight).
+  // Each formed particle's share of its light while a formation packs the
+  // field (runtime/story.ts formedLight for the soft look, halftone-rules.ts
+  // halftoneLight for the halftone).
   const light = uniform(1);
+  // How far the formed particles are drawn ahead of where they are
+  // simulated, in world units: the lag of the particles behind a stage that
+  // moves, which the runtime works out and takes off (index.ts, trail).
+  const drawOffset = uniform(new Vector2());
+  // The pointer as drawn, and how strongly the swirl shows, 0 to 1.
+  const swirlCentre = uniform(new Vector2());
+  const swirl = uniform(0);
+  // One splat sprite's size at a view depth of 1 (halftone-rules splatSize).
+  const splatScale = uniform(0);
+  // The share of the backdrop that is lit and the weight of a lit one
+  // (halftone-rules sprinkle), set with the canvas's size.
+  const sprinkleShare = uniform(0);
+  const sprinkleGain = uniform(1);
 
   const position = simulation.positions.toAttribute();
   const speed = simulation.velocities.toAttribute().length();
   const seed = simulation.seeds.toAttribute();
-  const {
-    release,
-    pulse,
-    dotCentre,
-    dotSeed,
-    rankScale,
-    shapeFrom,
-    shapeTo,
-    shapeMix,
-    shapeWeight,
-    sheetWeight,
-    waveWeight,
-  } = simulation;
+  const { release, pulse, dotCentre, dotSeed, rankScale, elapsedSeconds } =
+    simulation;
 
   const released = releasedFor(seed, release, dotSeed, rankScale);
   const isDot = step(float(instanceIndex), DOT_PARTICLES - 0.5);
@@ -141,49 +173,108 @@ export function createField(simulation: Simulation) {
   const flight = smoothstep(FLIGHT_SLOW, FLIGHT_FAST, speed)
     .mul(FLIGHT_DIM)
     .oneMinus();
-  const shapeEdge = mix(
-    shapeTexel(simulation.atlas, shapeFrom).z,
-    shapeTexel(simulation.atlas, shapeTo).z,
-    shapeMix,
-  );
-  const sheetEdge = smoothstep(1 - SHEET_RIM, 1, max(abs(seed.x), abs(seed.y)));
-  const waveEdge = smoothstep(1 - WAVE_RIM, 1, abs(seed.y));
-  const rim = shapeEdge
-    .mul(shapeWeight)
-    .add(sheetEdge.mul(sheetWeight))
-    .add(waveEdge.mul(waveWeight))
-    .min(1);
-  const fieldAlpha = spriteOpacity
-    .mul(light)
-    .mul(released)
-    .mul(arrived)
-    .mul(flight)
-    .mul(rim.mul(RIM_GAIN).add(1));
-  const dotAlpha = pulse.mul(DOT_PULSE_LIGHT).add(1).mul(DOT_OPACITY);
-  const shown = step(1e-3, released.max(dotness));
 
-  const material = new SpriteNodeMaterial();
-  material.positionNode = position;
-  material.colorNode = mix(
-    color(new Color(colors.violet)),
-    color(new Color(colors.glow)),
-    // The rim reads the atlas by the instance index, so it is worked out per
-    // particle in the vertex stage and carried to the fragments.
-    max(smoothstep(0, SPEED_FOR_GLOW, speed), vertexStage(rim).mul(RIM_GLOW)),
+  // The particle's own values from the simulation: rim, layer, line, form,
+  // whether it streams on a flow line and how far the lines have taken over
+  // (simulation.ts look). They read the atlas by the instance index, so
+  // they are worked out in the vertex stage and carried to the fragments.
+  const traits = simulation.look(seed);
+  const back = traits.layer.oneMinus().clamp(0, 1);
+
+  // halftone-rules particleWeight: a formed particle at the formation's
+  // light, a line particle at its line's, and the backdrop by the look's
+  // own rule once the lines have taken the rest (backdropWeight, the
+  // sprinkle, or softBackdropWeight).
+  const { isFlow, flowIn } = traits;
+  const sprinkled = float(1).sub(
+    step(sprinkleShare, mixOf(SPRINKLE_MIX, seed)),
   );
-  material.opacityNode = smoothstep(0.1, 0.5, uv().sub(0.5).length())
+  const backdrop =
+    look === "halftone"
+      ? flowIn.oneMinus().add(flowIn.mul(sprinkled).mul(sprinkleGain))
+      : flowIn.mul(BACKDROP_GAIN - 1).add(1);
+  const free = isFlow
     .oneMinus()
-    .mul(vertexStage(mix(fieldAlpha, dotAlpha, dotness)));
-  // A particle that is not seen has no size, so it costs no fragments: the
-  // hero keeps nearly every particle hidden in the dot.
-  material.scaleNode = mix(
-    float(spriteSize),
-    float(DOT_SPRITE_SIZE),
-    dotness,
-  ).mul(shown);
+    .mul(backdrop)
+    .add(isFlow.mul(flowIn.oneMinus()));
+  const share = traits.form
+    .mul(light)
+    .add(traits.form.oneMinus().mul(free))
+    .add(traits.line.mul(LINE_GAIN));
+  const weight = share.mul(released).mul(arrived).mul(flight);
+
+  // The drawn place: formed particles carried by the stage follow's offset,
+  // then every particle turned about the pointer (halftone-rules swirlTurn).
+  const leaving = step(1e-4, released);
+  const carried = position.xy.add(drawOffset.mul(traits.form.mul(leaving)));
+  const around = carried.sub(swirlCentre);
+  const reach = around.length().div(SWIRL_RADIUS);
+  const closeness = exp(reach.mul(reach).negate()).mul(swirl);
+  const turn = closeness.mul(SWIRL_TURN).mul(
+    sin(elapsedSeconds.mul(2.1).sub(reach.mul(5)))
+      .mul(SWIRL_BREATH)
+      .add(1),
+  );
+  const turned = vec2(
+    around.x.mul(cos(turn)).sub(around.y.mul(sin(turn))),
+    around.x.mul(sin(turn)).add(around.y.mul(cos(turn))),
+  );
+  const drawn = vec3(turned.add(swirlCentre), position.z);
+
+  // halftone-rules speedShare, with the swirl leaning toward glow.
+  const fast = max(
+    smoothstep(0, SPEED_FOR_GLOW, speed),
+    closeness.mul(SWIRL_GLOW),
+  );
+
+  let material: SpriteNodeMaterial;
+  if (look === "halftone") {
+    // The splat: each particle a sprite one splat texel wide, so it lands on
+    // exactly one texel, summed with additive blending into the half-float
+    // splat target; halftone.ts gathers each cell's tent from there. The
+    // blending multiplies rgb by alpha (three r187, AdditiveBlending without
+    // premultiplied alpha: source factor SrcAlpha for colour, One for
+    // alpha), so rgb sums the speed share, the rim and the depth of layer
+    // each times the weight, and alpha sums the weight, and halftone.ts
+    // reads means.
+    // halftone-rules rimWeight: each layer's outline splats heavier.
+    const splatWeight = weight.mul(traits.rim.mul(RIM_WEIGHT).add(1));
+    const channels = vertexStage(vec4(fast, traits.rim, back, splatWeight));
+    material = new SpriteNodeMaterial();
+    material.positionNode = drawn;
+    material.sizeAttenuation = false;
+    material.fragmentNode = channels;
+    // Parked particles, the dot's own among them, are never drawn: the
+    // halftone pass draws the dot as one disc.
+    material.scaleNode = splatScale.mul(step(1e-3, released));
+  } else {
+    const fieldAlpha = spriteOpacity
+      .mul(weight)
+      .mul(traits.rim.mul(RIM_GAIN).add(1));
+    const dotAlpha = pulse.mul(DOT_PULSE_LIGHT).add(1).mul(DOT_OPACITY);
+    const shown = step(1e-3, released.max(dotness));
+    material = new SpriteNodeMaterial();
+    material.positionNode = drawn;
+    material.colorNode = mix(
+      color(new Color(colors.violet)),
+      color(new Color(colors.glow)),
+      max(fast, vertexStage(traits.rim).mul(RIM_GLOW)),
+    );
+    material.opacityNode = smoothstep(0.1, 0.5, uv().sub(0.5).length())
+      .oneMinus()
+      .mul(vertexStage(mix(fieldAlpha, dotAlpha, dotness)));
+    // A particle that is not seen has no size, so it costs no fragments:
+    // the hero keeps nearly every particle hidden in the dot.
+    material.scaleNode = mix(
+      float(spriteSize),
+      float(DOT_SPRITE_SIZE),
+      dotness,
+    ).mul(shown);
+  }
   material.blending = AdditiveBlending;
   material.depthTest = false;
   material.depthWrite = false;
+  material.fog = false;
 
   const particles = new Sprite(material);
   particles.count = simulation.count;
@@ -199,12 +290,13 @@ export function createField(simulation: Simulation) {
   let pointerX = 0;
   let pointerY = 0;
 
+  // The pointer stirs the ambient field, which is drawn where it is
+  // simulated, so the push and the swirl share one place.
   const placePointer = () => {
-    simulation.pointer.value.set(
-      pointerX * view.halfWidth,
-      pointerY * view.halfHeight,
-      simulation.focusZ.value,
-    );
+    const x = pointerX * view.halfWidth;
+    const y = pointerY * view.halfHeight;
+    swirlCentre.value.set(x, y);
+    simulation.pointer.value.set(x, y, simulation.focusZ.value);
   };
 
   return {
@@ -230,6 +322,25 @@ export function createField(simulation: Simulation) {
       return view;
     },
     /**
+     * The halftone look draws into the cell grid, which is a whole number of
+     * cells centred on the canvas: the camera's view is widened by the
+     * grid's padding, so the splat target covers the grid exactly and each
+     * splat sprite is one of its texels. The soft look draws to the canvas
+     * as it is. Call it after setAspect, with the same CSS size.
+     */
+    setGrid(grid: Grid, cssWidth: number, cssHeight: number) {
+      if (look !== "halftone") return;
+      camera.setViewOffset(
+        cssWidth,
+        cssHeight,
+        -grid.padX,
+        -grid.padY,
+        grid.columns * grid.cell,
+        grid.rows * grid.cell,
+      );
+      splatScale.value = splatSize(cssHeight, CAMERA_FOV_DEGREES, grid.cell);
+    },
+    /**
      * Moves the camera by depth (negative is into the field) and the focus
      * plane with it, so the formations stay the same size in the frame and
      * the pointer stays on them.
@@ -245,6 +356,19 @@ export function createField(simulation: Simulation) {
       pointerY = y;
       placePointer();
       simulation.pointerStrength.value = active ? POINTER_FORCE : 0;
+    },
+    /** Draws the formed particles this far ahead, in world units. */
+    setDrawOffset(x: number, y: number) {
+      drawOffset.value.set(x, y);
+    },
+    /** How strongly the swirl shows round the pointer, 0 to 1. */
+    setSwirl(amount: number) {
+      swirl.value = amount;
+    },
+    /** The lit share of the backdrop and a lit particle's weight. */
+    setSprinkle(share: number, gain: number) {
+      sprinkleShare.value = share;
+      sprinkleGain.value = gain;
     },
   };
 }

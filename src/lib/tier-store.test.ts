@@ -5,7 +5,7 @@ import { createTierStore, tierStore } from "./tier-store";
 describe("tier store", () => {
   it("REQ-CNT-10 starts with no tier, on the server and in the browser", () => {
     const store = createTierStore();
-    const initial = { tier: null, reason: null, ready: false };
+    const initial = { tier: null, reason: null, ready: false, particles: null };
     expect(store.getSnapshot()).toEqual(initial);
     expect(store.getServerSnapshot()).toEqual(initial);
   });
@@ -17,32 +17,49 @@ describe("tier store", () => {
       tier: 2,
       reason: "no-webgpu",
       ready: false,
+      particles: null,
     });
   });
 
-  it("REQ-ENG-03 ready marks the chosen tier ready", () => {
+  it("REQ-ENG-03 ready marks the chosen tier ready and mirrors the particles its field draws", () => {
     const store = createTierStore();
     store.apply({ type: "tierChosen", tier: 1, reason: "probe-pass" });
-    store.apply({ type: "ready", tier: 1 });
+    store.apply({ type: "ready", tier: 1, particles: 1_000_000 });
     expect(store.getSnapshot()).toEqual({
       tier: 1,
       reason: "probe-pass",
       ready: true,
+      particles: 1_000_000,
     });
   });
 
-  it("REQ-ENG-08 a later tierChosen clears ready until that tier reports ready", () => {
+  it("REQ-ENG-03 REQ-CNT-10 the tier 3 still reports no particles, and the store says so", () => {
+    const store = createTierStore();
+    store.apply({ type: "tierChosen", tier: 3, reason: "save-data" });
+    expect(store.getSnapshot().particles).toBeNull();
+    store.apply({ type: "ready", tier: 3, particles: 0 });
+    expect(store.getSnapshot()).toEqual({
+      tier: 3,
+      reason: "save-data",
+      ready: true,
+      particles: 0,
+    });
+  });
+
+  it("REQ-ENG-08 a later tierChosen clears ready and the old count until that tier reports ready", () => {
     const store = createTierStore();
     store.apply({ type: "tierChosen", tier: 1, reason: "probe-pass" });
-    store.apply({ type: "ready", tier: 1 });
+    store.apply({ type: "ready", tier: 1, particles: 1_000_000 });
     store.apply({ type: "tierChosen", tier: 2, reason: "device-lost" });
     expect(store.getSnapshot()).toEqual({
       tier: 2,
       reason: "device-lost",
       ready: false,
+      particles: null,
     });
-    store.apply({ type: "ready", tier: 2 });
+    store.apply({ type: "ready", tier: 2, particles: 250_000 });
     expect(store.getSnapshot().ready).toBe(true);
+    expect(store.getSnapshot().particles).toBe(250_000);
   });
 
   it("REQ-ENG-03 frameRate changes nothing and wakes no listener", () => {
@@ -59,11 +76,11 @@ describe("tier store", () => {
   it("REQ-ENG-03 a repeated ready keeps the same snapshot object", () => {
     const store = createTierStore();
     store.apply({ type: "tierChosen", tier: 3, reason: "save-data" });
-    store.apply({ type: "ready", tier: 3 });
+    store.apply({ type: "ready", tier: 3, particles: 0 });
     const before = store.getSnapshot();
     const listener = vi.fn();
     store.subscribe(listener);
-    store.apply({ type: "ready", tier: 3 });
+    store.apply({ type: "ready", tier: 3, particles: 0 });
     expect(store.getSnapshot()).toBe(before);
     expect(listener).not.toHaveBeenCalled();
   });
@@ -73,7 +90,7 @@ describe("tier store", () => {
     const listener = vi.fn();
     const unsubscribe = store.subscribe(listener);
     store.apply({ type: "tierChosen", tier: 2, reason: "phone" });
-    store.apply({ type: "ready", tier: 2 });
+    store.apply({ type: "ready", tier: 2, particles: 100_000 });
     expect(listener).toHaveBeenCalledTimes(2);
     unsubscribe();
     store.apply({ type: "tierChosen", tier: 3, reason: "device-lost" });
@@ -92,7 +109,7 @@ describe("tier store", () => {
   it("REQ-ENG-07 reset returns to the first snapshot and tells listeners once", () => {
     const store = createTierStore();
     store.apply({ type: "tierChosen", tier: 1, reason: "probe-pass" });
-    store.apply({ type: "ready", tier: 1 });
+    store.apply({ type: "ready", tier: 1, particles: 1_000_000 });
     const listener = vi.fn();
     store.subscribe(listener);
     store.reset();

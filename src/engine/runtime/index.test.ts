@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { WORK_SHAPES } from "../story";
-import type { Backend, RuntimeOptions } from "../types";
+import type { Backend, ChapterId, FieldLook, RuntimeOptions } from "../types";
+import { sprinkle } from "./halftone-rules";
+import { FLOW_SHARE } from "./story";
 
 // The runtime with three.js, the simulation and the field replaced by
 // recorders: jsdom has no GPU, and what is checked here is the order of the
@@ -35,7 +37,9 @@ const fakes = vi.hoisted(() => {
       shapeScaleTo: { value: 1 },
       shapeWeight: { value: 0 },
       sheetWeight: { value: 0 },
-      waveWeight: { value: 0 },
+      strandsWeight: { value: 0 },
+      ringsWeight: { value: 0 },
+      keep: { value: 0 },
       noiseLevel: { value: 1 },
       pulse: { value: 0 },
       dotCentre: { value: vector() },
@@ -43,9 +47,27 @@ const fakes = vi.hoisted(() => {
       rankScale: { value: Math.SQRT1_2 },
       shapeCentre: { value: vector() },
     },
+    /** Each advanceFlow call: the step's seconds and the release it ran with. */
+    flows: [] as Array<[number, number]>,
+    resetFlows: 0,
+    /** Every targets object applyTargets was handed. */
+    applied: [] as unknown[],
     /** Every depth the field's focus plane was moved to. */
     focus: [] as number[],
     light: { value: 1 },
+    /** The field's draw offset, swirl, sprinkle and grids, as last set. */
+    drawOffset: [0, 0] as [number, number],
+    swirl: 0,
+    sprinkle: [0, 0] as [number, number],
+    grids: [] as Array<Record<string, number>>,
+    /** What the start check reports, and the halftone each runtime made. */
+    halftoneWorks: true,
+    halftones: [] as Array<{
+      resizes: Array<[number, number, number]>;
+      hero: Record<string, number> | null;
+      frame: Record<string, number> | null;
+      formed: number;
+    }>,
     /** Every atlas texture made, and the texture each simulation was given. */
     textures: [] as Array<Record<string, unknown>>,
     simulationAtlas: [] as unknown[],
@@ -187,6 +209,55 @@ const fakes = vi.hoisted(() => {
   /** The push of an active pointer, standing in for field.ts's force. */
   const PUSH = 0.15;
 
+  /** A halftone that records what the runtime sets and draws through it. */
+  function createHalftone(count: number) {
+    state.log.push(`halftone for ${count}`);
+    const record = {
+      resizes: [] as Array<[number, number, number]>,
+      hero: null as Record<string, number> | null,
+      frame: null as Record<string, number> | null,
+      formed: 0,
+    };
+    state.halftones.push(record);
+    return {
+      resize(
+        grid: { columns: number; rows: number },
+        width: number,
+        height: number,
+        ratio: number,
+      ) {
+        void width;
+        void height;
+        record.resizes.push([grid.columns, grid.rows, ratio]);
+      },
+      setHero(hero: Record<string, number>) {
+        record.hero = { ...hero };
+      },
+      setFrame(frame: Record<string, number>) {
+        record.frame = { ...frame };
+      },
+      setFormed(value: number) {
+        record.formed = value;
+      },
+      // The splat goes through the renderer, so a draw still logs "render".
+      render(renderer: { render: () => void }) {
+        state.log.push("halftone render");
+        renderer.render();
+      },
+      dispose() {
+        if (state.throwingPart === "halftone") {
+          throw new Error("halftone is stuck");
+        }
+        state.log.push("halftone dispose");
+      },
+    };
+  }
+
+  function halftoneWorks() {
+    state.log.push("halftone check");
+    return Promise.resolve(state.halftoneWorks);
+  }
+
   return {
     state,
     part,
@@ -195,6 +266,8 @@ const fakes = vi.hoisted(() => {
     Timer,
     WebGPURenderer,
     ResizeObserver,
+    createHalftone,
+    halftoneWorks,
   };
 });
 
@@ -207,10 +280,15 @@ vi.mock("three/webgpu", () => ({
   WebGPURenderer: fakes.WebGPURenderer,
 }));
 
+vi.mock("./halftone", () => ({
+  createHalftone: fakes.createHalftone,
+  halftoneWorks: fakes.halftoneWorks,
+}));
+
 // Every shape gets the same square box, so its fit is easy to predict.
 vi.mock("./atlas", async () => {
   const { WORK_SHAPES: shapes } = await import("../story");
-  const ids = ["logo", ...shapes];
+  const ids = ["logo", "wordmark", ...shapes];
   return {
     packAtlas: () => {
       fakes.state.packs += 1;
@@ -229,9 +307,12 @@ vi.mock("./atlas", async () => {
 
 vi.mock("./simulation", () => ({
   FIELD_MARGIN: 1.1,
+  FORM_PULL: 9,
+  FORM_DRAG: 5.5,
   createSimulation: (count: number, view: unknown, atlas: unknown) => {
     void view;
     fakes.state.simulationAtlas.push(atlas);
+    const { story: uniforms } = fakes.state;
     return {
       count,
       positions: { value: fakes.part("positions") },
@@ -240,8 +321,40 @@ vi.mock("./simulation", () => ({
       stepSeconds: fakes.state.stepSeconds,
       elapsedSeconds: { value: 0 },
       reseat: fakes.state.reseat,
-      ...fakes.state.story,
+      ...uniforms,
       update: fakes.part("update"),
+      // As simulation.ts does: every target uniform from the targets.
+      applyTargets(
+        targets: {
+          shapeFrom: string;
+          shapeTo: string;
+          shapeMix: number;
+          shape: number;
+          sheet: number;
+          strands: number;
+          rings: number;
+          keep: number;
+          noise: number;
+        },
+        index: Record<string, number>,
+      ) {
+        fakes.state.applied.push(targets);
+        uniforms.shapeFrom.value = index[targets.shapeFrom] ?? -1;
+        uniforms.shapeTo.value = index[targets.shapeTo] ?? -1;
+        uniforms.shapeMix.value = targets.shapeMix;
+        uniforms.shapeWeight.value = targets.shape;
+        uniforms.sheetWeight.value = targets.sheet;
+        uniforms.strandsWeight.value = targets.strands;
+        uniforms.ringsWeight.value = targets.rings;
+        uniforms.keep.value = targets.keep;
+        uniforms.noiseLevel.value = targets.noise;
+      },
+      advanceFlow(seconds: number, release: number) {
+        fakes.state.flows.push([seconds, release]);
+      },
+      resetFlow() {
+        fakes.state.resetFlows += 1;
+      },
     };
   },
 }));
@@ -252,24 +365,40 @@ vi.mock("./field", () => ({
     halfHeight: 1,
     cameraDistance: 5,
   }),
-  createField: () => ({
-    scene: {},
-    camera: {},
-    material: fakes.part("material"),
-    light: fakes.state.light,
-    setAspect(aspect: number) {
-      fakes.state.log.push(`aspect ${aspect}`);
-      return { halfWidth: aspect, halfHeight: 1, cameraDistance: 5 };
-    },
-    setFocus(depth: number) {
-      fakes.state.focus.push(depth);
-    },
-    // As field.ts does: an inactive pointer has no push.
-    setPointer(x: number, y: number, active: boolean) {
-      fakes.state.pointerAt = [x, y];
-      fakes.state.pointerStrength.value = active ? fakes.PUSH : 0;
-    },
-  }),
+  createField: (simulation: unknown, look: string) => {
+    void simulation;
+    fakes.state.log.push(`field ${look}`);
+    return {
+      scene: {},
+      camera: {},
+      material: fakes.part("material"),
+      light: fakes.state.light,
+      setAspect(aspect: number) {
+        fakes.state.log.push(`aspect ${aspect}`);
+        return { halfWidth: aspect, halfHeight: 1, cameraDistance: 5 };
+      },
+      setGrid(grid: Record<string, number>) {
+        fakes.state.grids.push({ ...grid });
+      },
+      setFocus(depth: number) {
+        fakes.state.focus.push(depth);
+      },
+      // As field.ts does: an inactive pointer has no push.
+      setPointer(x: number, y: number, active: boolean) {
+        fakes.state.pointerAt = [x, y];
+        fakes.state.pointerStrength.value = active ? fakes.PUSH : 0;
+      },
+      setDrawOffset(x: number, y: number) {
+        fakes.state.drawOffset = [x, y];
+      },
+      setSwirl(amount: number) {
+        fakes.state.swirl = amount;
+      },
+      setSprinkle(share: number, gain: number) {
+        fakes.state.sprinkle = [share, gain];
+      },
+    };
+  },
 }));
 
 const { createRuntime } = await import("./index");
@@ -282,7 +411,12 @@ const settle = (reseat: number[] = []) => [
   ...Array<number>(SETTLE_STEPS).fill(0),
 ];
 
-function mount(backend: Backend = "webgpu", width = 1000, height = 500) {
+function mount(
+  backend: Backend = "webgpu",
+  width = 1000,
+  height = 500,
+  look: FieldLook = "halftone",
+) {
   const size = { width, height };
   const canvas = document.createElement("canvas");
   Object.defineProperty(canvas, "clientWidth", { get: () => size.width });
@@ -294,6 +428,7 @@ function mount(backend: Backend = "webgpu", width = 1000, height = 500) {
     canvas,
     backend,
     particleCount: { webgpu: 1000, webgl2: 250 },
+    look,
     onFrame,
     onLost,
   };
@@ -309,6 +444,12 @@ function mount(backend: Backend = "webgpu", width = 1000, height = 500) {
 
 const count = (entry: string) =>
   state.log.filter((line) => line === entry).length;
+
+/**
+ * Lets the microtask run that settles a calm field once for the commands of
+ * the task before it (runtime/index.ts, payStill).
+ */
+const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
   vi.stubGlobal("ResizeObserver", fakes.ResizeObserver);
@@ -332,6 +473,15 @@ afterEach(() => {
   story.noiseLevel.value = 1;
   story.shapeScaleFrom.value = 1;
   story.shapeScaleTo.value = 1;
+  state.flows.length = 0;
+  state.resetFlows = 0;
+  state.applied.length = 0;
+  state.drawOffset = [0, 0];
+  state.swirl = 0;
+  state.sprinkle = [0, 0];
+  state.grids.length = 0;
+  state.halftoneWorks = true;
+  state.halftones.length = 0;
   state.focus.length = 0;
   state.light.value = 1;
   state.textures.length = 0;
@@ -462,14 +612,17 @@ describe("the story", () => {
     const { options } = mount();
     const runtime = await createRuntime(options);
 
+    // The field chapter: the mark morphing into the wordmark (atlas rows 0
+    // and 1).
     runtime.setStory("bloom", 0.6);
     expect(story.shapeWeight.value).toBe(1);
     expect(story.shapeFrom.value).toBe(0);
-    expect(story.shapeTo.value).toBe(0);
+    expect(story.shapeTo.value).toBe(1);
 
+    // The work shapes follow the mark and the wordmark in the atlas.
     runtime.setStory("work", 2.5 / WORK_SHAPES.length);
     expect(story.shapeWeight.value).toBe(1);
-    expect(story.shapeFrom.value).toBe(1 + 2);
+    expect(story.shapeFrom.value).toBe(2 + 2);
     expect(story.shapeMix.value).toBe(0);
 
     runtime.setStory("making-of", 0.5);
@@ -478,11 +631,27 @@ describe("the story", () => {
 
     runtime.setStory("about", 0.5);
     expect(story.sheetWeight.value).toBe(0);
-    expect(story.waveWeight.value).toBe(1);
+    expect(story.strandsWeight.value).toBe(1);
 
     runtime.setStory("contact", 0.5);
-    expect(story.waveWeight.value).toBe(0);
+    expect(story.strandsWeight.value).toBe(0);
+    expect(story.ringsWeight.value).toBe(1);
     expect(story.noiseLevel.value).toBeLessThan(1);
+  });
+
+  test("REQ-SCR-07 every chapter's targets reach the simulation through applyTargets, with the atlas's own rows", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+
+    runtime.setStory("bloom", 0.6);
+    runtime.setStory("about", 0.5);
+
+    expect(state.applied).toHaveLength(2);
+    expect(state.applied[0]).toMatchObject({
+      shapeFrom: "logo",
+      shapeTo: "wordmark",
+    });
+    expect(state.applied[1]).toMatchObject({ strands: 1, shape: 0 });
   });
 
   test("REQ-SCR-01 shapes are sized for the frame they are in, and again when it changes shape", async () => {
@@ -490,12 +659,19 @@ describe("the story", () => {
     const runtime = await createRuntime(options);
     runtime.setStory("bloom", 0.6);
 
-    // Half frame 2 by 1 and a square box of half side 1: the height binds.
-    expect(story.shapeScaleFrom.value).toBeCloseTo(0.8);
+    // The field chapter forms in the middle 0.8 of the frame (story.ts,
+    // BLOOM_STAGE). Half frame 2 by 1, so a stage of 1.6 by 0.8, and a
+    // square box of half side 1: the height binds.
+    expect(story.shapeScaleFrom.value).toBeCloseTo(0.8 * 0.8);
+    resizeTo(800, 1000);
+    // Half frame 0.8 by 1, not narrow: now the width binds, a stage of
+    // 0.64 by 0.8.
+    expect(story.shapeScaleFrom.value).toBeCloseTo(0.64 * 0.8);
+    expect(story.shapeScaleTo.value).toBeCloseTo(0.64 * 0.8);
+    // A narrow frame forms across the whole width (story.ts,
+    // NARROW_BLOOM_STAGE): half frame 0.5 by 1.
     resizeTo(400, 800);
-    // Half frame 0.5 by 1: now the width binds.
-    expect(story.shapeScaleFrom.value).toBeCloseTo(0.4);
-    expect(story.shapeScaleTo.value).toBeCloseTo(0.4);
+    expect(story.shapeScaleFrom.value).toBeCloseTo(0.5 * 0.8);
   });
 
   test("REQ-SCR-05 a story sent before the field has stepped starts the field on its targets, with no glide", async () => {
@@ -563,21 +739,41 @@ describe("the story", () => {
     expect(state.computes.filter((value) => value === 1)).toHaveLength(1);
   });
 
-  test("REQ-A11Y-06 a formation dims each sprite toward the share of the frame it packs into, over time", async () => {
-    const { options } = mount("webgpu", 1000, 500);
-    const runtime = await createRuntime(options);
-    runtime.setStory("contact", 0.5);
-    runtime.run();
-    state.loop?.(16);
-    expect(state.light.value).toBe(1);
+  test.each(["soft", "halftone"] satisfies FieldLook[])(
+    "REQ-A11Y-06 a formation dims each particle toward the share of the frame it packs into, over time (%s)",
+    async (look) => {
+      const { options } = mount("webgpu", 1000, 500, look);
+      const runtime = await createRuntime(options);
+      // The hero forms nothing: every particle at its full light.
+      runtime.setStory("hero", 0);
+      runtime.run();
+      state.loop?.(16);
+      expect(state.light.value).toBe(1);
 
-    runtime.setStory("bloom", 0.6);
-    state.loop?.(32);
-    const dimming = state.light.value;
-    expect(dimming).toBeLessThan(1);
-    for (let frame = 0; frame < 600; frame += 1) state.loop?.(48 + frame);
-    expect(state.light.value).toBeLessThan(dimming);
-    expect(state.light.value).toBeGreaterThan(0);
+      runtime.setStory("bloom", 0.6);
+      state.loop?.(32);
+      const dimming = state.light.value;
+      expect(dimming).toBeLessThan(1);
+      for (let frame = 0; frame < 600; frame += 1) state.loop?.(48 + frame);
+      expect(state.light.value).toBeLessThan(dimming);
+      expect(state.light.value).toBeGreaterThan(0);
+    },
+  );
+
+  test("REQ-A11Y-06 the halftone's formed light brings a formation's fill to the glow token's tone, not the soft look's", async () => {
+    const lights: number[] = [];
+    for (const look of ["soft", "halftone"] satisfies FieldLook[]) {
+      const { options } = mount("webgpu", 1000, 500, look);
+      const runtime = await createRuntime(options);
+      runtime.setStory("bloom", 0.6);
+      lights.push(state.light.value);
+      await runtime.dispose();
+    }
+    const [soft, halftone] = lights;
+    expect(soft).toBeLessThan(1);
+    expect(halftone).toBeLessThan(1);
+    // Two rules, two values: soft formedLight, halftone halftoneLight.
+    expect(halftone).not.toBeCloseTo(soft ?? 0, 3);
   });
 
   test("REQ-A11Y-03 the hero's dot breathes while the field runs and is at rest in a still", async () => {
@@ -606,23 +802,76 @@ describe("the calm story", () => {
     state.computes.length = 0;
 
     runtime.setStory("work", 0.15);
+    await settled();
     expect(state.computes).toEqual([]);
     expect(count("render")).toBe(1);
 
-    runtime.setStory("work", 0.3);
+    // The second of the three studies: its shape follows the mark and the
+    // wordmark in the atlas.
+    runtime.setStory("work", 0.4);
+    // Aimed at once, settled and drawn once the task's commands are in.
+    expect(story.shapeFrom.value).toBe(2 + 1);
+    expect(state.computes).toEqual([]);
+    await settled();
     expect(state.computes).toEqual(settle());
     expect(count("render")).toBe(2);
-    expect(story.shapeFrom.value).toBe(1 + 1);
 
     runtime.setStory("about", 0.1);
+    await settled();
     expect(state.computes).toEqual(settle(settle()));
     expect(count("render")).toBe(3);
-    expect(story.waveWeight.value).toBe(1);
+    expect(story.strandsWeight.value).toBe(1);
 
     runtime.setStory("about", 0.95);
+    await settled();
     expect(state.computes).toHaveLength(SETTLE_STEPS * 2);
     expect(count("render")).toBe(3);
     expect(state.loop).toBeNull();
+  });
+
+  test("REQ-A11Y-03 a stage and a story sent together to a calm field settle it once and draw it once", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    const work = { x: 0.5, y: 0, halfWidth: 0.5, halfHeight: 0.5 };
+    runtime.setStage({ work });
+    runtime.setStory("work", 0.1);
+    await runtime.drawStill();
+    state.computes.length = 0;
+    const renders = count("render");
+
+    // The page sends the next row's frame, then the story that names it.
+    runtime.setStage({ work: { ...work, y: 0.4 } });
+    runtime.setStory("work", 0.5);
+    expect(state.computes).toEqual([]);
+    await settled();
+
+    // One seat on the new stage and one settle toward the new study's
+    // still: not a settle for the stage and another for the story.
+    expect(state.computes).toEqual(settle([1]));
+    expect(count("render")).toBe(renders + 1);
+    expect(story.shapeCentre.value.y).toBeCloseTo(0.4);
+    expect(story.shapeFrom.value).toBe(2 + 1);
+
+    // Nothing more is owed.
+    await settled();
+    expect(state.computes).toEqual(settle([1]));
+    expect(count("render")).toBe(renders + 1);
+  });
+
+  test("REQ-A11Y-03 a still drawn in the same task pays what the field owes, so it is not drawn twice", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStory("work", 0.1);
+    await runtime.drawStill();
+    state.computes.length = 0;
+    const renders = count("render");
+
+    runtime.setStory("about", 0.5);
+    await runtime.drawStill();
+    expect(count("render")).toBe(renders + 1);
+    await settled();
+    expect(count("render")).toBe(renders + 1);
+    expect(state.computes).toEqual(settle());
   });
 
   test("REQ-A11Y-03 the calm still is the chapter at its fullest, not where the scroll stood", async () => {
@@ -701,6 +950,7 @@ describe("the calm story", () => {
     state.pushes.length = 0;
 
     runtime.setStory("about", 0.5);
+    await settled();
     resizeTo(500, 1000);
 
     // A new chapter's settle, then a seat and a settle for the new shape.
@@ -720,6 +970,7 @@ describe("the calm story", () => {
     state.computes.length = 0;
 
     runtime.setStory("contact", 0.5);
+    await settled();
     expect(state.computes).toEqual(settle());
     expect(count("render")).toBe(1);
 
@@ -736,7 +987,9 @@ describe("the calm story", () => {
 
     state.computeThrows = true;
     expect(() => runtime.setStory("about", 0.5)).not.toThrow();
+    await settled();
     expect(() => runtime.setStory("contact", 0.5)).not.toThrow();
+    await settled();
 
     expect(onLost).toHaveBeenCalledTimes(1);
     expect(onLost).toHaveBeenCalledWith("compute broke");
@@ -783,6 +1036,7 @@ describe("teardown", () => {
       "loop off",
       "update dispose",
       "material dispose",
+      "halftone dispose",
       "positions dispose",
       "velocities dispose",
       "seeds dispose",
@@ -799,7 +1053,7 @@ describe("teardown", () => {
     expect(state.log).not.toContain("render");
   });
 
-  test.each(["material", "atlas"])(
+  test.each(["material", "halftone", "atlas"])(
     "REQ-ENG-07 a part that cannot be freed (%s) does not keep the rest or the renderer alive",
     async (stuck) => {
       const { options } = mount();
@@ -813,6 +1067,7 @@ describe("teardown", () => {
         [
           "update dispose",
           "material dispose",
+          "halftone dispose",
           "positions dispose",
           "velocities dispose",
           "seeds dispose",
@@ -973,9 +1228,9 @@ describe("the stage", () => {
     expect(story.dotSeed.value.y).toBeCloseTo(-0.5 / 1.1);
     expect(story.rankScale.value).toBeCloseTo(1 / Math.hypot(1, 1 + 0.5 / 1.1));
 
-    // Other chapters form in the whole frame, around its middle.
+    // The field chapter forms in its own middle stage, 0.8 of the frame.
     runtime.setStory("bloom", 0.6);
-    expect(story.shapeScaleFrom.value).toBeCloseTo(0.8);
+    expect(story.shapeScaleFrom.value).toBeCloseTo(0.8 * 0.8);
   });
 
   test("REQ-SCR-05 a new stage on a running field glides there over a few frames", async () => {
@@ -1006,8 +1261,323 @@ describe("the stage", () => {
     state.computes.length = 0;
 
     runtime.setStage(stages);
+    await settled();
     expect(count("render")).toBe(renders + 1);
     expect(state.computes).toEqual(settle([1]));
     expect(story.shapeCentre.value.x).toBeCloseTo(1);
+  });
+
+  test("REQ-SCR-07 on a narrow frame the field chapter forms across the whole width", async () => {
+    // 400 by 800: half a frame of 0.5 by 1, under NARROW_ASPECT.
+    const { options } = mount("webgpu", 400, 800);
+    const runtime = await createRuntime(options);
+    runtime.setStory("bloom", 0.6);
+    // The whole width (0.5) at SHAPE_FIT, against 0.8 of it on a wide frame.
+    expect(story.shapeScaleFrom.value).toBeCloseTo(0.5 * 0.8);
+  });
+});
+
+describe("the look", () => {
+  test("REQ-ENG-08 a device that cannot draw and blend a half-float target gets the soft field, never an empty one", async () => {
+    state.halftoneWorks = false;
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+
+    expect(runtime.look).toBe("soft");
+    expect(state.log).toContain("halftone check");
+    expect(state.log).toContain("field soft");
+    expect(state.halftones).toHaveLength(0);
+    await runtime.drawStill();
+    expect(count("render")).toBe(1);
+    expect(state.log).not.toContain("halftone render");
+  });
+
+  test.each(["webgpu", "webgl2"] satisfies Backend[])(
+    "REQ-ENG-05 REQ-ENG-08 where the start check passes on %s, the field is drawn through the halftone's passes",
+    async (backend) => {
+      state.isWebGL = backend === "webgl2";
+      const { options } = mount(backend);
+      const runtime = await createRuntime(options);
+
+      expect(runtime.look).toBe("halftone");
+      expect(state.log).toContain("field halftone");
+      expect(state.log).toContain(`halftone for ${runtime.particleCount}`);
+      // The check runs once the renderer has started, before the field.
+      expect(state.log.indexOf("halftone check")).toBeLessThan(
+        state.log.indexOf("field halftone"),
+      );
+      await runtime.drawStill();
+      expect(count("halftone render")).toBe(1);
+      expect(count("render")).toBe(1);
+    },
+  );
+
+  test("REQ-ENG-08 a runtime asked for the soft look draws it without the check", async () => {
+    const { options } = mount("webgpu", 1000, 500, "soft");
+    const runtime = await createRuntime(options);
+
+    expect(runtime.look).toBe("soft");
+    expect(state.log).not.toContain("halftone check");
+    expect(state.halftones).toHaveLength(0);
+  });
+});
+
+describe("the halftone's grid", () => {
+  test("REQ-PERF-06 the halftone is sized in 8 px cells from the CSS size, and keeps the same cells across the adaptive resolution's steps", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    const halftone = state.halftones[0];
+    expect(halftone?.resizes).toEqual([[125, 63, 1]]);
+    expect(state.grids.at(-1)).toMatchObject({ columns: 125, rows: 63 });
+
+    // Frames of 30 ms, slower than the adaptive rule allows: the ratio
+    // steps down, the buffer is sized again, and the cells stay.
+    runtime.run();
+    for (let frame = 0; frame < 60; frame += 1) state.loop?.(frame * 30);
+
+    expect(state.log).toContain("size 1000 500 0.75");
+    expect(halftone?.resizes.at(-1)).toEqual([125, 63, 0.75]);
+    expect(state.grids.at(-1)).toMatchObject({ columns: 125, rows: 63 });
+  });
+
+  test("REQ-PERF-06 the lit share of the backdrop is set from the particle count and the CSS size, and again on a resize", async () => {
+    const { options, resizeTo } = mount("webgpu", 1000, 500);
+    await createRuntime(options);
+    const first = sprinkle(1000, 1000, 500, FLOW_SHARE);
+    expect(state.sprinkle).toEqual([first.share, first.gain]);
+
+    resizeTo(400, 800);
+    const second = sprinkle(1000, 400, 800, FLOW_SHARE);
+    expect(state.sprinkle).toEqual([second.share, second.gain]);
+  });
+});
+
+describe("the hero dot and the work frame in the halftone", () => {
+  const hero = { x: 0.5, y: -0.5, halfWidth: 0.25, halfHeight: 0.5 };
+
+  test("REQ-SCR-07 the dot is drawn at the hero stage in CSS pixels, its halo's reach from the stage's halves, lit in the hero and gone once the bloom lets the field go", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage({ hero });
+    runtime.setStory("hero", 0);
+    await runtime.drawStill();
+
+    // Halves of 250 and 125 CSS px: a round halo takes 125.
+    expect(state.halftones[0]?.hero).toEqual({
+      x: 750,
+      y: 375,
+      reach: 125,
+      light: 1,
+      pulse: 0,
+    });
+
+    runtime.run();
+    runtime.setStory("bloom", 0.6);
+    for (let frame = 0; frame < 200; frame += 1) state.loop?.(16 * frame);
+    expect(state.halftones[0]?.hero?.light).toBe(0);
+  });
+
+  test("REQ-SCR-01 the frame's lattice sits exactly on the work frame the page sends, moves with it at once, and shows only in the work chapter", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    const work = { x: 0.5, y: 0, halfWidth: 0.5, halfHeight: 0.5 };
+    runtime.setStage({ work });
+    runtime.setStory("work", 0.5);
+    runtime.run();
+    for (let frame = 0; frame < 200; frame += 1) state.loop?.(16 * frame);
+
+    const record = state.halftones[0];
+    expect(record?.frame).toMatchObject({
+      x: 750,
+      y: 250,
+      halfWidth: 250,
+      halfHeight: 125,
+    });
+    expect(record?.frame?.light).toBeGreaterThan(0.99);
+
+    // The row moves up the screen: the lattice is on it in the next frame.
+    runtime.setStage({ work: { ...work, y: 0.1 } });
+    state.loop?.(3216);
+    expect(record?.frame?.y).toBeCloseTo(225);
+
+    runtime.setStory("about", 0.5);
+    for (let frame = 0; frame < 200; frame += 1) {
+      state.loop?.(3232 + 16 * frame);
+    }
+    expect(record?.frame?.light).toBeLessThan(0.01);
+  });
+
+  test("REQ-A11Y-06 only a study shape or the sheet turns its densest cells white; the about strands and the contact rings never do", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    const record = state.halftones[0];
+    runtime.run();
+    let time = 0;
+    const settleFor = (chapter: ChapterId, progress: number) => {
+      runtime.setStory(chapter, progress);
+      for (let frame = 0; frame < 200; frame += 1) {
+        time += 16;
+        state.loop?.(time);
+      }
+      return record?.formed ?? Number.NaN;
+    };
+
+    expect(settleFor("work", 0.5)).toBeGreaterThan(0.99);
+    expect(settleFor("making-of", 0.5)).toBeGreaterThan(0.99);
+    expect(settleFor("about", 0.5)).toBeLessThan(0.01);
+    expect(settleFor("contact", 0.9)).toBeLessThan(0.01);
+  });
+});
+
+describe("the stage follow", () => {
+  const work = { x: 0.5, y: 0, halfWidth: 0.5, halfHeight: 0.5 };
+
+  async function formedOnStage() {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage({ work });
+    runtime.setStory("work", 0.5);
+    runtime.run();
+    for (let frame = 0; frame < 300; frame += 1) state.loop?.(16 * frame);
+    return runtime;
+  }
+
+  test("REQ-SCR-05 a work stage that moves a little between frames is taken at once, and the formed particles are drawn ahead by their lag until they catch up", async () => {
+    const runtime = await formedOnStage();
+    expect(story.shapeCentre.value.y).toBeCloseTo(0, 6);
+    expect(state.drawOffset[1]).toBeCloseTo(0, 6);
+
+    // A tenth of the screen's half height: taken at once, no glide.
+    runtime.setStage({ work: { ...work, y: 0.1 } });
+    state.loop?.(4816);
+    expect(story.shapeCentre.value.y).toBeCloseTo(0.1, 6);
+    // The particles have barely moved yet, so they are drawn nearly the
+    // whole move ahead: the formation is on its frame.
+    expect(state.drawOffset[1]).toBeGreaterThan(0.09);
+    expect(state.drawOffset[1]).toBeLessThanOrEqual(0.1);
+
+    for (let frame = 0; frame < 300; frame += 1) {
+      state.loop?.(4832 + 16 * frame);
+    }
+    expect(story.shapeCentre.value.y).toBeCloseTo(0.1, 6);
+    expect(Math.abs(state.drawOffset[1])).toBeLessThan(1e-3);
+  });
+
+  test("REQ-SCR-05 while a row scrolls in small steps the shape's centre is on its frame every frame, and the lag drawn ahead grows and then settles", async () => {
+    const runtime = await formedOnStage();
+    const offsets: number[] = [];
+    for (let frame = 1; frame <= 30; frame += 1) {
+      const y = 0.02 * frame;
+      runtime.setStage({ work: { ...work, y } });
+      state.loop?.(4800 + 16 * frame);
+      expect(story.shapeCentre.value.y).toBeCloseTo(y, 6);
+      offsets.push(state.drawOffset[1]);
+    }
+    // The particles trail a moving frame, and the draw makes up for it.
+    expect(offsets.at(-1) ?? 0).toBeGreaterThan(offsets[0] ?? 0);
+    expect(offsets.every((offset) => offset > 0)).toBe(true);
+
+    for (let frame = 0; frame < 300; frame += 1) {
+      state.loop?.(6000 + 16 * frame);
+    }
+    expect(Math.abs(state.drawOffset[1])).toBeLessThan(1e-3);
+  });
+
+  test("REQ-SCR-05 a jump between frames, a new row, still glides there", async () => {
+    const runtime = await formedOnStage();
+    runtime.setStage({ work: { ...work, y: 0.9 } });
+    state.loop?.(4816);
+    const moved = story.shapeCentre.value.y;
+    expect(moved).toBeGreaterThan(0);
+    expect(moved).toBeLessThan(0.5);
+  });
+
+  test("REQ-SCR-05 the contact rings centre on the contact stage", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage({
+      contact: { x: 0.5, y: 0.2, halfWidth: 0.3, halfHeight: 0.4 },
+    });
+    runtime.setStory("contact", 0.5);
+
+    expect(story.shapeCentre.value.x).toBeCloseTo(1);
+    expect(story.shapeCentre.value.y).toBeCloseTo(0.2);
+    expect(story.ringsWeight.value).toBe(1);
+  });
+});
+
+describe("the swirl at the pointer, field chapter only", () => {
+  test("REQ-SCR-06 outside the field chapter the pointer still pushes the field, with no swirl", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("work", 0.5);
+    runtime.run();
+    runtime.setPointer(0.2, 0.2, true);
+    for (let frame = 0; frame < 120; frame += 1) state.loop?.(16 * frame);
+
+    expect(state.swirl).toBe(0);
+    expect(state.pushes.at(-1)).toBe(PUSH);
+
+    // Into the field chapter: the swirl winds up there.
+    runtime.setStory("bloom", 0.8);
+    for (let frame = 120; frame < 240; frame += 1) state.loop?.(16 * frame);
+    expect(state.swirl).toBeGreaterThan(0.9);
+
+    // And lets go on the way out.
+    runtime.setStory("making-of", 0.5);
+    for (let frame = 240; frame < 360; frame += 1) state.loop?.(16 * frame);
+    expect(state.swirl).toBeLessThan(0.05);
+    expect(state.pushes.at(-1)).toBe(PUSH);
+  });
+});
+
+describe("the swirl at the pointer", () => {
+  test("REQ-SCR-06 REQ-A11Y-03 the swirl winds up while the pointer stirs a running field, lets go when it stops, and a still has none", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("bloom", 1);
+    runtime.run();
+    state.loop?.(0);
+    expect(state.swirl).toBe(0);
+
+    runtime.setPointer(0.2, 0.2, true);
+    for (let frame = 1; frame < 120; frame += 1) state.loop?.(16 * frame);
+    expect(state.swirl).toBeGreaterThan(0.9);
+
+    runtime.setPointer(0.2, 0.2, false);
+    for (let frame = 120; frame < 240; frame += 1) state.loop?.(16 * frame);
+    expect(state.swirl).toBeLessThan(0.05);
+
+    runtime.setPointer(0.2, 0.2, true);
+    for (let frame = 240; frame < 300; frame += 1) state.loop?.(16 * frame);
+    runtime.pause();
+    await runtime.drawStill();
+    expect(state.swirl).toBe(0);
+  });
+});
+
+describe("the flow clock", () => {
+  test("REQ-SCR-07 the flow clock steps with each step's own length and the release that step simulates, and starts again with every seat", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("hero", 0);
+    runtime.run();
+    state.loop?.(16);
+
+    expect(state.resetFlows).toBe(1);
+    // The seat's step of no length, then the frame's own step.
+    expect(state.flows).toEqual([
+      [0, 0],
+      [1 / 60, 0],
+    ]);
+
+    runtime.setStory("bloom", 1);
+    state.loop?.(32);
+    const [seconds, release] = state.flows.at(-1) ?? [0, 0];
+    expect(seconds).toBe(1 / 60);
+    // The followed release, gliding up from the hero's 0.
+    expect(release).toBeGreaterThan(0);
+    expect(release).toBeLessThan(1);
+    expect(release).toBe(story.release.value);
   });
 });

@@ -215,7 +215,7 @@ for (const tier of [1, 2] as const) {
     // What dispose frees, and in what order, is checked in the runtime's
     // unit tests; a page cannot see a renderer that was left alive.
     await page
-      .getByRole("navigation", { name: "Primary" })
+      .getByRole("navigation", { name: "Site controls" })
       .getByRole("link", { name: "Work" })
       .click();
     await page.waitForURL("**/work");

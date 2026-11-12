@@ -1,7 +1,13 @@
 import { describe, expect, test } from "vitest";
 
-import { distanceInside, edgeWeights, fillGrid } from "./edge";
-import { outline, sampleShape } from "./index";
+import { WORK_SHAPES, type ShapeId } from "../../story";
+import {
+  distanceInside,
+  edgeWeights,
+  fillGrid,
+  layerEdgeWeights,
+} from "./edge";
+import { layers, sampleLayers } from "./index";
 
 // A square from -0.5 to 0.5, and the same square with a square hole.
 const square = [-0.5, -0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5];
@@ -47,10 +53,34 @@ describe("edge weights for the rim light", () => {
     expect(weights[4]).toBeLessThan(weights[3] ?? 0);
   });
 
+  test("REQ-SCR-07 a layered shape measures each point against its own layer, so a sheet keeps its rim under the one in front", () => {
+    // Two squares that overlap: the back one from -0.6 to 0.2, the front
+    // one from -0.2 to 0.6. (0.19, 0) is on the back square's end edge and
+    // deep inside the front one.
+    const back = [-0.6, -0.6, 0.2, -0.6, 0.2, 0.2, -0.6, 0.2];
+    const front = [-0.2, -0.2, 0.6, -0.2, 0.6, 0.6, -0.2, 0.6];
+    const stack = [
+      { weight: 0.5, rings: [back] },
+      { weight: 1, rings: [front] },
+    ];
+    const points = new Float32Array([0.19, 0, 0.19, 0, 0.19, 0]);
+    const weights = layerEdgeWeights(
+      stack,
+      points,
+      new Uint8Array([0, 1, 7]),
+      0.1,
+    );
+    expect(weights[0]).toBeGreaterThan(0.9);
+    expect(weights[1]).toBe(0);
+    // A point whose layer is missing weighs nothing.
+    expect(weights[2]).toBe(0);
+  });
+
   test("REQ-SCR-07 every shape's samples get weights from 0 to 1, with a lit rim and a darker inside", () => {
-    for (const id of ["logo", "coup-online", "archelab"] as const) {
-      const points = sampleShape(id, 4096);
-      const weights = edgeWeights(outline(id), points, 0.06);
+    const ids: ShapeId[] = ["logo", "wordmark", ...WORK_SHAPES];
+    for (const id of ids) {
+      const { points, layer } = sampleLayers(id, 4096);
+      const weights = layerEdgeWeights(layers(id), points, layer, 0.04);
       expect(weights).toHaveLength(4096);
       const lit = weights.filter((weight) => weight > 0.5).length;
       expect(Math.min(...weights)).toBeGreaterThanOrEqual(0);

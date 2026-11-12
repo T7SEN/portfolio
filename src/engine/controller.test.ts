@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  test,
+  vi,
+  type MockInstance,
+} from "vitest";
 
 import { FRAME_RATE_INTERVAL_MS, PARTICLES, PROBE } from "./config";
 import { createEngine } from "./index";
@@ -149,6 +157,9 @@ const count = <T>(list: readonly T[], item: T): number =>
 
 const engines: Engine[] = [];
 let documentHidden = false;
+// A renderer that cannot start is explained on the console outside
+// production; the tests keep that quiet and read it from here.
+let warnings: MockInstance<typeof console.warn>;
 
 function setHidden(hidden: boolean): void {
   documentHidden = hidden;
@@ -207,6 +218,7 @@ async function startTier1(options: EngineOptions = {}) {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
   documentHidden = false;
   FakeObserver.instances = [];
   Object.defineProperty(document, "hidden", {
@@ -220,6 +232,7 @@ afterEach(async () => {
   document.body.replaceChildren();
   Reflect.deleteProperty(document, "hidden");
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.useRealTimers();
 });
@@ -433,6 +446,7 @@ describe("commands and events", () => {
   });
 
   test("REQ-ENG-08 start never rejects: an environment read that fails ends on tier 3", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     const stubs = stubRuntimes();
     const { engine, events } = mount({
       environment: () => Promise.reject(new Error("no facts")),
@@ -446,6 +460,13 @@ describe("commands and events", () => {
       { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(stubs.loadRuntime).not.toHaveBeenCalled();
+    // Outside production the console says what stopped the field.
+    expect(errors.mock.calls).toEqual([
+      [
+        "engine: the field stopped on an error",
+        expect.objectContaining({ message: "no facts" }),
+      ],
+    ]);
   });
 });
 
@@ -805,6 +826,46 @@ describe("tier flow", () => {
       { type: "ready", tier: 3, particles: 0 },
     ]);
     expect(webgpu.canvas()).toBeNull();
+  });
+
+  test("REQ-ENG-08 outside production the console says why each renderer could not start", async () => {
+    await startWith({ environment: facts() }, ["reject", "reject"]);
+
+    expect(warnings.mock.calls).toEqual([
+      [
+        "engine: the webgpu renderer could not start",
+        expect.objectContaining({ message: "no backend can start" }),
+      ],
+      [
+        "engine: the webgl2 renderer could not start",
+        expect.objectContaining({ message: "no backend can start" }),
+      ],
+    ]);
+  });
+
+  test("REQ-ENG-08 a field that starts says nothing on the console", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await startTier1();
+
+    expect(warnings).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+  });
+
+  test("REQ-ENG-08 a production build stays quiet when no renderer can start", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { events } = await startWith({ environment: facts() }, [
+      "reject",
+      "reject",
+    ]);
+
+    expect(events).toEqual([
+      { type: "tierChosen", tier: 3, reason: "no-backend" },
+      { type: "ready", tier: 3, particles: 0 },
+    ]);
+    expect(warnings).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
   });
 
   test("REQ-ENG-08 a WebGPU runtime that cannot be built gives WebGL2 its own try on a new canvas", async () => {

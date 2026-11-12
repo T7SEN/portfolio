@@ -353,7 +353,16 @@ export function createEngine(
           else lostEarly = true;
         },
       });
-    } catch {
+    } catch (error) {
+      // Outside production the console says why: a tier reason such as
+      // "webgpu-init-fallback" or "no-backend" names only the outcome, and
+      // from the page a browser with its graphics turned off looks the same
+      // as a broken build. Each call site tests NODE_ENV itself, so the
+      // production build drops the message whole; renderer failures reach
+      // analytics at P6 (REQ-ENG-10).
+      if (process.env.NODE_ENV !== "production") {
+        console.warn(`engine: the ${backend} renderer could not start`, error);
+      }
       return null;
     }
 
@@ -471,8 +480,11 @@ export function createEngine(
     const gen = generation;
 
     const flow: Promise<void> = work(gen)
-      .catch(async () => {
+      .catch(async (error: unknown) => {
         // start() never rejects: anything unforeseen ends on the still frame.
+        if (process.env.NODE_ENV !== "production") {
+          console.error("engine: the field stopped on an error", error);
+        }
         if (stale(gen)) return;
         await retire();
         if (!stale(gen)) settleStill("no-backend");

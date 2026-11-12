@@ -41,9 +41,52 @@
     color-scheme: dark;
   }
 
+  /* From 1024 px the hero's dot sits beside the headline. At the scale's
+     own size the second line reaches into the dot's column, and the soft
+     plate behind it dims the dot to a third of its light. The home
+     preview's headline size keeps the line clear of the dot, as the preview
+     draws it. Below 1024 px the dot sits above the words, so the scale
+     stands. The range stays within 2.5 times the minimum (WCAG 1.4.4). */
+  @media (width >= 64rem) {
+    :root {
+      --text-display: clamp(2.75rem, 4.4vw, 4rem);
+    }
+  }
+
+  /* The preview's ring: 2 px of glow, 3 px clear of the element. An outline
+     follows the element's own corners, so pills get round rings. Glow
+     measures 7.39 on void, 6.92 on surface and 6.22 on raised.
+     Every element holds the ring's colour at rest, with no outline drawn.
+     Tailwind 4.3.5's transition-colors and transition list outline-color
+     (dist/lib.js), so a colour that arrived with focus faded in over
+     150 ms from the element's own colour, a dark ring on the lavender
+     pill; with the colour already there only the style changes, which
+     never transitions, and the ring glows from its first frame. */
+  *,
+  ::before,
+  ::after {
+    outline-color: var(--color-glow);
+  }
+
   :focus-visible {
     outline: 2px solid var(--color-glow);
-    outline-offset: 2px;
+    outline-offset: 3px;
+  }
+
+  /* The plate that text held on screen brings along (home/held-plate.tsx):
+     the veil's plate exactly (story-veil.ts), the void at PLATE_ALPHA, so
+     over the open veil of 0.35 the field behind the words is at 0.8, with
+     the plates' 80 px soft edge. A unit test holds these numbers to
+     VEIL_TEXT, VEIL_OPEN and PLATE_SOFT. */
+  [data-part="own-plate"] {
+    --plate: color-mix(
+      in srgb,
+      var(--color-void) calc(100% * (1 - (1 - 0.8) / (1 - 0.35))),
+      transparent
+    );
+    background: var(--plate);
+    border-radius: 40px;
+    box-shadow: 0 0 80px 40px var(--plate);
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -1,49 +1,54 @@
-import Link from "next/link";
 import type { ReactNode } from "react";
 
-import { cx } from "./class-names";
+import { cx, LINK_HOVER } from "./class-names";
+import { isOnSite, SiteAnchor } from "./site-anchor";
 
-export type TextLinkVariant = "inline" | "footer";
+/**
+ * inline: the main link, in the text colour, underlined, with a glow arrow.
+ * muted: the lighter link beside it, muted and underlined ("arche-lab.tech").
+ * footer: no underline; an arrow to another site shows at rest, an arrow to a
+ * page of this site only on hover and focus (decision D-010).
+ */
+export type TextLinkVariant = "inline" | "muted" | "footer";
 
 type TextLinkProps = {
   href: string;
   children: ReactNode;
   variant?: TextLinkVariant;
   className?: string;
-  /** Marks a link the scroll story measures its layout by (story-stage.ts). */
-  "data-stage"?: string;
+  /**
+   * A name for assistive technology when the words alone repeat down a list.
+   * It must hold the visible words (WCAG 2.5.3, label in name).
+   */
+  "aria-label"?: string;
 };
 
-function isOnSite(href: string) {
-  return (
-    (href.startsWith("/") && !href.startsWith("//")) || href.startsWith("#")
-  );
-}
+const VARIANTS: Record<TextLinkVariant, string> = {
+  inline: "text-text underline underline-offset-2",
+  muted: "text-muted underline underline-offset-2",
+  footer: "inline-flex min-h-11 items-center text-text",
+};
 
 export function TextLink({
   href,
   children,
   variant = "inline",
   className,
-  "data-stage": stage,
+  "aria-label": name,
 }: TextLinkProps) {
   const onSite = isOnSite(href);
-  const isFooter = variant === "footer";
-  const classes = cx(
-    "group text-text transition-colors hover:text-glow focus-visible:text-glow",
-    isFooter && "inline-flex min-h-11 items-center",
-    className,
-  );
+  const hideAtRest = variant === "footer" && onSite;
 
-  // The arrow is the non-colour cue that marks a link (WCAG 1.4.1), so there
-  // is no resting underline. Footer links show it only on hover and focus
-  // (decision D-010). It mirrors on right-to-left pages.
+  // The arrow tells where the link goes, inside the site or out of it, and
+  // it mirrors on right-to-left pages. An inline block, so the underline
+  // stops at the words.
   const arrow = (
     <span
       aria-hidden="true"
       className={cx(
-        "ms-1 inline-block text-glow rtl:-scale-x-100",
-        isFooter &&
+        "ms-1 inline-block rtl:-scale-x-100",
+        variant !== "muted" && "text-glow",
+        hideAtRest &&
           "opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100",
       )}
     >
@@ -51,19 +56,14 @@ export function TextLink({
     </span>
   );
 
-  if (href.startsWith("/") && onSite) {
-    return (
-      <Link href={href} className={classes} data-stage={stage}>
-        {children}
-        {arrow}
-      </Link>
-    );
-  }
-
   return (
-    <a href={href} className={classes} data-stage={stage}>
+    <SiteAnchor
+      href={href}
+      className={cx("group", VARIANTS[variant], LINK_HOVER, className)}
+      aria-label={name}
+    >
       {children}
       {arrow}
-    </a>
+    </SiteAnchor>
   );
 }

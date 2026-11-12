@@ -8,6 +8,28 @@ export const makingOf = {
   title: "Making-of: this site",
   leadAngle:
     "Live render passes, the compute simulation and the three device tiers",
+  // The line and the chips describe this site and its pinned stack; the
+  // table cells say the same facts as the lead angle.
+  listing: {
+    kind: "Case study",
+    studyLabel: "Full study",
+    line: "A compute particle field that re-forms into each full study, with a fallback for every device. One shader codebase runs on WebGPU and WebGL2.",
+    stack: ["WebGPU", "TSL", "three.js r187", "GSAP"],
+    what: "A live GPU particle field, its render passes, and three device tiers.",
+    builtWith: "Next.js 16, three.js r187, WebGPU and TSL",
+    metrics: [
+      {
+        label: "Frame time per tier",
+        value: "[FILL: frame time per tier, measured on the real GPU]",
+        source: "[FILL: the test log entry for the run]",
+      },
+      {
+        label: "3D payload",
+        value: "[FILL: the 3D payload, measured from the production build]",
+        source: "[FILL: the budget check result for the build]",
+      },
+    ],
+  },
   summary: [
     "[FILL: summary line 1 of 3, written once the build is measured]",
     "[FILL: summary line 2 of 3, written once the build is measured]",

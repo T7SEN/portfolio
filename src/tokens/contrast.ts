@@ -87,15 +87,21 @@ export const pairsInUse: readonly ContrastPair[] = [
   },
   {
     foreground: "void",
-    background: "violet",
+    background: "glow",
     needs: 4.5,
-    use: "Primary button label",
+    use: "Primary pill label",
   },
   {
     foreground: "violet",
     background: "void",
-    needs: 3,
-    use: "Violet shapes",
+    needs: 4.5,
+    use: "Eyebrow, In progress badge and violet shapes",
+  },
+  {
+    foreground: "violet",
+    background: "surface",
+    needs: 4.5,
+    use: "In progress badge on cards",
   },
   {
     foreground: "logo-red",
@@ -143,7 +149,19 @@ export const pairsInUse: readonly ContrastPair[] = [
     foreground: "void",
     background: "paper",
     needs: 4.5,
-    use: "Dark logo and text on light surfaces",
+    use: "Dark logo and text on light surfaces; primary pill on hover",
+  },
+  {
+    foreground: "paper",
+    background: "void",
+    needs: 4.5,
+    use: "Link and pill hover text",
+  },
+  {
+    foreground: "paper",
+    background: "surface",
+    needs: 4.5,
+    use: "Link hover text on cards",
   },
 ];
 

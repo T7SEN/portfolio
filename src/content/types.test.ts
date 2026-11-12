@@ -140,3 +140,64 @@ describe("proof rules", () => {
     expect(unclear).not.toHaveProperty("status");
   });
 });
+
+describe("study listings", () => {
+  const listing = study.listing;
+
+  it("REQ-CNT-01 a study without its listing does not compile", () => {
+    // @ts-expect-error REQ-CNT-01: a full study names its home row and table cells
+    const noRow: FullStudy = omit(study, "listing");
+    // @ts-expect-error REQ-CNT-01: so does a short study
+    const noCard: ShortStudy = omit(systemseven, "listing");
+    expect(noRow).not.toHaveProperty("listing");
+    expect(noCard).not.toHaveProperty("listing");
+  });
+
+  it("REQ-CNT-03 a full study's row without figure slots or chips does not compile", () => {
+    const noMetrics: FullStudy = {
+      ...study,
+      // @ts-expect-error REQ-CNT-03: an unknown figure holds a marker slot
+      listing: { ...listing, metrics: [] },
+    };
+    const noStack: FullStudy = {
+      ...study,
+      // @ts-expect-error REQ-CNT-03: the row names its stack
+      listing: { ...listing, stack: [] },
+    };
+    expect(noMetrics.listing.metrics).toHaveLength(0);
+    expect(noStack.listing.stack).toHaveLength(0);
+  });
+
+  it("REQ-CNT-05 a row figure without a source does not compile", () => {
+    const slot = { label: "Players", value: listing.metrics[0].value };
+    const unsourced: FullStudy = {
+      ...study,
+      // @ts-expect-error REQ-CNT-05: every figure on a row names its source
+      listing: { ...listing, metrics: [slot] },
+    };
+    expect(unsourced.listing.metrics[0]).not.toHaveProperty("source");
+  });
+
+  it("REQ-CNT-06 a row quote is a recorded quote or a marker, never bare words", () => {
+    const words: FullStudy = {
+      ...study,
+      // @ts-expect-error REQ-CNT-06: words without permission are not a quote
+      listing: { ...listing, quote: "Quoted words." },
+    };
+    const unrecorded: FullStudy = {
+      ...study,
+      // @ts-expect-error REQ-CNT-06: a row quote names who allowed it, and when
+      listing: { ...listing, quote: { text: "Words.", who: "A player" } },
+    };
+    // Built from parts, so this file holds no marker text for the release
+    // check to count.
+    const marker = `[${"FILL"}: a player quote]` as const;
+    const waiting: FullStudy = {
+      ...study,
+      listing: { ...listing, quote: marker },
+    };
+    expect(isMarker(String(words.listing.quote))).toBe(false);
+    expect(unrecorded.listing.quote).not.toHaveProperty("permission");
+    expect(isMarker(String(waiting.listing.quote))).toBe(true);
+  });
+});

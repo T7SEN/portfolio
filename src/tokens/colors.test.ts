@@ -20,8 +20,9 @@ const documented: Readonly<Record<string, number>> = {
   "glow on void": 7.39,
   "glow on surface": 6.92,
   "glow on raised": 6.22,
-  "void on violet": 5.08,
+  "void on glow": 7.39,
   "violet on void": 5.08,
+  "violet on surface": 4.76,
   "logo-red on void": 5.35,
   "logo-blue on void": 5.47,
   "danger on void": 7.27,
@@ -30,6 +31,8 @@ const documented: Readonly<Record<string, number>> = {
   "edge on surface": 3.37,
   "edge on raised": 3.03,
   "void on paper": 18.33,
+  "paper on void": 18.33,
+  "paper on surface": 17.15,
 };
 
 const label = (pair: ContrastPair) =>
@@ -87,7 +90,7 @@ describe("contrast", () => {
     expect([...labels].sort()).toEqual(Object.keys(documented).sort());
   });
 
-  it("REQ-A11Y-06 keeps text on violet (3.39) out of the pairs in use, so the button label is void", () => {
+  it("REQ-A11Y-06 keeps text on violet (3.39) out of the pairs in use", () => {
     expect(toTwoDecimals(contrastRatio(colors.text, colors.violet))).toBe(3.39);
     expect(contrastRatio(colors.text, colors.violet)).toBeLessThan(4.5);
     expect(pairsInUse.map(label)).not.toContain("text on violet");

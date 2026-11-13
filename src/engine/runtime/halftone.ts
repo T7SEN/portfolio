@@ -110,6 +110,11 @@ export interface HeroDot {
   light: number;
   /** -1 to 1; 0 in a still. */
   pulse: number;
+  /**
+   * How many times its size the dot is drawn, its rings and its halo with
+   * it, as it glides to the middle (story.ts, dotSwell); 1 in its box.
+   */
+  swell: number;
 }
 
 export interface WorkFrame {
@@ -233,6 +238,7 @@ export function createHalftone(particleCount: number) {
   const heroCentre = uniform(new Vector2(-1e4, -1e4));
   const heroReach = uniform(150);
   const heroLight = uniform(0);
+  const heroSwell = uniform(1);
   const pulse = uniform(0);
   const frameCentre = uniform(new Vector2());
   const frameHalf = uniform(new Vector2());
@@ -320,19 +326,20 @@ export function createHalftone(particleCount: number) {
     );
 
     // halftone-rules: heroLight is the uniform; ringLight, heroCore and
-    // haloAlpha.
+    // haloAlpha, each at the swell.
     const heroDistance = length(position.sub(heroCentre)).toVar();
-    const grow = pulse.mul(RING_BREATH).add(1);
+    const grow = pulse.mul(RING_BREATH).add(1).mul(heroSwell);
     const inner = grow.mul(RING_INNER_PX);
     const outer = grow.mul(RING_OUTER_PX);
+    const ringSoftness = heroSwell.mul(RING_SOFTNESS_PX);
     const innerRing = smoothstep(
-      inner.sub(RING_SOFTNESS_PX),
-      inner.add(RING_SOFTNESS_PX),
+      inner.sub(ringSoftness),
+      inner.add(ringSoftness),
       heroDistance,
     ).oneMinus();
     const outerRing = smoothstep(
-      outer.sub(RING_SOFTNESS_PX),
-      outer.add(RING_SOFTNESS_PX),
+      outer.sub(ringSoftness),
+      outer.add(ringSoftness),
       heroDistance,
     ).oneMinus();
     const rings = pulse
@@ -340,10 +347,14 @@ export function createHalftone(particleCount: number) {
       .add(1)
       .mul(innerRing.mul(RING_INNER_LIGHT).add(outerRing.mul(RING_OUTER_LIGHT)))
       .mul(heroLight);
-    const haloFade = clamp(heroDistance.div(heroReach).oneMinus(), 0, 1);
+    const haloFade = clamp(
+      heroDistance.div(heroReach.mul(heroSwell)).oneMinus(),
+      0,
+      1,
+    );
     const halo = haloFade.mul(haloFade).mul(HALO_ALPHA).mul(heroLight);
     const heroCore = clamp(
-      float(HERO_DOT_PX).sub(heroDistance).mul(sharpness).add(0.5),
+      heroSwell.mul(HERO_DOT_PX).sub(heroDistance).mul(sharpness).add(0.5),
       0,
       1,
     ).mul(heroLight);
@@ -421,6 +432,7 @@ export function createHalftone(particleCount: number) {
       heroCentre.value.set(hero.x, hero.y);
       heroReach.value = hero.reach;
       heroLight.value = hero.light;
+      heroSwell.value = hero.swell;
       pulse.value = hero.pulse;
     },
     setFrame(frame: WorkFrame) {

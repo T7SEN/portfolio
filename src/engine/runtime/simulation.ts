@@ -325,6 +325,8 @@ export function createSimulation(
   // (types.ts, Stage), in world units at the focus plane; the dot also in
   // the seeds' square, for the order in which the bloom lets particles go.
   const dotCentre = uniform(new Vector2());
+  // How many times its size the dot's disc is (story.ts, dotSwell).
+  const dotSwell = uniform(1);
   const dotSeed = uniform(new Vector2());
   const rankScale = uniform(Math.SQRT1_2);
   const shapeCentre = uniform(new Vector2());
@@ -540,7 +542,7 @@ export function createSimulation(
     // An area-even disc, so the dot is lit evenly and never burns.
     const dotAngle = seed.x.mul(Math.PI);
     const dotRadius = sqrt(seed.y.mul(0.5).add(0.5)).mul(
-      pulse.mul(DOT_PULSE_RADIUS).add(1).mul(DOT_RADIUS),
+      pulse.mul(DOT_PULSE_RADIUS).add(1).mul(DOT_RADIUS).mul(dotSwell),
     );
     const dot = vec3(
       cos(dotAngle).mul(dotRadius).add(dotCentre.x),
@@ -632,6 +634,7 @@ export function createSimulation(
     focusZ,
     pulse,
     dotCentre,
+    dotSwell,
     dotSeed,
     rankScale,
     shapeCentre,

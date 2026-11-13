@@ -48,6 +48,7 @@ import {
 import { DIRECTIONS, VELOCITY_FLOOR, VELOCITY_SUB } from "./pass-rules";
 import { DOT_RADIUS, homeFor, releasedFor } from "./simulation";
 import type { Simulation, View } from "./simulation";
+import { PASS_STREAM, PASS_STREAM_SECONDS, TRAITS } from "./story";
 
 const CAMERA_DISTANCE = 5;
 const CAMERA_FOV_DEGREES = 50;
@@ -160,6 +161,11 @@ export function createField(
   // simulated, in world units: the lag of the particles behind a stage that
   // moves, which the runtime works out and takes off (index.ts, trail).
   const drawOffset = uniform(new Vector2());
+  // The making-of's stream from card to card (story.ts, streamShare): how
+  // far back toward the card it left the mark is drawn when the stream
+  // begins, in world units, and the seconds since it began.
+  const streamFrom = uniform(new Vector2());
+  const streamSeconds = uniform(PASS_STREAM_SECONDS);
   // The pointer as drawn, and how strongly the swirl shows, 0 to 1.
   const swirlCentre = uniform(new Vector2());
   const swirl = uniform(0);
@@ -224,7 +230,17 @@ export function createField(
   // The drawn place: formed particles carried by the stage follow's offset,
   // then every particle turned about the pointer (halftone-rules swirlTurn).
   const leaving = step(1e-4, released);
-  const carried = position.xy.add(drawOffset.mul(traits.form.mul(leaving)));
+  // story.ts streamShare: each formed particle leaves the card at its own
+  // moment and is drawn back toward it by the share of its way to go.
+  const streamed = streamSeconds
+    .sub(mixOf(TRAITS.leave, seed).mul(PASS_STREAM.spread))
+    .div(PASS_STREAM.each)
+    .clamp(0, 1);
+  const left = streamed.oneMinus();
+  const toGo = left.mul(left).mul(left);
+  const carried = position.xy.add(
+    drawOffset.add(streamFrom.mul(toGo)).mul(traits.form.mul(leaving)),
+  );
   const around = carried.sub(swirlCentre);
   const reach = around.length().div(SWIRL_RADIUS);
   const closeness = exp(reach.mul(reach).negate()).mul(swirl);
@@ -430,6 +446,15 @@ export function createField(
     /** Draws the formed particles this far ahead, in world units. */
     setDrawOffset(x: number, y: number) {
       drawOffset.value.set(x, y);
+    },
+    /**
+     * The making-of's stream: the mark is drawn this far back toward the
+     * card it left, in world units, as each particle's share of the way
+     * still to go, so many seconds after the stream began.
+     */
+    setStream(x: number, y: number, seconds: number) {
+      streamFrom.value.set(x, y);
+      streamSeconds.value = seconds;
     },
     /** How strongly the swirl shows round the pointer, 0 to 1. */
     setSwirl(amount: number) {

@@ -5,7 +5,7 @@
 // tested in Node; the runtime turns these numbers into uniforms, and
 // simulation.ts mirrors the per-particle rules below in TSL.
 
-import { WORK_SHAPES, workStep, type ShapeId } from "../story";
+import { STEP_EDGE, WORK_SHAPES, workStep, type ShapeId } from "../story";
 import type { ChapterId, Stage, Stages } from "../types";
 
 export interface StoryTargets {
@@ -24,7 +24,9 @@ export interface StoryTargets {
   /**
    * Weights of the four formations: a sampled shape, the making-of sheet,
    * the about strands and the contact rings. What they leave goes to the
-   * ambient field, and at most one of them is above 0.
+   * ambient field, and at most one of them is above 0. No chapter forms the
+   * sheet since the making-of forms the T7 mark in its middle pass card;
+   * the simulation keeps it.
    */
   shape: number;
   sheet: number;
@@ -40,6 +42,13 @@ export interface StoryTargets {
   noise: number;
   /** 0 to 1: how far the camera has pushed into the field. */
   push: number;
+  /**
+   * 0 to 1: how far the hero's dot has glided from its box to the middle
+   * of the screen, where the bloom grows and the mark forms, swelling on the
+   * way (dotTravel, dotSwell). Only the hero moves it; every other chapter
+   * keeps the dot at the middle.
+   */
+  travel: number;
 }
 
 /** The ambient field: every particle at large, no formation. */
@@ -55,74 +64,56 @@ export const AMBIENT: StoryTargets = {
   keep: 0,
   noise: 1,
   push: 0,
+  travel: 1,
 };
 
-// Bloom (REQ-SCR-07): as soon as the chapter arrives (its top at the middle
-// of the screen), the dot lets the field go and the field gathers into the
-// T7 mark; the mark holds, morphs into the T7SEN wordmark, the wordmark
-// holds and then dissolves back into the flow.
-//
-// The timeline is set in screens of scroll from the chapter's arrival, so
-// each shape stays whole for the same stretch of scroll on any screen. A
-// formation's particles take about 1.3 s to settle once their targets stop
-// (FORM_PULL and FORM_DRAG in simulation.ts), so each hold is long enough
-// for a shape to settle and then be read at a steady scroll: the mark holds
-// for 0.75 of a screen and the wordmark for 0.8. The chapter's held screen
-// (bloom-section.tsx) fills the view from half a screen in until half a
-// screen before the room ends; the mark is whole before it fills the view,
-// the wordmark forms while it holds, and the wordmark holds on as the work
-// chapter comes up under it.
-export const BLOOM_SCREENS = {
-  /** The dot has let every particle go. */
-  released: 0.1,
-  /** The mark's targets are whole: it gathers straight out of the dot. */
-  gathered: 0.15,
-  /** The mark has held for 0.75 of a screen and starts to turn. */
-  morphFrom: 0.9,
-  /** The wordmark's targets are whole, 0.15 of a screen later. */
-  morphTo: 1.05,
-  /** The wordmark has held for 0.8 of a screen and dissolves. */
-  holdsUntil: 1.85,
+// Bloom (REQ-SCR-07): the dot lets the field go, the field gathers into the
+// T7 mark, the mark morphs into the T7SEN wordmark, the wordmark holds and
+// then dissolves back into the flow. Each point is progress through the
+// field chapter, whose room is BLOOM_ROOMS screens (decision D-118).
+export const BLOOM_AT = {
+  /** The dot has let every particle go, before any formation. */
+  released: 0.3,
+  /** The mark's targets are whole. */
+  gathered: 0.42,
+  /** The mark starts to turn. */
+  morphFrom: 0.5,
+  /** The wordmark's targets are whole. */
+  morphTo: 0.64,
+  /** The wordmark dissolves. */
+  holdsUntil: 0.84,
   /** Gone: the field is back in its flow. */
-  gone: 1.97,
+  gone: 0.97,
 } as const;
 
 /**
- * The field chapter's room, in screens: the section's height, as min-h in
- * svh in bloom-section.tsx (home.test.tsx keeps the two equal, and the story
- * gate measures it in the browser). 0.15 to gather the mark, 0.75 holding
- * it, 0.15 morphing into the wordmark, 0.8 holding that and 0.12 letting it
- * go make 1.97; 0.03 more leaves the field in its flow when the work chapter
- * arrives: 2 screens, 200svh. To tune the chapter, change BLOOM_SCREENS
- * and this, and the section's class with it.
+ * The field chapter's room, in screens: the section's height in
+ * bloom-section.tsx, as min-h in svh, on phones and from the lg breakpoint
+ * (home.test.tsx keeps the two equal, and the story gate measures it in the
+ * browser).
  */
-export const BLOOM_ROOM = 2;
+export const BLOOM_ROOMS = { phone: 2.6, desktop: 2.2 } as const;
 
-/** A point of the bloom's timeline, in screens, as progress through the chapter. */
-function bloomAt(screens: number): number {
-  return screens / BLOOM_ROOM;
-}
-
-const BLOOM_RELEASED = bloomAt(BLOOM_SCREENS.released);
-const MARK_GATHERED = bloomAt(BLOOM_SCREENS.gathered);
-const MORPH_FROM = bloomAt(BLOOM_SCREENS.morphFrom);
-const MORPH_TO = bloomAt(BLOOM_SCREENS.morphTo);
-const WORDMARK_HOLDS_UNTIL = bloomAt(BLOOM_SCREENS.holdsUntil);
-const WORDMARK_GONE = bloomAt(BLOOM_SCREENS.gone);
+const BLOOM_RELEASED = BLOOM_AT.released;
+const MARK_GATHERED = BLOOM_AT.gathered;
+const MORPH_FROM = BLOOM_AT.morphFrom;
+const MORPH_TO = BLOOM_AT.morphTo;
+const WORDMARK_HOLDS_UNTIL = BLOOM_AT.holdsUntil;
+const WORDMARK_GONE = BLOOM_AT.gone;
 /** While the wordmark forms, this share of the lines keeps running round it. */
 export const BLOOM_KEEP = 0.5;
-// Making-of and about: the formation takes the first quarter to gather and
-// lets go from 0.85, so the next chapter starts from the flow. Contact
-// gathers its rings the same way and keeps them to the end of the page.
-// These chapters are as tall as their content, about a screen or a little
-// more, so the strands are whole just as the room above the about heading
-// reaches the top of the screen, where they draw.
+// About: the strands take the first quarter to gather and let go from 0.85,
+// so the next chapter starts from the flow. Contact gathers its rings the
+// same way and keeps them to the end of the page. The about chapter is as
+// tall as its content, about a screen or a little more, so the strands are
+// whole just as the room above its heading reaches the top of the screen,
+// where they draw.
 const FORM_IN = 0.25;
 const FORM_OUT = 0.85;
-// Work: a shape is whole across the middle half of its step. Between two
-// steps the field keeps this share of the formation while one shape morphs
-// into the next, so the move reads as one shape turning into another.
-const STEP_EDGE = 0.25;
+// Work: a shape is whole across the middle half of its step (STEP_EDGE, in
+// ../story.ts). Between two steps the field keeps this share of the
+// formation while one shape morphs into the next, so the move reads as one
+// shape turning into another.
 const STEP_DIP = 0.55;
 // The contact field rests: its drift is gentler than the ambient flow's.
 const CONTACT_NOISE = 0.6;
@@ -131,17 +122,16 @@ const CONTACT_NOISE = 0.6;
  * The middle of the mark's hold, as progress through the field chapter: the
  * place to look at the whole T7 mark.
  */
-export const BLOOM_MARK_AT = bloomAt(
-  (BLOOM_SCREENS.gathered + BLOOM_SCREENS.morphFrom) / 2,
-);
+export const BLOOM_MARK_AT = 0.46;
 
 /**
- * The calm frame of a bloom, the middle of the wordmark's hold: the
- * wordmark, whole, with the lines round it.
+ * The dot, its rings and its halo are this many times their size once the
+ * dot has glided to the middle (dotSwell).
  */
-const BLOOM_CALM = bloomAt(
-  (BLOOM_SCREENS.morphTo + BLOOM_SCREENS.holdsUntil) / 2,
-);
+export const DOT_SWELL = 2;
+
+/** The calm frame of a bloom: the wordmark, whole, with the lines round it. */
+const BLOOM_CALM = 0.74;
 
 function unit(value: number): number {
   return Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : 0;
@@ -163,19 +153,38 @@ function shapeAt(index: number): ShapeId {
   return WORK_SHAPES[Math.min(Math.max(index, 0), last)] ?? "making-of";
 }
 
+/**
+ * The hero's glide (decision D-128): from the first pixel of scroll the dot
+ * leaves its box for the middle of the screen, quick as it sets off and
+ * gentle as it arrives, and reaches it as the field chapter begins, so the
+ * bloom grows from there with no pause. The hero's progress runs from the
+ * page's top to that point (story-progress.ts, resolveStory). Progress
+ * outside 0 to 1, or not a number, is clamped.
+ */
+export function dotTravel(progress: number): number {
+  const left = 1 - unit(progress);
+  return 1 - left * left;
+}
+
+/**
+ * How many times its size the dot is drawn at a point of its glide, its
+ * rings and its halo with it: from 1 in its box to DOT_SWELL at the middle,
+ * so it is at its largest just as the bloom bursts it into the field.
+ */
+export function dotSwell(travel: number): number {
+  return 1 + (DOT_SWELL - 1) * unit(travel);
+}
+
 function bloom(progress: number): StoryTargets {
   const morph = smoothstep(MORPH_FROM, MORPH_TO, progress);
   return {
     ...AMBIENT,
-    // The release and the gathering start together: the particles the dot
-    // lets go first bloom out round it, and the later ones fly more and
-    // more straight on into the mark, so the mark grows out of the dot.
     release: smoothstep(0, BLOOM_RELEASED, progress),
     shapeFrom: "logo",
     shapeTo: "wordmark",
     shapeMix: morph,
     shape:
-      smoothstep(0, MARK_GATHERED, progress) *
+      smoothstep(BLOOM_RELEASED, MARK_GATHERED, progress) *
       (1 - smoothstep(WORDMARK_HOLDS_UNTIL, WORDMARK_GONE, progress)),
     // The mark takes the whole flow; as it turns into the wordmark, part of
     // the lines go back to running round it.
@@ -223,6 +232,23 @@ function formation(progress: number): number {
 }
 
 /**
+ * The making-of: the T7 mark, whole, at every scroll position. It forms
+ * inside the middle pass card's face, the making-of stage (formationStage),
+ * and the card shows its pass of it; the row of cards moves while the
+ * chapter is held, so the mark rides with its card instead of gathering and
+ * letting go with the scroll. stagedTargets lets it go when no card is in
+ * the middle.
+ */
+const MAKING_OF: StoryTargets = {
+  ...AMBIENT,
+  shapeFrom: "logo",
+  shapeTo: "logo",
+  shapeMix: 0,
+  shape: 1,
+  keep: 0,
+};
+
+/**
  * The targets for a chapter at a progress from 0 to 1 through its section.
  * Progress outside 0 to 1, or not a number, is clamped.
  */
@@ -233,13 +259,13 @@ export function chapterTargets(
   const at = unit(progress);
   switch (chapter) {
     case "hero":
-      return { ...AMBIENT, release: 0 };
+      return { ...AMBIENT, release: 0, travel: dotTravel(at) };
     case "bloom":
       return bloom(at);
     case "work":
       return work(at);
     case "making-of":
-      return { ...AMBIENT, sheet: formation(at) };
+      return { ...MAKING_OF };
     case "about":
       return { ...AMBIENT, strands: formation(at) };
     case "contact":
@@ -255,7 +281,9 @@ export function chapterTargets(
  * Calm mode shows one still frame per chapter, and one per study in the
  * work chapter (REQ-A11Y-03). The frame is the chapter at its fullest, not
  * wherever the scroll happened to be when it began: the dot, the whole
- * wordmark, each study's shape whole, the sheet, the strands, the rings.
+ * wordmark, each study's shape whole, the mark in the middle pass card (the
+ * ambient flow when calm shows no card in the middle, stagedTargets), the
+ * strands, the rings.
  */
 export function calmProgress(chapter: ChapterId, progress: number): number {
   switch (chapter) {
@@ -518,6 +546,8 @@ export const TRAITS = {
   acrossB: [19.73, 43.97, 5.83],
   /** Whether it is one of the particles a line keeps through a formation. */
   keep: [7.93, 23.31, 61.71],
+  /** When it leaves a pass card in the making-of's stream (streamShare). */
+  leave: [41.27, 5.39, 97.13],
 } as const;
 
 export function trait(
@@ -887,7 +917,9 @@ function finiteIn(value: number, low: number, high: number, fallback: number) {
 /**
  * A stage the page sent, kept on the screen: its centre inside -1 to 1 and
  * its halves inside 0 to 1. Anything not a number falls back to the whole
- * screen's value, so a broken measure never throws a shape off screen.
+ * screen's value, so a broken measure never throws a shape off screen. The
+ * making-of's stage is sent only while its card's face is wholly on the
+ * screen (story-passes.ts, measureMiddleStage), so it needs no more room.
  */
 export function cleanStage(stage: Stage | undefined): Stage {
   if (stage === undefined) return FULL_STAGE;
@@ -924,10 +956,32 @@ export function stagedFrame(
 }
 
 /**
- * Which stage a chapter's formation uses. The dot always sits at the hero's
- * stage, the place the visitor first saw it, through the bloom too; the
- * field chapter forms in its bloom stage for the frame's width over height;
+ * Where the hero's dot sits at a point of its glide (travel, dotTravel):
+ * from the hero's stage, the box the visitor first saw it in, to the centre
+ * of the field chapter's stage, where the bloom grows and the mark forms.
+ * The box's halves are kept: the halo's reach is read from them.
+ */
+export function glideStage(
+  hero: Stage | undefined,
+  travel: number,
+  aspect: number,
+): Stage {
+  const from = cleanStage(hero);
+  const to = bloomStage(aspect);
+  const share = unit(travel);
+  return {
+    ...from,
+    x: from.x + (to.x - from.x) * share,
+    y: from.y + (to.y - from.y) * share,
+  };
+}
+
+/**
+ * Which stage a chapter's formation uses. The dot glides from the hero's
+ * stage to the middle (glideStage) and blooms there; the field chapter
+ * forms in its bloom stage for the frame's width over height;
  * study shapes form inside the work stage, the frame of the row in view;
+ * the making-of's mark forms inside its stage, the middle pass card's face;
  * the contact rings centre on the contact stage; everything else uses the
  * whole screen.
  */
@@ -941,11 +995,85 @@ export function formationStage(
       return bloomStage(aspect);
     case "work":
       return stages.work;
+    case "making-of":
+      return stages["making-of"];
     case "contact":
       return stages.contact;
     default:
       return undefined;
   }
+}
+
+/**
+ * A chapter's targets on the stages the page has sent. The making-of's mark
+ * forms only inside the middle pass card (formationStage); with no card in
+ * the middle (the viewer away, calm mode's still grid, tier 3) it has
+ * nowhere to form, and the chapter is the ambient flow. Every other
+ * chapter's targets pass through as they are.
+ */
+export function stagedTargets(
+  chapter: ChapterId | null,
+  targets: StoryTargets,
+  stages: Stages,
+): StoryTargets {
+  if (chapter === "making-of" && stages["making-of"] === undefined) {
+    return { ...targets, shape: 0 };
+  }
+  return targets;
+}
+
+/**
+ * The making-of's stream from card to card. When the next card reaches the
+ * middle of the sliding row, the mark forms in that card at once (the
+ * runtime takes the move with no glide), and each formed particle is drawn
+ * back toward the card it left by the share of its way still to go: it
+ * leaves at its own moment within PASS_STREAM.spread seconds (its leave
+ * trait) and takes PASS_STREAM.each seconds, quick as it leaves and gentle
+ * as it settles (a cubic ease out): on a wide screen the way runs behind the
+ * card's words, so the particles cross that part fast and are seen pouring
+ * into the next card, which starts to fill about a tenth of a second after
+ * it reaches the middle. So the mark
+ * pours from one card into the next, particle by particle, instead of
+ * jumping or sliding over as one piece, and the next card fills within
+ * PASS_STREAM_SECONDS. Only the drawn place moves; the simulation is the
+ * same (REQ-ENG-05).
+ */
+export const PASS_STREAM = { spread: 0.3, each: 0.35 } as const;
+export const PASS_STREAM_SECONDS = PASS_STREAM.spread + PASS_STREAM.each;
+
+/**
+ * How far one particle is along the stream, 0 at the card it left and 1 at
+ * the next, so many seconds after the stream began; leave is its trait, 0
+ * to 1. Not a number counts as the stream's end.
+ */
+export function streamShare(seconds: number, leave: number): number {
+  if (!Number.isFinite(seconds)) return 1;
+  const share = Math.min(
+    Math.max(
+      (seconds - Math.min(Math.max(leave, 0), 1) * PASS_STREAM.spread) /
+        PASS_STREAM.each,
+      0,
+    ),
+    1,
+  );
+  const left = 1 - share;
+  return 1 - left * left * left;
+}
+
+const STREAM_SAMPLES = 64;
+
+/**
+ * How far the stream has come as a whole: streamShare's mean over the
+ * particles' leave traits, which are close to even from 0 to 1. A stream
+ * that starts while another is under way begins from where this says the
+ * mark is drawn.
+ */
+export function meanStreamShare(seconds: number): number {
+  let sum = 0;
+  for (let sample = 0; sample < STREAM_SAMPLES; sample += 1) {
+    sum += streamShare(seconds, (sample + 0.5) / STREAM_SAMPLES);
+  }
+  return sum / STREAM_SAMPLES;
 }
 
 /**

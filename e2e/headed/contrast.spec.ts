@@ -1,9 +1,10 @@
 import { devices, expect, test, type Page } from "@playwright/test";
 
+import { restProgress } from "../../src/components/home/pass-slide";
+import { PASSES } from "../../src/engine/story";
 import {
+  BLOOM_AT,
   BLOOM_MARK_AT,
-  BLOOM_ROOM,
-  BLOOM_SCREENS,
   calmProgress,
 } from "../../src/engine/runtime/story";
 import { colors } from "../../src/tokens/colors";
@@ -17,11 +18,12 @@ import { pixelStats, type Box } from "../gpu/pixels";
 const FIELD = '[data-testid="engine-field"]';
 const MINIMUM = 4.5;
 // The page's text is hidden while the field is measured. The plates that
-// text held on screen brings along (home/held-plate.tsx) are part of the
-// veil, as the veil's own plates are, so they stay.
+// text held on screen brings along (home/held-plate.tsx) and the hero
+// eyebrow's dense plate (site/label.tsx) are part of the veil, as the
+// veil's own plates are, so they stay.
 const HIDE_TEXT =
   "header, main, footer { visibility: hidden !important; } " +
-  "main [data-part='own-plate'] { visibility: visible !important; }";
+  "main :is([data-part='own-plate'], [data-part='dense-plate']) { visibility: visible !important; }";
 const FRAMES = Number(process.env.CONTRAST_FRAMES ?? 12);
 // From the top of the page, the field leaves its starting haze and gathers
 // into the hero's dot in under this.
@@ -282,9 +284,9 @@ for (const { name, viewport, tier, setup } of CASES) {
 
 // Further down the page the field gathers into formations: the mark then
 // the wordmark in the field chapter, a shape per study inside its frame, the
-// flat sheet, the strands and the rings. They pack the particles far more
-// densely than the ambient field, so the text in view at each one is
-// measured too (accessibility.md section 7).
+// mark in the making-of's middle pass card, the strands and the rings. They
+// pack the particles far more densely than the ambient field, so the text in
+// view at each one is measured too (accessibility.md section 7).
 
 type ColouredBox = Box & { colour: string };
 
@@ -326,6 +328,10 @@ async function textOnField(
       // A study row holds its frame, where the field forms the study's
       // shape on purpose; its words are measured by their own elements.
       if (element.querySelector('[data-stage="frame"]') !== null) continue;
+      // A pass card holds its face, where the field forms the mark and
+      // draws its pass on purpose; its words sit on the card's own panel,
+      // whose elements count as on their own surface.
+      if (element.querySelector("[data-pass-face]") !== null) continue;
       const box = element.getBoundingClientRect();
       const inView =
         box.width > 2 &&
@@ -371,21 +377,58 @@ const CHAPTER_CASES = [
 ] as const;
 
 // Where each formation is whole, as a scroll position: a chapter's progress
-// through its section, or the middle of a study row. text says whether
-// words are in view there. A text state must find at least one box to
-// measure, so a broken selector fails instead of passing on nothing; a
-// field-only state must find none, so the flag cannot go stale. The field
-// chapter's label, tier readout and note hold on screen through the
-// chapter with their own plates, over the mark gathering out of the dot,
-// the mark and the formed wordmark (runtime/story.ts, BLOOM_SCREENS); the
-// making-of words sit at the top of their section, and further down the
-// pass cards' labels sit under their faces, where the field draws the live
-// passes, over the sheet.
+// through its section, the middle of a study row, or a pass card resting in
+// the middle of the making-of's sliding row. The hero's states come first:
+// its progress runs from the page's top, and on its way to the middle the
+// dot, swelling, passes behind the hero's words, above all on a phone, where
+// it starts above the headline (runtime/story.ts, dotTravel). text says whether words are in
+// view there. A text state must find at least one box to measure, so a
+// broken selector fails instead of passing on nothing; a field-only state
+// must find none, so the flag cannot go stale. own says words on their own
+// surface must be in view, so a state that leaves them out cannot pass on
+// an empty screen. The field chapter's label, tier readout and note hold on
+// screen through the chapter with their own plates, over the mark
+// gathering, the mark and the formed wordmark (runtime/story.ts, BLOOM_AT).
+// The making-of's title and intro sit at the top of its section, over the
+// flow: the field gathers into the middle card only once that card's face
+// is wholly on the screen (story-passes.ts, measureMiddleStage). In the
+// sliding row each card's words sit on the card's own panel, so nothing
+// there is on the field.
 const FORMED_STATES = [
   {
-    name: "field, the label and readout over the mark gathering out of the dot",
+    name: "hero 0.1, the dot leaving its place",
+    chapter: "hero",
+    progress: 0.1,
+    text: true,
+  },
+  {
+    name: "hero 0.2, the dot gliding past the hero's words",
+    chapter: "hero",
+    progress: 0.2,
+    text: true,
+  },
+  {
+    name: "hero 0.35, the dot gliding past the hero's words",
+    chapter: "hero",
+    progress: 0.35,
+    text: true,
+  },
+  {
+    name: "hero 0.6, the dot swelling near the middle",
+    chapter: "hero",
+    progress: 0.6,
+    text: true,
+  },
+  {
+    name: "hero 0.95, the dot swollen at the middle by the scroll cue",
+    chapter: "hero",
+    progress: 0.95,
+    text: true,
+  },
+  {
+    name: "field, the label and readout over the mark gathering",
     chapter: "bloom",
-    progress: BLOOM_SCREENS.gathered / BLOOM_ROOM,
+    progress: (BLOOM_AT.released + BLOOM_AT.gathered) / 2,
     text: true,
   },
   {
@@ -405,16 +448,17 @@ const FORMED_STATES = [
   { name: "work, the coup-online cards", step: 1, text: true },
   { name: "work, the archelab bubble", step: 2, text: true },
   {
-    name: "making-of 0.2, the words over the gathering sheet",
+    name: "making-of 0.03, the title and intro",
     chapter: "making-of",
-    progress: 0.2,
+    progress: 0.03,
     text: true,
   },
   {
-    name: "making-of 0.6, the pass cards' labels over the sheet",
+    name: "making-of, density at rest in the middle, the cards' words on their own panels",
     chapter: "making-of",
-    progress: 0.6,
-    text: true,
+    rest: PASSES.indexOf("density"),
+    text: false,
+    own: true,
   },
   {
     name: "about 0.4, the strands",
@@ -435,6 +479,12 @@ const FORMED_STATES = [
     text: true,
   },
 ] as const;
+
+/** A formed state's scroll position, as the page works it out. */
+type Place =
+  | { kind: "rest"; share: number }
+  | { kind: "step"; step: number }
+  | { kind: "chapter"; chapter: string; progress: number };
 
 // The field needs about a second and a half to gather after a jump.
 const FORMED_SETTLE_MS = 3_000;
@@ -479,20 +529,49 @@ for (const { name, viewport, tier, setup } of CHAPTER_CASES) {
 
       const results: Array<{ state: string; worst: number }> = [];
       for (const state of FORMED_STATES) {
-        const top = await page.evaluate((target) => {
-          const middle = window.innerHeight / 2;
-          const element =
-            "step" in target
-              ? document.querySelector(`main [data-work-step="${target.step}"]`)
-              : document.querySelector(
-                  `main [data-chapter="${target.chapter}"]`,
-                );
-          if (element === null)
-            throw new Error(`No element for ${target.name}`);
-          const box = element.getBoundingClientRect();
-          const progress = "step" in target ? 0.5 : target.progress;
-          return box.top + window.scrollY - middle + progress * box.height;
-        }, state);
+        // A card rests in the middle halfway through its stretch of scroll,
+        // where its own button takes the page (pass-slide.ts, restProgress).
+        const place: Place =
+          "rest" in state
+            ? { kind: "rest", share: restProgress(state.rest) }
+            : "step" in state
+              ? { kind: "step", step: state.step }
+              : {
+                  kind: "chapter",
+                  chapter: state.chapter,
+                  progress: state.progress,
+                };
+        const top = await page.evaluate(
+          ({ name, target }) => {
+            if (target.kind === "rest") {
+              const stretch = document.querySelector(
+                'main [data-part="pass-stretch"]',
+              );
+              if (stretch === null) {
+                throw new Error(`No sliding row for ${name}`);
+              }
+              const box = stretch.getBoundingClientRect();
+              const travel = box.height - window.innerHeight;
+              return box.top + window.scrollY + target.share * travel;
+            }
+            const middle = window.innerHeight / 2;
+            const element = document.querySelector(
+              target.kind === "step"
+                ? `main [data-work-step="${target.step}"]`
+                : `main [data-chapter="${target.chapter}"]`,
+            );
+            if (element === null) throw new Error(`No element for ${name}`);
+            const box = element.getBoundingClientRect();
+            // The hero's progress runs from the page's top to where its
+            // bottom reaches the middle (story-progress.ts, resolveStory).
+            if (target.kind === "chapter" && target.chapter === "hero") {
+              return target.progress * (box.bottom + window.scrollY - middle);
+            }
+            const progress = target.kind === "step" ? 0.5 : target.progress;
+            return box.top + window.scrollY - middle + progress * box.height;
+          },
+          { name: state.name, target: place },
+        );
         await page.evaluate(
           (y) => window.scrollTo({ top: y, behavior: "instant" }),
           top,
@@ -590,6 +669,12 @@ for (const { name, viewport, tier, setup } of CHAPTER_CASES) {
             boxes.length,
             `${state.name} is a field-only state: text in view there needs the flag text: true`,
           ).toBe(0);
+        }
+        if ("own" in state) {
+          expect(
+            own,
+            `${state.name}: words on their own surface are in view`,
+          ).toBeGreaterThan(0);
         }
       }
 

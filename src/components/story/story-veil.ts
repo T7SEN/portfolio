@@ -27,6 +27,20 @@ export const VEIL_OPEN = 0.35;
  * layers let through (1 - a)(1 - b) of the field.
  */
 export const PLATE_ALPHA = 1 - (1 - VEIL_TEXT) / (1 - VEIL_OPEN);
+/**
+ * The veil behind the hero's eyebrow: violet capitals at 13 px, the faintest
+ * text on the page (5.08 to 1 on the void), which the hero's dot glides past
+ * on a narrow screen (D-128). The dot's glow disc behind them at VEIL_TEXT
+ * measured 3.86 to 1; at 0.94 it leaves about 4.8.
+ */
+export const VEIL_DENSE = 0.94;
+/**
+ * The dense plate's own opacity (globals.css, the dense plate): over the
+ * page's plate, at VEIL_TEXT, it makes VEIL_DENSE.
+ */
+export const DENSE_ALPHA = 1 - (1 - VEIL_DENSE) / (1 - VEIL_TEXT);
+/** How far the dense plate's edge fades out beyond its box, in px. */
+export const DENSE_SOFT = 16;
 /** Room around each line of text that its plate covers in full, in px. */
 export const PLATE_PAD = 16;
 /** How far a plate's edge fades out beyond that, in px. */

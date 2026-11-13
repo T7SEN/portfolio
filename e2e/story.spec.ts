@@ -1,12 +1,18 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import {
+  middleCard,
+  slideAt,
+  STRETCH_SCREENS,
+} from "../src/components/home/pass-slide";
 import { fullStudies, shortStudies, studyNumber } from "../src/content";
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { isMarker } from "../src/content/markers";
 import { pages } from "../src/content/pages";
 import { site } from "../src/content/site";
 import { story } from "../src/content/story";
-import { BLOOM_ROOM } from "../src/engine/runtime/story";
+import { BLOOM_ROOMS } from "../src/engine/runtime/story";
+import { PASSES } from "../src/engine/story";
 import { expectNoAxeViolations } from "./support/axe";
 import {
   calmToggle,
@@ -28,6 +34,9 @@ import {
   scrollAtRest,
   scrollPositionsFor,
   scrollToPlace,
+  SLIDE_SCREEN,
+  SLIDE_STRETCH,
+  slideScreenAt,
   STORY_TIMEOUT_MS,
   waitForStory,
   type StoryPlace,
@@ -77,7 +86,7 @@ async function expectTitlesShown(page: Page) {
     .toEqual([]);
 }
 
-test("REQ-SCR-01 the six chapters run in order, each as tall as its content, the field chapter alone with a held stretch whose screen keeps its words, no screen's height without text, and the field's wrapper follows the scroll into each", async ({
+test("REQ-SCR-01 the six chapters run in order, each but the field chapter as tall as its content, the field chapter and the making-of slide each with a held stretch whose screen keeps its words, no other screen's height without text, and the field's wrapper follows the scroll into each", async ({
   page,
 }, testInfo) => {
   test.setTimeout(ENGINE_TIMEOUT_MS + 90_000);
@@ -117,11 +126,17 @@ test("REQ-SCR-01 the six chapters run in order, each as tall as its content, the
   for (const room of rooms) {
     if (room.chapter === "bloom") continue;
     // As tall as its content and its own padding, with no room of its own.
+    // The making-of's slide stretch is part of its content: the chapter has
+    // no room beyond it.
     expect(
       room.height - room.content,
       `${room.chapter} is taller than its content. ${line}`,
     ).toBeLessThanOrEqual(ROOM_TOLERANCE_PX);
-    // No stretch a screen high without a line of text.
+    // No stretch a screen high without a line of text. Measured at the top
+    // of the page, the slide's screen sits at the start of its stretch, so
+    // the rest of the stretch shows no text there; its screen's words are
+    // checked through the stretch below.
+    if (room.chapter === "making-of") continue;
     expect(
       room.emptiest,
       `${room.chapter} has a screen without text. ${line}`,
@@ -139,9 +154,12 @@ test("REQ-SCR-01 the six chapters run in order, each as tall as its content, the
   // the wordmark in (runtime/story.ts), and its screen holds through part
   // of it.
   const field = rooms.find(({ chapter }) => chapter === "bloom");
+  const width = await page.evaluate(() => window.innerWidth);
+  // The lg breakpoint, 64rem.
+  const room = width >= 1024 ? BLOOM_ROOMS.desktop : BLOOM_ROOMS.phone;
   expect(
-    Math.abs((field?.height ?? 0) - BLOOM_ROOM * view),
-    `the field chapter is ${BLOOM_ROOM} screens. ${line}`,
+    Math.abs((field?.height ?? 0) - room * view),
+    `the field chapter is ${room} screens. ${line}`,
   ).toBeLessThanOrEqual(ROOM_TOLERANCE_PX);
   expect(field?.held ?? 0, line).toBeGreaterThan(LEAST_HELD * view);
 
@@ -164,6 +182,62 @@ test("REQ-SCR-01 the six chapters run in order, each as tall as its content, the
         },
       )
       .toEqual([true, true, true]);
+  }
+
+  // The making-of's second held stretch: the slide (home/pass-viewer.tsx),
+  // STRETCH_SCREENS screens, one of them its own screen, which holds while
+  // the row of pass cards moves through the rest. The story leaves calm
+  // off, so the row slides.
+  await expect(page.locator(SLIDE_STRETCH)).toHaveCount(1);
+  const making = rooms.find(({ chapter }) => chapter === "making-of");
+  const slide = await page.locator(SLIDE_STRETCH).evaluate((stretch) => ({
+    height: stretch.getBoundingClientRect().height,
+    screens: stretch.querySelectorAll('[data-part="pass-screen"]').length,
+  }));
+  expect(slide.screens, line).toBe(1);
+  expect(
+    Math.abs(slide.height - STRETCH_SCREENS * view),
+    `the slide's stretch is ${STRETCH_SCREENS} screens, ${slide.height} px. ${line}`,
+  ).toBeLessThanOrEqual(ROOM_TOLERANCE_PX);
+  expect(
+    Math.abs((making?.held ?? 0) - (STRETCH_SCREENS - 1) * view),
+    `the slide's screen holds for ${STRETCH_SCREENS - 1} screens. ${line}`,
+  ).toBeLessThanOrEqual(ROOM_TOLERANCE_PX);
+  await expect(page.locator(`${SLIDE_STRETCH} ${SLIDE_SCREEN}`)).toHaveCSS(
+    "position",
+    "sticky",
+  );
+
+  // Through its held stretch, the card in the middle of the screen keeps
+  // its pass's words whole and in view: at the start, halfway and at the
+  // end, each where a card rests (pass-slide.ts).
+  for (const at of [0, 0.5, 1]) {
+    const pass = PASSES[middleCard(slideAt(at))];
+    await expect
+      .poll(
+        async () => {
+          const { viewWidth, viewHeight, middle, texts } = await slideScreenAt(
+            page,
+            at,
+          );
+          return {
+            middle,
+            shown: texts.map(
+              ({ text, top, bottom, left, right }) =>
+                text !== "" &&
+                top >= 0 &&
+                bottom <= viewHeight &&
+                left >= 0 &&
+                right <= viewWidth,
+            ),
+          };
+        },
+        {
+          message: `the slide's screen and its words at ${at} of its stretch`,
+          timeout: 5_000,
+        },
+      )
+      .toEqual({ middle: pass, shown: [true] });
   }
 
   for (const chapter of chapterOrder) {
@@ -376,12 +450,20 @@ test("REQ-SCR-02 REQ-SCR-03 a wheel moves the page exactly its own distance whil
   }
 });
 
-test("REQ-SCR-02 the story pins nothing, snaps nothing and never moves the page by itself", async ({
+test("REQ-SCR-02 the story pins nothing and never moves the page by itself, the making-of slide's settle apart (making-of.spec.ts)", async ({
   page,
 }, testInfo) => {
   await page.goto("/", { waitUntil: "domcontentloaded" });
-  // The static page's own fixed elements: the skip link and the field.
-  const before = await fixedElements(page);
+  // The static page's own fixed and sticky elements, such as the field and
+  // the field chapter's held screen. The making-of slide's screen is sticky
+  // by its own CSS once the page's script turns the pass grid into the
+  // sliding row, which may happen before this reads the page or after, so
+  // it is counted apart.
+  const isSlideScreen = (element: string) =>
+    element.includes(`[data-part="pass-screen"]`);
+  const before = (await fixedElements(page)).filter(
+    (element) => !isSlideScreen(element),
+  );
   await waitForStory(page);
 
   const places: StoryPlace[] = [
@@ -389,7 +471,9 @@ test("REQ-SCR-02 the story pins nothing, snaps nothing and never moves the page 
     { chapter: "bloom", progress: 0.97 },
     { step: 1, local: 0.03 },
     { step: 2, local: 0.95 },
-    { chapter: "making-of", progress: 0.5 },
+    // The making-of's title and intro, above its slide: the slide settles
+    // its row on a card once the scroll stops (D-131).
+    { chapter: "making-of", progress: 0.02 },
     { chapter: "about", progress: 0.98 },
   ];
   for (const place of places) {
@@ -405,7 +489,12 @@ test("REQ-SCR-02 the story pins nothing, snaps nothing and never moves the page 
     type: "fixed",
     description: `fixed or sticky before the story: ${before.join(", ")}; after: ${after.join(", ")}`,
   });
-  expect(after).toEqual(before);
+  expect(after.filter((element) => !isSlideScreen(element))).toEqual(before);
+  // The slide's one screen, held by CSS position sticky inside its stretch,
+  // never by script: the page scrolls it at its own speed (REQ-SCR-02).
+  expect(after.filter(isSlideScreen)).toEqual([
+    'div[data-part="pass-screen"] sticky',
+  ]);
 });
 
 test("REQ-SCR-03 REQ-A11Y-04 Lenis starts after first content on desktop, leaves with calm mode and returns without it", async ({
@@ -747,8 +836,12 @@ test("REQ-NAV-01 REQ-SCR-02 Skip intro clicked and End pressed while a wheel gli
 // A Page Down moves the page by most of a viewport: the browser keeps a
 // little of the screen before it in view.
 const PAGE_STEP = { least: 0.8, most: 1 } as const;
+// At most this many Tab presses from the last full study to the first pass
+// card: more than the links between, each short study's link and the
+// archive link.
+const MOST_TABS_TO_PASSES = 12;
 
-test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 with Lenis running, keys work the Calm toggle, page natively through the chapters and Tab to every study, each in view and whole", async ({
+test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 REQ-ENG-09 with Lenis running, keys work the Calm toggle, page natively through the chapters and Tab to every study and every pass card, each in view and whole", async ({
   page,
   isMobile,
 }, testInfo) => {
@@ -923,6 +1016,62 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 with Lenis running, keys wor
       { timeout: 5_000 },
     )
     .toEqual([]);
+
+  // On past the short studies and the archive link, Tab reaches the
+  // making-of's pass cards in order. Each card's face is a button, and Tab
+  // takes the page at once to where its card rests in the middle of the
+  // slide: the card marked current, whole, in view and no longer dimmed, and
+  // the field's wrapper in the making-of (REQ-ENG-09).
+  const making = page.locator('main section[data-chapter="making-of"]');
+  const passButton = (index: number) =>
+    making.locator(`li[data-pass="${PASSES[index]}"]`).getByRole("button");
+  const isOnFirstCard = () =>
+    passButton(0).evaluate((button) => button === document.activeElement);
+  const between: string[] = [];
+  for (
+    let press = 0;
+    press < MOST_TABS_TO_PASSES && !(await isOnFirstCard());
+    press += 1
+  ) {
+    await page.keyboard.press("Tab");
+    between.push(
+      await page.evaluate(() =>
+        (document.activeElement?.textContent ?? "").trim().slice(0, 40),
+      ),
+    );
+  }
+  lines.push(`Tab on from the studies through: ${between.join(" | ")}`);
+  for (const [index, pass] of PASSES.entries()) {
+    if (index > 0) await page.keyboard.press("Tab");
+    const card = making.locator(`li[data-pass="${pass}"]`);
+    await expect(passButton(index), `Tab to the ${pass} card`).toBeFocused();
+    await expect(card).toHaveAttribute("aria-current", "step");
+    await expect
+      .poll(
+        async () => {
+          const focus = await focusedView(page);
+          return {
+            whole:
+              focus.top >= 0 &&
+              focus.bottom <= focus.viewHeight &&
+              focus.left >= 0 &&
+              focus.right <= focus.viewWidth,
+            hidden: focus.hiddenParts,
+          };
+        },
+        { message: `the ${pass} card in view and whole`, timeout: 5_000 },
+      )
+      .toEqual({ whole: true, hidden: [] });
+    const focus = await focusedView(page);
+    const chapter = await chapterInLayout(page);
+    const line =
+      `Tab to the ${pass} card: box ${Math.round(focus.left)} to ${Math.round(focus.right)} px across, ` +
+      `${Math.round(focus.top)} to ${Math.round(focus.bottom)} px down the ${focus.viewWidth} by ${focus.viewHeight} px viewport ` +
+      `at scroll ${focus.scrollY}, chapter ${chapter}`;
+    lines.push(line);
+    expect(chapter, line).toBe("making-of");
+    await expect(field, line).toHaveAttribute("data-chapter", "making-of");
+  }
 
   console.log(`keyboard ${testInfo.project.name}:\n${lines.join("\n")}`);
   testInfo.annotations.push({

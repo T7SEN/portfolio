@@ -16,9 +16,9 @@ type PassStillProps = {
  * A still of a pass, in its card's face. It is in the static HTML, so every
  * card shows its pass before any script runs, and with none (REQ-CNT-01);
  * it loads late, since the cards sit far down the page. A failed load
- * removes it and leaves the card's own fill. The face is hidden from
- * assistive technology, which hears the same words as the card's
- * description.
+ * removes it and leaves the card's own fill. In the still grid its alt text
+ * is read with the card; in the sliding row the face is hidden from
+ * assistive technology, and its button is described by the same words.
  */
 export function PassStill({ pass, alt }: PassStillProps) {
   const [hasFailed, setHasFailed] = useState(false);

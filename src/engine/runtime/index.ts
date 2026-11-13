@@ -50,13 +50,18 @@ import {
   calmKey,
   calmProgress,
   chapterTargets,
+  dotSwell,
   fitScale,
   follow,
   formationStage,
   formedArea,
   formedLight,
+  glideStage,
+  meanStreamShare,
+  PASS_STREAM_SECONDS,
   releaseRankScale,
   stagedFrame,
+  stagedTargets,
   swirlShows,
   type StoryTargets,
 } from "./story";
@@ -100,6 +105,20 @@ const FRAME_FOLLOW_SECONDS = 0.4;
 // a fling moves a frame well under a tenth of the screen between two
 // frames; a new row moves its stage by most of the screen.
 const STAGE_STEP = 0.2;
+
+// The followed centres, in pairs, for the moves taken at once.
+type CentrePair = readonly ["dotX", "dotY"] | readonly ["shapeX", "shapeY"];
+const DOT_PAIR: ReadonlyArray<CentrePair> = [["dotX", "dotY"]];
+const CENTRE_PAIRS: ReadonlyArray<CentrePair> = [
+  ["dotX", "dotY"],
+  ["shapeX", "shapeY"],
+];
+// The making-of's stage is the face of the pass card in the middle of the
+// sliding row. It moves with that face on every scroll frame, and when the
+// next card reaches the middle it moves to that card's face at once, which
+// is a long move: the mark forms in the new card from that frame, while its
+// particles catch up unseen (the trail below), and it is drawn pouring over
+// from the card it left, particle by particle (story.ts, streamShare).
 // The particles still fly to a stage taken at once with their own inertia,
 // so they would trail a moving frame by about half a second of its motion.
 // The runtime follows the formed particles' own centre with the spring a
@@ -198,6 +217,7 @@ function startRuntime(
 
   let running = false;
   let disposal: Promise<void> | null = null;
+  let passesWarmed = false;
   let frames = 0;
   let steps = 0;
   let elapsedSeconds = 0;
@@ -226,6 +246,7 @@ function startRuntime(
     frame: 0,
     dotX: 0,
     dotY: 0,
+    dotSwell: 1,
     shapeX: 0,
     shapeY: 0,
   };
@@ -235,10 +256,16 @@ function startRuntime(
   // The formed particles' own centre and its speed, in world units (see
   // FORM_PULL).
   const trail = { x: 0, y: 0, speedX: 0, speedY: 0 };
-  // Where the page puts the dot and the work chapter's shapes (types.ts,
-  // Stage); none until the page has measured its layout.
+  // The making-of's stream (story.ts, streamShare): how far back toward the
+  // card it left the mark is drawn as it begins, and its clock.
+  const stream = { x: 0, y: 0, seconds: PASS_STREAM_SECONDS };
+  // Where the page puts the dot, the work chapter's shapes, the making-of's
+  // mark and the contact rings (types.ts, Stage); none until the page has
+  // measured its layout.
   let stages: Stages = {};
-  const centre = { dotX: 0, dotY: 0, shapeX: 0, shapeY: 0 };
+  // The dot's centre and how many times its size it is drawn (story.ts,
+  // glideStage and dotSwell), and the formation's centre.
+  const centre = { dotX: 0, dotY: 0, dotSwell: 1, shapeX: 0, shapeY: 0 };
   // The making-of's pass cards as the page last sent them (types.ts,
   // PassCard); null while none are on screen, and then no pass is drawn.
   let cards: PassCard[] | null = null;
@@ -261,17 +288,18 @@ function startRuntime(
   // frame, a new stage or new targets size them again and move the centres
   // they are pulled to.
   const refit = () => {
-    const dot = stagedFrame(stages.hero, view);
+    const aspect = view.halfWidth / view.halfHeight;
+    const dot = stagedFrame(
+      glideStage(stages.hero, targets.travel, aspect),
+      view,
+    );
     const shapes = stagedFrame(
-      formationStage(
-        story?.chapter ?? null,
-        stages,
-        view.halfWidth / view.halfHeight,
-      ),
+      formationStage(story?.chapter ?? null, stages, aspect),
       view,
     );
     centre.dotX = dot.centreX;
     centre.dotY = dot.centreY;
+    centre.dotSwell = dotSwell(targets.travel);
     centre.shapeX = shapes.centreX;
     centre.shapeY = shapes.centreY;
     simulation.shapeScaleFrom.value = fitScale(
@@ -321,6 +349,7 @@ function startRuntime(
       reach: haloReach(stages.hero, bufferWidth, bufferHeight),
       light: heroLight(followed.release),
       pulse: simulation.pulse.value,
+      swell: followed.dotSwell,
     });
     const frame =
       stages.work === undefined
@@ -335,6 +364,7 @@ function startRuntime(
     field.light.value = followed.light;
     field.setFocus(-followed.push * PUSH_DEPTH);
     simulation.dotCentre.value.set(followed.dotX, followed.dotY);
+    simulation.dotSwell.value = followed.dotSwell;
     simulation.shapeCentre.value.set(followed.shapeX, followed.shapeY);
     // The dot in the seeds' square, where homes span -1 to 1 at the frame
     // and FIELD_MARGIN past it, for the order of the bloom.
@@ -343,16 +373,49 @@ function startRuntime(
     simulation.dotSeed.value.set(seedX, seedY);
     simulation.rankScale.value = releaseRankScale(seedX, seedY);
     field.setDrawOffset(followed.shapeX - trail.x, followed.shapeY - trail.y);
+    field.setStream(stream.x, stream.y, stream.seconds);
     field.setSwirl(followed.swirl);
     showLook();
   };
 
-  /** Puts the formed particles' modelled centre on the stage, at rest. */
+  /** Ends the making-of's stream: the mark is drawn where it forms. */
+  const endStream = () => {
+    stream.x = 0;
+    stream.y = 0;
+    stream.seconds = PASS_STREAM_SECONDS;
+  };
+
+  /**
+   * Starts the making-of's stream after the mark's stage moved this far at
+   * once: the mark is drawn back at the card it left and pours into the new
+   * one. One that starts while another is under way begins from where the
+   * mark is drawn, on average, so a quick scroll past several cards streams
+   * on from wherever the mark was.
+   */
+  const startStream = (moveX: number, moveY: number) => {
+    const left = 1 - meanStreamShare(stream.seconds);
+    stream.x = stream.x * left - moveX;
+    stream.y = stream.y * left - moveY;
+    stream.seconds = 0;
+  };
+
+  /** One step of the stream's clock; at its end the mark is drawn home. */
+  const stepStream = (seconds: number) => {
+    if (stream.seconds >= PASS_STREAM_SECONDS) return;
+    stream.seconds = Math.min(stream.seconds + seconds, PASS_STREAM_SECONDS);
+    if (stream.seconds >= PASS_STREAM_SECONDS) endStream();
+  };
+
+  /**
+   * Puts the formed particles' modelled centre on the stage, at rest, and
+   * ends any stream, so a seated mark is drawn where it forms.
+   */
   const seatTrail = () => {
     trail.x = followed.shapeX;
     trail.y = followed.shapeY;
     trail.speedX = 0;
     trail.speedY = 0;
+    endStream();
   };
 
   /** One step of the trail, as the compute node steps a formed particle. */
@@ -369,6 +432,7 @@ function startRuntime(
   const jumpCentres = () => {
     followed.dotX = centre.dotX;
     followed.dotY = centre.dotY;
+    followed.dotSwell = centre.dotSwell;
     followed.shapeX = centre.shapeX;
     followed.shapeY = centre.shapeY;
     seatTrail();
@@ -377,21 +441,29 @@ function startRuntime(
   /**
    * A stage that moved a little since the last one is taken at once (see
    * STAGE_STEP): the followed centre moves by the same amount, so a glide
-   * still under way keeps its course and the move is not slowed by it.
+   * still under way keeps its course and the move is not slowed by it. The
+   * dot's swell goes with its place. The making-of's mark takes every move
+   * of its stage at once, and a long one, the next card reaching the
+   * middle, streams there (startStream).
    */
-  const takeSmallMoves = (before: typeof centre) => {
-    const pairs = [
-      ["dotX", "dotY"],
-      ["shapeX", "shapeY"],
-    ] as const;
+  const takeSmallMoves = (
+    before: typeof centre,
+    pairs: ReadonlyArray<CentrePair> = CENTRE_PAIRS,
+  ) => {
     for (const [x, y] of pairs) {
       const moveX = centre[x] - before[x];
       const moveY = centre[y] - before[y];
       const moved = Math.hypot(moveX / view.halfWidth, moveY / view.halfHeight);
-      if (moved > 0 && moved <= STAGE_STEP) {
+      if (x === "dotX" && moved <= STAGE_STEP) {
+        followed.dotSwell += centre.dotSwell - before.dotSwell;
+      }
+      if (!(moved > 0)) continue;
+      const isMark = x === "shapeX" && story?.chapter === "making-of";
+      if (moved <= STAGE_STEP || isMark) {
         followed[x] += moveX;
         followed[y] += moveY;
       }
+      if (isMark && moved > STAGE_STEP && !still) startStream(moveX, moveY);
     }
   };
 
@@ -420,15 +492,27 @@ function startRuntime(
     }
   };
 
+  // Both on the stages the page has sent: the making-of forms its mark only
+  // while a pass card is in the middle (story.ts, stagedTargets).
   const liveTargets = () =>
-    story === null ? AMBIENT : chapterTargets(story.chapter, story.progress);
+    story === null
+      ? AMBIENT
+      : stagedTargets(
+          story.chapter,
+          chapterTargets(story.chapter, story.progress),
+          stages,
+        );
 
   const calmTargets = () =>
     story === null
       ? AMBIENT
-      : chapterTargets(
+      : stagedTargets(
           story.chapter,
-          calmProgress(story.chapter, story.progress),
+          chapterTargets(
+            story.chapter,
+            calmProgress(story.chapter, story.progress),
+          ),
+          stages,
         );
 
   const currentCalmKey = () =>
@@ -517,7 +601,13 @@ function startRuntime(
     // The centres move like the camera, so a jump to a new layout or the
     // change from the work chapter's stage to the whole frame glides
     // (REQ-SCR-05).
-    for (const key of ["dotX", "dotY", "shapeX", "shapeY"] as const) {
+    for (const key of [
+      "dotX",
+      "dotY",
+      "dotSwell",
+      "shapeX",
+      "shapeY",
+    ] as const) {
       followed[key] = follow(
         followed[key],
         centre[key],
@@ -526,6 +616,7 @@ function startRuntime(
       );
     }
     stepTrail(seconds);
+    stepStream(seconds);
     // A still holds the dot at rest (REQ-A11Y-03).
     simulation.pulse.value = still
       ? 0
@@ -559,6 +650,13 @@ function startRuntime(
       renderer.render(field.scene, field.camera);
     } else {
       halftone.render(renderer, field.scene, field.camera);
+      // The first draw builds the field's own pipelines; the pass cards'
+      // are built beside them, in the background, so the first time each
+      // pass is drawn live costs no frame (passes.ts, warm; D-124).
+      if (passes !== null && !passesWarmed) {
+        passesWarmed = true;
+        passes.warm(renderer, field.camera);
+      }
       // Laid out at every draw, from the canvas's size at that moment.
       const laid =
         passes === null || cards === null
@@ -827,8 +925,12 @@ function startRuntime(
       const fresh = story === null || seatPending;
       story = { chapter, progress };
       if (!still) {
+        const before = { ...centre };
         aim(liveTargets(), fresh);
         if (fresh) seatPending = true;
+        // The hero's glide moves the dot a little on every scroll frame:
+        // taken at once, it keeps to the scroll; a jump glides.
+        else takeSmallMoves(before, DOT_PAIR);
         return;
       }
       // A calm field is drawn again only for a new chapter or study, never
@@ -838,10 +940,30 @@ function startRuntime(
     },
     setStage(next) {
       if (disposal !== null || loss.message !== null) return;
+      // The making-of forms its mark only while a pass card is in the
+      // middle (story.ts, stagedTargets), so a making-of stage that comes or
+      // goes changes what the field forms, not only where.
+      const reaim =
+        story?.chapter === "making-of" &&
+        (stages["making-of"] === undefined) !==
+          (next["making-of"] === undefined);
       stages = next;
       const before = { ...centre };
-      refit();
+      if (reaim && !still) aim(liveTargets(), seatPending);
+      else refit();
       takeSmallMoves(before);
+      if (reaim && !still) {
+        if (stages["making-of"] !== undefined) {
+          // A mark that forms anew is gathered from the flow into its card:
+          // its particles fly there for real, with no trail to draw ahead
+          // and no stream.
+          followed.shapeX = centre.shapeX;
+          followed.shapeY = centre.shapeY;
+          seatTrail();
+        } else {
+          endStream();
+        }
+      }
       // Before its first story a field has nothing on screen to glide from.
       if (story === null || seatPending) {
         jumpCentres();
@@ -851,6 +973,8 @@ function startRuntime(
       if (!still) return;
       // A calm field cannot glide: it is put where the new stage wants it
       // and drawn again once (REQ-A11Y-03), with any story sent with it.
+      // One whose mark came or went is aimed at its new still first.
+      if (reaim) aim(calmTargets(), true);
       owe("reseat");
     },
     setPasses(next) {

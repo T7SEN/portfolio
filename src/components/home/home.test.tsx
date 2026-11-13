@@ -17,14 +17,18 @@ import {
 } from "@/content/hero";
 import { isMarker } from "@/content/markers";
 import { pages } from "@/content/pages";
+import { passViewer } from "@/content/passes";
 import { services } from "@/content/services";
 import { site } from "@/content/site";
 import { chapterOrder, story } from "@/content/story";
-import { BLOOM_ROOM } from "@/engine/runtime/story";
+import { BLOOM_ROOMS } from "@/engine/runtime/story";
 import type { EngineEvent } from "@/engine/types";
 import {
+  DENSE_ALPHA,
+  DENSE_SOFT,
   PLATE_ALPHA,
   PLATE_SOFT,
+  VEIL_DENSE,
   VEIL_OPEN,
   VEIL_TEXT,
 } from "@/components/story/story-veil";
@@ -155,6 +159,39 @@ function useLiveRoot() {
 }
 
 describe("Hero", () => {
+  it("REQ-A11Y-06 the violet eyebrow is as wide as its words and brings a dense plate, which the dot glides past", () => {
+    const eyebrow = render(<Hero />).querySelector("p.text-violet");
+    expect(eyebrow?.textContent).toBe(heroCopy(STATIC_TIER).eyebrow);
+    expect(classesOf(eyebrow)).toEqual(
+      expect.arrayContaining(["justify-self-start", "relative", "isolate"]),
+    );
+    const plate = eyebrow?.firstElementChild;
+    expect(plate?.getAttribute("data-part")).toBe("dense-plate");
+    expect(plate?.getAttribute("aria-hidden")).toBe("true");
+    expect(plate?.textContent).toBe("");
+    expect(classesOf(plate)).toEqual(
+      expect.arrayContaining(["absolute", "-inset-1", "-z-10"]),
+    );
+  });
+
+  it("REQ-A11Y-06 the dense plate makes VEIL_DENSE over the page's plate, with its soft edge", () => {
+    const css = readFileSync("src/app/globals.css", "utf8");
+    const rule =
+      /\[data-part="dense-plate"\]\s*\{([^}]*)\}/.exec(css)?.[1] ?? "";
+    expect(rule).toContain(
+      `calc(100% * (1 - (1 - ${VEIL_DENSE}) / (1 - ${VEIL_TEXT})))`,
+    );
+    expect(rule).toContain("var(--color-void)");
+    expect(rule).toContain(`border-radius: ${DENSE_SOFT / 2}px`);
+    expect(rule).toContain(
+      `box-shadow: 0 0 ${DENSE_SOFT}px ${DENSE_SOFT / 2}px var(--plate)`,
+    );
+    expect(DENSE_ALPHA).toBeCloseTo(1 - (1 - VEIL_DENSE) / (1 - VEIL_TEXT), 12);
+    // Two void layers let through the product of what each lets through.
+    expect(1 - (1 - VEIL_TEXT) * (1 - DENSE_ALPHA)).toBeCloseTo(VEIL_DENSE, 12);
+    expect(VEIL_DENSE).toBeGreaterThan(VEIL_TEXT);
+  });
+
   it("REQ-CNT-10 the h1 holds the tier 3 headline in two lines, the second muted", () => {
     const h1s = render(<Hero />).querySelectorAll("h1");
     expect(h1s).toHaveLength(1);
@@ -703,10 +740,12 @@ describe("BloomSection, the field chapter", () => {
 
   it("REQ-SCR-01 REQ-SCR-07 one screen holds through the chapter, label and readout at the top, the note at the bottom, in a room as long as the field's timeline", () => {
     const field = section();
-    // The engine times the mark and the wordmark in screens of this room,
-    // at every width (runtime/story.ts, BLOOM_ROOM).
+    // The engine times the mark and the wordmark as progress through this
+    // room, one length on phones and one from lg (runtime/story.ts,
+    // BLOOM_ROOMS).
     expect(heightClasses(field)).toEqual([
-      `min-h-[${Math.round(BLOOM_ROOM * 100)}svh]`,
+      `min-h-[${Math.round(BLOOM_ROOMS.phone * 100)}svh]`,
+      `lg:min-h-[${Math.round(BLOOM_ROOMS.desktop * 100)}svh]`,
     ]);
     // Sticky, so the three stay on screen while the wordmark forms, and a
     // stacking context of its own, so their plates sit under the words.
@@ -858,8 +897,59 @@ describe("MakingOfSection", () => {
     expect(links).toEqual([
       [pages.home.makingOf.link.label, pages.home.makingOf.link.href],
     ]);
-    // No room of its own after the pass viewer: no height on the section.
+    // No room of its own: no height on the section.
     expect(heightClasses(section)).toEqual([]);
+  });
+
+  it("REQ-ENG-09 REQ-CNT-01 its words in the page's column, then the pass viewer across the whole width, then one panel with the link to the full study and the tier table", () => {
+    const section = render(<MakingOfSection />).querySelector("section");
+    const [words, viewer, closing, ...rest] = [...(section?.children ?? [])];
+    expect(rest).toEqual([]);
+
+    expect(classesOf(words)).toEqual(
+      expect.arrayContaining(["mx-auto", "max-w-7xl"]),
+    );
+    expect(words?.querySelector("h2")?.id).toBe("making-of-heading");
+    expect(words?.querySelector("[data-story-intro]")).not.toBeNull();
+
+    // No column round the viewer: its row runs from edge to edge.
+    expect(viewer?.hasAttribute("data-pass-viewer")).toBe(true);
+    expect(viewer?.getAttribute("class")).toBeNull();
+    expect(viewer?.querySelectorAll("a, dl")).toHaveLength(0);
+
+    expect(classesOf(closing)).toEqual(
+      expect.arrayContaining(["mx-auto", "max-w-7xl"]),
+    );
+    expect(closing?.children).toHaveLength(1);
+    const panel = closing?.firstElementChild;
+    expect(classesOf(panel)).toEqual(
+      expect.arrayContaining(["rounded-2xl", "border", "bg-surface"]),
+    );
+    const links = [...(panel?.querySelectorAll("a") ?? [])].map((link) => [
+      linkName(link),
+      link.getAttribute("href"),
+    ]);
+    expect(links).toEqual([
+      [pages.home.makingOf.link.label, pages.home.makingOf.link.href],
+    ]);
+    expect(panel?.querySelector(".sr-only")?.textContent).toBe(
+      passViewer.tiersName,
+    );
+    const rows = [...(panel?.querySelectorAll("dl > div") ?? [])];
+    expect(
+      rows.map((row) => [
+        row.querySelector("dt")?.textContent,
+        spokenText(row.querySelector("dt")).replace(/\s+/g, " ").trim(),
+        row.querySelector("dd")?.textContent,
+      ]),
+    ).toEqual(
+      passViewer.tiers.map((row) => [
+        row.tier.join(" · "),
+        row.tier.join(" "),
+        row.value,
+      ]),
+    );
+    expect(rows[2]?.querySelector("dd")?.textContent).toBe("Static image");
   });
 });
 
@@ -983,15 +1073,20 @@ describe("HomePage", () => {
     expect(hero?.children).toHaveLength(1);
   });
 
-  it("REQ-SCR-01 every chapter is as tall as its content but the field chapter, the only one with a held stretch", () => {
-    for (const section of page().querySelectorAll("section")) {
+  it("REQ-SCR-01 every chapter is as tall as its content but the field chapter, whose room is on the section; the making-of's slide holds its stretch inside its viewer, only once the script runs", () => {
+    const host = page();
+    for (const section of host.querySelectorAll("section")) {
       const heights = heightClasses(section);
       if (section.dataset.chapter === "bloom") {
-        expect(heights).toHaveLength(1);
+        // One room on phones and one from lg.
+        expect(heights).toHaveLength(2);
       } else {
         expect(heights, section.dataset.chapter).toEqual([]);
       }
     }
+    // The static HTML has the still grid, so no stretch yet (pass-viewer.test.tsx
+    // checks the stretch the sliding row adds).
+    expect(host.querySelector('[data-part="pass-stretch"]')).toBeNull();
   });
 
   it("REQ-A11Y-05 each chapter holds one visually hidden scene line, true on every tier", () => {

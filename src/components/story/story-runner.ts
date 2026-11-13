@@ -1,4 +1,5 @@
-import type { ChapterId, PassCard, Stages } from "@/engine/types";
+import { SLIDE_MOVED } from "@/components/home/pass-slide";
+import type { ChapterId, PassCard, Stage, Stages } from "@/engine/types";
 import { calmStore, type CalmStore } from "@/lib/calm-store";
 import { tierStore, type TierStore } from "@/lib/tier-store";
 import type { Motion } from "@/lib/load-motion";
@@ -17,6 +18,7 @@ import {
 import { readStoryElements } from "./story-dom";
 import {
   isViewerNear,
+  measureMiddleStage,
   measurePassCards,
   measurePassLayout,
   samePasses,
@@ -128,6 +130,11 @@ export type StoryOptions = {
    * frame while the viewer is near (story-passes.ts).
    */
   passes?: () => readonly PassCard[];
+  /**
+   * The making-of stage: the middle card's face as the screen shows it now,
+   * read with the cards (story-passes.ts).
+   */
+  middle?: () => Stage | undefined;
   /** The tier the field runs on: plates and the open veil need a live one. */
   tier?: Pick<TierStore, "getSnapshot" | "subscribe">;
 };
@@ -167,8 +174,9 @@ function contained(run: () => void) {
  * stage again on every scroll frame, so each study's shape forms inside its
  * row's frame and moves with it. While the making-of pass viewer is near,
  * every scroll frame sends its live cards' corners through setPasses, so
- * each pass draws inside its card (REQ-ENG-09). Nothing is pinned or
- * snapped, and scrolling keeps its native speed (REQ-SCR-02).
+ * each pass draws inside its card (REQ-ENG-09), with the middle card's face
+ * as the making-of stage, where the field forms the T7 mark. Nothing is
+ * pinned or snapped, and scrolling keeps its native speed (REQ-SCR-02).
  * Chapter titles below the fold rise into view once; in calm mode or under
  * reduced motion they fade in whole instead (REQ-SCR-05, REQ-A11Y-03).
  *
@@ -193,6 +201,7 @@ export function startStory(
       ...measurePassLayout(root, window),
     }),
     passes = () => measurePassCards(root, window),
+    middle = () => measureMiddleStage(root, window),
     tier = tierStore,
   } = options;
   const { chapters, steps, titles } = readStoryElements(root);
@@ -215,6 +224,12 @@ export function startStory(
   let sentStages: Stages | null = null;
   // The cards last sent; null before any and once the viewer is away.
   let sentPasses: readonly PassCard[] | null = null;
+  // The middle card's face while the sliding row is near; the field forms
+  // the T7 mark in it.
+  let makingStage: Stage | undefined;
+  let resizeObserver: ResizeObserver | null = null;
+  let resizeFrame = 0;
+  let lastHeight = -1;
   let layout: (PageLayout & Partial<PassLayout>) | null = null;
   let plateLayer: HTMLElement | null = null;
   let unsubscribeTier: (() => void) | null = null;
@@ -233,12 +248,16 @@ export function startStory(
   // the screen shows it. Sent only when they moved (sameStages).
   function sendStages(position: number, steps: Span[] = stepSpans()) {
     if (layout === null || isStopped) return;
-    const next = stagesAt(layout, {
+    const placed = stagesAt(layout, {
       position,
       height: view.innerHeight,
       row: rowInView(position, steps),
       calm: isCalm,
     });
+    const next: Stages =
+      makingStage === undefined
+        ? placed
+        : { ...placed, "making-of": makingStage };
     if (sameStages(sentStages, next)) return;
     sentStages = next;
     bridge.setStage(next);
@@ -250,15 +269,62 @@ export function startStory(
   // the field then draws its still again, so each pass keeps to its card.
   // Away from the viewer the field gets none. Sent only when they moved
   // (samePasses).
-  function sendPasses(position: number) {
+  // The middle card's face goes with them as the making-of stage, so the
+  // field forms the mark where the live pass is drawn, and it moves with the
+  // row on every frame (REQ-SCR-05: the engine takes a small move at once and
+  // glides over the jump to the next card). The stages go out once, with
+  // the work stage when the caller has moved that too.
+  function sendPasses(
+    position: number,
+    stagesMoved = false,
+    steps: Span[] = stepSpans(),
+  ) {
     if (layout === null || isStopped) return;
-    const cards = isViewerNear(layout.viewer, position, view.innerHeight)
-      ? passes()
-      : [];
+    const isNear = isViewerNear(layout.viewer, position, view.innerHeight);
+    const stage = isNear ? middle() : undefined;
+    const makingMoved = !sameMaking(makingStage, stage);
+    if (makingMoved) makingStage = stage;
+    if (makingMoved || stagesMoved) sendStages(position, steps);
+    const cards = isNear ? passes() : [];
     const next = cards.length > 0 ? cards : null;
     if (samePasses(sentPasses, next)) return;
     sentPasses = next;
     bridge.setPasses(next);
+  }
+
+  // The row moves on the scroll's next frame, and the middle card and its
+  // live face change once React has drawn them, both after the scroll has
+  // reached the story (ScrollTrigger reads it inside the scroll event, or on
+  // Lenis's frame). The viewer says so (pass-slide.ts, SLIDE_MOVED), and the
+  // faces are read again then, so the field never keeps the card it had
+  // before a jump.
+  function onSlideMoved() {
+    if (!isReady || isStopped) return;
+    sendPasses(currentPosition());
+  }
+
+  function sameMaking(a: Stage | undefined, b: Stage | undefined): boolean {
+    if (a === undefined || b === undefined) return a === b;
+    return sameStages({ "making-of": a }, { "making-of": b });
+  }
+
+  // The page's height changes without a resize: the pass viewer turns from
+  // a still grid into its sliding row once the page's script runs, and back
+  // with calm mode; late images and fonts move text. Every trigger is then
+  // measured again, once per frame at most.
+  function watchHeight() {
+    if (typeof ResizeObserver === "undefined") return;
+    resizeObserver = new ResizeObserver(() => {
+      const height = root.getBoundingClientRect().height;
+      if (height === lastHeight || resizeFrame !== 0) return;
+      lastHeight = height;
+      resizeFrame = requestAnimationFrame(() => {
+        resizeFrame = 0;
+        if (!isStopped) ScrollTrigger.refresh();
+      });
+    });
+    lastHeight = root.getBoundingClientRect().height;
+    resizeObserver.observe(root);
   }
 
   // Any part of the work chapter is on screen: its top is above the
@@ -287,8 +353,7 @@ export function startStory(
     // at once and glides over a jump to the next row (REQ-SCR-05). The stage
     // goes first, so a new study already has its frame. In calm the stage
     // does not move with the scroll, so nothing is sent (REQ-A11Y-03).
-    if (isWorkInView(position)) sendStages(position, steps);
-    sendPasses(position);
+    sendPasses(position, isWorkInView(position), steps);
     const next = resolveStory(
       position,
       chapterTriggers.map(({ chapter, trigger }) => ({
@@ -297,6 +362,7 @@ export function startStory(
         end: trigger.end,
       })),
       steps,
+      view.innerHeight,
     );
     if (next === null || sameStory(last, next)) return;
     last = next;
@@ -454,6 +520,12 @@ export function startStory(
     isStopped = true;
     unsubscribeCalm?.();
     unsubscribeCalm = null;
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    root.removeEventListener(SLIDE_MOVED, onSlideMoved);
+    if (resizeFrame !== 0) cancelAnimationFrame(resizeFrame);
+    resizeFrame = 0;
+    makingStage = undefined;
     ScrollTrigger.removeEventListener("refresh", onRefresh);
     unsubscribeTier?.();
     unsubscribeTier = null;
@@ -525,6 +597,8 @@ export function startStory(
     buildReveals();
 
     ScrollTrigger.addEventListener("refresh", onRefresh);
+    watchHeight();
+    root.addEventListener(SLIDE_MOVED, onSlideMoved);
     unsubscribeTier = tier.subscribe(() => {
       showPlates();
       remeasureSoon();

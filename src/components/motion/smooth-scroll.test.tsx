@@ -3,10 +3,13 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { calmStore, createCalmStore } from "@/lib/calm-store";
+import { wheelSteps } from "@/lib/wheel-steps";
 
 import { SmoothScroll } from "./smooth-scroll";
 import {
   createSmoothScroll,
+  stepWheel,
+  type LenisInput,
   type SmoothScrollModules,
 } from "./smooth-scroll-session";
 
@@ -85,6 +88,7 @@ type FakeLenis = {
   /** True while a wheel glide runs. */
   isSmooth: boolean;
   animatedScroll: number;
+  targetScroll: number;
   raf: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
@@ -100,6 +104,7 @@ function fakeModules() {
     readonly scrollCallbacks: Array<() => void> = [];
     isSmooth = false;
     animatedScroll = 0;
+    targetScroll = 0;
     raf = vi.fn();
     stop = vi.fn();
     start = vi.fn();
@@ -241,13 +246,36 @@ describe("smooth scroll session", () => {
     // Lenis's defaults except one: the wheel keeps its distance and
     // syncTouch stays false (REQ-SCR-02), and a click on a link to another
     // page stops the inertia, so the new page starts at its top.
-    expect(lenis?.args).toEqual([{ stopInertiaOnNavigate: true }]);
+    expect(lenis?.args).toEqual([
+      { stopInertiaOnNavigate: true, virtualScroll: expect.any(Function) },
+    ]);
     expect(lenis?.scrollCallbacks).toEqual([fake.ScrollTrigger.update]);
     expect(fake.ticker.add).toHaveBeenCalledTimes(1);
     expect(fake.ticker.lagSmoothing).toHaveBeenCalledWith(0);
 
     fake.tick(2.5);
     expect(lenis?.raf).toHaveBeenCalledWith(2500);
+  });
+
+  it("REQ-SCR-02 the Lenis made after first content hands every input to stepWheel with its own target", async () => {
+    const { fake } = setUp();
+    await passFirstContent();
+    await settle();
+    const lenis = fake.instances[0];
+    const options = lenis?.args[0] as {
+      virtualScroll: (data: LenisInput) => boolean;
+    };
+    if (lenis === undefined) throw new Error("No Lenis was made");
+    lenis.targetScroll = 300;
+    wheelSteps.set((target) => target + 50);
+    const data: LenisInput = {
+      deltaX: 0,
+      deltaY: 100,
+      event: { type: "wheel", ctrlKey: false } as WheelEvent,
+    };
+    expect(options.virtualScroll(data)).toBe(true);
+    expect(data.deltaY).toBe(50);
+    wheelSteps.reset();
   });
 
   it("REQ-SCR-03 never loads or creates Lenis on a coarse primary pointer", async () => {
@@ -634,6 +662,61 @@ describe("smooth scroll session", () => {
       expect(glideEnds(next)).toBe(3);
       expect(glideEnds(lenis)).toBe(0);
     });
+  });
+});
+
+describe("the wheel's steps through Lenis", () => {
+  function input(
+    type: string,
+    deltaY: number,
+    ctrlKey = false,
+  ): LenisInput & { prevented: () => boolean } {
+    let prevented = false;
+    const event = {
+      type,
+      ctrlKey,
+      cancelable: true,
+      preventDefault: () => {
+        prevented = true;
+      },
+    } as unknown as WheelEvent;
+    return { deltaX: 0, deltaY, event, prevented: () => prevented };
+  }
+
+  afterEach(() => {
+    wheelSteps.reset();
+  });
+
+  it("REQ-SCR-02 with no step a wheel input passes to Lenis as it came", () => {
+    const data = input("wheel", 100);
+    expect(stepWheel({ targetScroll: 500 }, data)).toBe(true);
+    expect(data.deltaY).toBe(100);
+    expect(data.prevented()).toBe(false);
+  });
+
+  it("REQ-SCR-02 a step that sends the page elsewhere sets the delta so Lenis's target lands there, and Lenis glides on its own", () => {
+    wheelSteps.set((target, delta) => (delta > 0 ? 742 : target - delta));
+    const data = input("wheel", 100);
+    expect(stepWheel({ targetScroll: 500 }, data)).toBe(true);
+    expect(data.deltaY).toBe(242);
+    expect(data.prevented()).toBe(false);
+  });
+
+  it("REQ-SCR-02 a step that holds the page still takes the input, which goes no further", () => {
+    wheelSteps.set((target) => target);
+    const data = input("wheel", 12);
+    expect(stepWheel({ targetScroll: 500 }, data)).toBe(false);
+    expect(data.prevented()).toBe(true);
+  });
+
+  it("REQ-SCR-03 touch and a zoom with Ctrl pass as they came, step or not", () => {
+    const asked = vi.fn(() => 900);
+    wheelSteps.set(asked);
+    for (const data of [input("touchmove", 40), input("wheel", 100, true)]) {
+      expect(stepWheel({ targetScroll: 500 }, data)).toBe(true);
+      expect(data.prevented()).toBe(false);
+    }
+    expect(asked).not.toHaveBeenCalled();
   });
 });
 

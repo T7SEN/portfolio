@@ -442,6 +442,25 @@ describe("the hero dot", () => {
     expect(RING_INNER_LIGHT + RING_OUTER_LIGHT).toBeLessThan(0.15);
   });
 
+  test("REQ-SCR-07 the swell draws the disc, the rings and the halo larger, each in proportion", () => {
+    const swell = 2;
+    expect(heroCore(HERO_DOT_PX * 1.5, 1, swell)).toBe(1);
+    expect(heroCore(HERO_DOT_PX * swell + 1, 1, swell)).toBe(0);
+    for (const distance of [0, 9, 23, 30, 41, 60]) {
+      expect(ringLight(distance * swell, 0.4, swell)).toBeCloseTo(
+        ringLight(distance, 0.4),
+        6,
+      );
+      expect(haloAlpha(distance * swell, 120, swell)).toBeCloseTo(
+        haloAlpha(distance, 120),
+        6,
+      );
+    }
+    // The light stays as it is: only the size grows.
+    expect(ringLight(0, 0, swell)).toBeCloseTo(ringLight(0, 0), 6);
+    expect(haloAlpha(0, 170, swell)).toBe(HALO_ALPHA);
+  });
+
   test("REQ-SCR-07 the halo's lattice fades with distance to nothing at its reach", () => {
     expect(haloAlpha(0, 170)).toBe(HALO_ALPHA);
     expect(haloAlpha(85, 170)).toBeCloseTo(HALO_ALPHA / 4);

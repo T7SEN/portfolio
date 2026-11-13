@@ -1,4 +1,5 @@
 import { Container } from "@/components/site/container";
+import { Panel } from "@/components/site/panel";
 import { TextLink } from "@/components/site/text-link";
 import { pages } from "@/content/pages";
 import { story } from "@/content/story";
@@ -9,16 +10,18 @@ import { PassTiers } from "./pass-tiers";
 import { PassViewer } from "./pass-viewer";
 import { StoryScene } from "./story-scene";
 
-// The words, then the pass viewer: a card for each pass of the field's
-// frame, and under them the chosen pass's breakdown with the link to the
-// full study and the tier table (REQ-ENG-09). The chapter is as tall as
-// these and its padding; the field's sheet sits behind them.
+// The words, then the pass viewer across the whole width: a card for each
+// pass of the field's frame with its breakdown, which slides sideways
+// through a held screen as the page scrolls (pass-viewer.tsx), then the
+// link to the full study and what a frame costs on each tier (REQ-ENG-09).
+// The chapter is as tall as these and its padding, with the viewer's held
+// stretch the one room of its own.
 export function MakingOfSection() {
   const { makingOf } = pages.home;
 
   return (
     <HomeSection id="making-of" chapter="making-of">
-      <Container className="py-20 lg:py-32">
+      <Container className="pt-20 lg:pt-32">
         <ChapterHeading
           id="making-of-heading"
           label={story.labels["making-of"]}
@@ -31,17 +34,20 @@ export function MakingOfSection() {
         >
           {makingOf.intro}
         </p>
-        <PassViewer
-          link={
+      </Container>
+      <PassViewer />
+      <Container className="pt-10 pb-20 lg:pt-14 lg:pb-32">
+        <Panel className="flex flex-wrap items-center gap-x-10 gap-y-4">
+          <p className="min-w-0 flex-[3_1_20rem]">
             <TextLink
               href={makingOf.link.href}
               className="inline-flex min-h-11 items-center text-[0.9375rem] font-medium"
             >
               {makingOf.link.label}
             </TextLink>
-          }
-          tiers={<PassTiers />}
-        />
+          </p>
+          <PassTiers />
+        </Panel>
       </Container>
     </HomeSection>
   );

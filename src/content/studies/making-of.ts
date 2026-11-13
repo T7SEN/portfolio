@@ -132,17 +132,17 @@ export const makingOf = {
     },
     {
       label: "3D payload on desktop, tier 1",
-      value: "238.9 KB",
+      value: "239.0 KB",
       source: `Gzip, the production build, ${BUDGET}`,
     },
     {
       label: "3D payload on phones, tier 2",
-      value: "244.6 KB",
+      value: "245.4 KB",
       source: `Gzip, the production build, ${BUDGET}`,
     },
     {
       label: "Stills on tier 3, with no three.js",
-      value: "877.6 KB",
+      value: "745.5 KB",
       source: `The production build, ${BUDGET}`,
     },
   ],

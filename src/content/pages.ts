@@ -149,13 +149,14 @@ export const pages = {
         link: { label: "t7sen.com v1 lives in the archive", href: "/v1" },
       },
     },
-    // Every card of the pass viewer is a button on every tier, so the line
-    // that asks for a pass holds everywhere; it never speaks of a field the
-    // visitor stirred, which tier 3 and calm do not let them do (A14).
+    // The intro asks the visitor to do nothing, since the still grid of calm
+    // mode and of a page with no script has no buttons, and it never speaks
+    // of a field the visitor stirred, which tier 3 and calm do not let them
+    // do (A14). Each card's still and live face show its pass on the mark.
     makingOf: {
       title: "How one frame is built",
       intro:
-        "The render passes that draw this field, and what each device tier shows. Select a pass to read how it works.",
+        "The render passes that draw this field, one at a time, each shown on the T7 mark.",
       link: { label: "Read the full making-of", href: studyHref("making-of") },
     },
     contact: {

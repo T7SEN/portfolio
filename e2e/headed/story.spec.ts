@@ -6,13 +6,15 @@ import {
   type TestInfo,
 } from "@playwright/test";
 
+import { restProgress } from "../../src/components/home/pass-slide";
 import { PARTICLES } from "../../src/engine/config";
-import { LIVE_PASSES, WORK_SHAPES, type ShapeId } from "../../src/engine/story";
+import { PASSES, WORK_SHAPES, type ShapeId } from "../../src/engine/story";
 import { packAtlas } from "../../src/engine/runtime/atlas";
+import { gridFor } from "../../src/engine/runtime/halftone-rules";
+import { MARKS } from "../../src/engine/runtime/shapes/marks";
 import {
+  BLOOM_AT,
   BLOOM_MARK_AT,
-  BLOOM_ROOM,
-  BLOOM_SCREENS,
   bloomStage,
   calmProgress,
   fitScale,
@@ -27,7 +29,7 @@ import {
   watchErrors,
   type FrameSummary,
 } from "../gpu/frame-times";
-import { pixelStats, type Box } from "../gpu/pixels";
+import { cellStats, pixelStats, type Box } from "../gpu/pixels";
 import {
   calmToggle,
   goToChapter,
@@ -63,14 +65,17 @@ type TierSetup = (typeof TIERS)[number];
 
 // The field needs about a second and a half to gather after a jump.
 const SETTLE_MS = 3_000;
-// From the hero's dot, the field takes several seconds to spread back over
-// its homes, which pull gently; a hole is measured against that field at rest.
+// After a jump from the hero's dot, the field is given several seconds to
+// come to rest in the mark it stirs; a hole is measured against that field
+// at rest.
 const REST_SETTLE_MS = 8_000;
 // The page's text is hidden and the veil is off while the field is
 // measured, so only the field's own light is in the frame.
-// The veil's plates behind the text (story-veil.ts) go with it.
+// The veil's plates behind the text (story-veil.ts) go with it, and so does
+// the ring the field chapter draws round a mouse (pointer-ring.tsx), which
+// sets its own visibility and would sit inside the box at the pointer.
 const HIDE_TEXT =
-  "header, main, footer, [data-part='veil-plates'] { visibility: hidden !important; }";
+  "header, main, footer, [data-part='veil-plates'], [data-part='pointer-ring'] { visibility: hidden !important; }";
 
 async function openHome(page: Page, setup: TierSetup) {
   await page.setViewportSize({ width: 1280, height: 800 });
@@ -178,6 +183,7 @@ async function measureStir(
   name: string,
   testInfo: TestInfo,
   stir: () => Promise<void>,
+  controlsName = `${controls.length} boxes away from it`,
 ) {
   const [nearBefore, controlBefore] = await fieldLight(
     page,
@@ -200,7 +206,7 @@ async function measureStir(
     hole: nearDuring.mean / nearBefore.mean / control,
     text:
       `at the pointer ${lightChange(nearBefore, nearDuring)}; ` +
-      `in ${controls.length} boxes away from it ${lightChange(controlBefore, controlDuring)}; ` +
+      `in ${controlsName} ${lightChange(controlBefore, controlDuring)}; ` +
       `hole x${(nearDuring.mean / nearBefore.mean / control).toFixed(3)} of the field around it`,
   };
 }
@@ -254,6 +260,35 @@ async function settleAt(
   return top;
 }
 
+/**
+ * A place in the story, or a pass card resting in the middle of the
+ * making-of's sliding row.
+ */
+type StatePlace = StoryPlace | { rest: number };
+
+/**
+ * Jumps to a place and returns the position. A card's rest is where its own
+ * button takes the page: halfway through the stretch of scroll in which it
+ * rests in the middle (pass-slide.ts, restProgress).
+ */
+async function scrollToState(page: Page, place: StatePlace): Promise<number> {
+  if (!("rest" in place)) return scrollToPlace(page, place);
+  const top = await page
+    .locator('main [data-part="pass-stretch"]')
+    .evaluate((stretch, share) => {
+      const box = stretch.getBoundingClientRect();
+      const travel = box.height - window.innerHeight;
+      const y = window.scrollY + box.top + share * travel;
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      return Math.round(Math.min(Math.max(y, 0), max));
+    }, restProgress(place.rest));
+  await page.evaluate(
+    (y) => window.scrollTo({ top: y, behavior: "instant" }),
+    top,
+  );
+  return top;
+}
+
 // The field changes with the scroll story, and each formation packs the
 // particles into part of the frame, so the frame rate is measured in each
 // chapter of the production home page (REQ-PERF-06).
@@ -282,7 +317,7 @@ const MIN_READOUTS = 5;
 const PASS_LINE_SHARE = 0.95;
 const CHAPTER_STATES: ReadonlyArray<{
   name: string;
-  place: StoryPlace;
+  place: StatePlace;
   chapter: string;
 }> = [
   { name: "hero", place: { chapter: "hero", progress: 0 }, chapter: "hero" },
@@ -290,7 +325,7 @@ const CHAPTER_STATES: ReadonlyArray<{
     name: "bloom, leaving the dot",
     place: {
       chapter: "bloom",
-      progress: BLOOM_SCREENS.released / 2 / BLOOM_ROOM,
+      progress: BLOOM_AT.released / 2,
     },
     chapter: "bloom",
   },
@@ -307,8 +342,10 @@ const CHAPTER_STATES: ReadonlyArray<{
   { name: "work, making-of", place: { step: 0 }, chapter: "work" },
   { name: "work, archelab", place: { step: 2 }, chapter: "work" },
   {
-    name: "making-of 0.5, the sheet",
-    place: { chapter: "making-of", progress: 0.5 },
+    // The middle card's face holds the T7 mark, its pass drawn live there
+    // on both tiers.
+    name: "making-of, the mark in the middle card, density at rest",
+    place: { rest: PASSES.indexOf("density") },
     chapter: "making-of",
   },
   {
@@ -338,7 +375,7 @@ for (const setup of TIERS) {
 
     const results: Array<{ name: string; summary: FrameSummary }> = [];
     for (const state of CHAPTER_STATES) {
-      const scrolledTo = await scrollToPlace(page, state.place);
+      const scrolledTo = await scrollToState(page, state.place);
       // The warm-up inside the measurement covers the glide to the new state.
       const summary = await measureFrames(page, FIELD);
       const chapter = await field.getAttribute("data-chapter");
@@ -384,8 +421,8 @@ for (const setup of TIERS) {
   });
 }
 
-// The bloom (REQ-SCR-07, runtime/story.ts, BLOOM_SCREENS): the T7 mark
-// gathers as the field chapter arrives and is measured in the middle of its
+// The bloom (REQ-SCR-07, runtime/story.ts, BLOOM_AT): the T7 mark gathers
+// once the dot has let the field go and is measured in the middle of its
 // hold (BLOOM_MARK_AT); it turns into the T7SEN wordmark, measured at its
 // calm still in the middle of its own hold, which is gone just before the
 // chapter ends. The field chapter forms inside its bloom stage, the middle
@@ -397,7 +434,7 @@ const MARK_FORMED_AT = BLOOM_MARK_AT;
 const WORDMARK_SHARE_LANDSCAPE = 0.9;
 const WORDMARK_FORMED_AT = calmProgress("bloom", 0);
 // Between the wordmark gone and the end of the chapter.
-const DISSOLVED_AT = (BLOOM_SCREENS.gone + BLOOM_ROOM) / 2 / BLOOM_ROOM;
+const DISSOLVED_AT = (BLOOM_AT.gone + 1) / 2;
 const atlas = packAtlas();
 
 /** Where a fitted bloom shape sits in a host of this size, with room for noise. */
@@ -540,8 +577,12 @@ for (const setup of TIERS) {
 // drawn as outlines, it was 100% at rest, after the wheel and mid scroll in
 // small steps, and 95.4% to 99.7% just after a 100 px jump, the least for
 // Coup Online's wide fan of cards, on both tiers (97.4% to 99.9% with the
-// filled shapes before).
-const FRAME_SHARE = 0.95;
+// filled shapes before). Coup Online's jump reading moves with changes that
+// leave the work chapter and the stage follow alone: later that day it read
+// 94.98% to 95.2% on tiers 1 and 2 across the committed build, the taller
+// field chapter (D-118) and the new making-of, each built alone and together.
+// So the line sits a point under that spread, not on it.
+const FRAME_SHARE = 0.94;
 const FRAME_SCROLL_PX = 100;
 // STAGE_STEP is 0.2 of the half screen, 80 px on this 800 px window, so a
 // 100 px jump glides. Steps of 30 px, one every 150 ms, are each taken at
@@ -717,45 +758,138 @@ for (const setup of TIERS) {
   });
 }
 
-// Stirring (REQ-SCR-06) is measured on the making-of sheet, which lies
-// evenly over the middle 0.7 of the frame (runtime/story.ts SHEET_FIT), so a
-// hole the pointer opens shows against the sheet around it. Since P3.5 the
-// contact chapter is three faint rings, too sparse to measure a hole in.
-// Since P4 the field also draws each live pass inside its card over the
-// sheet, a picture of the whole sheet in a small window, which shows no hole
-// where the pointer is; so the test takes the live passes off first
-// (stopLivePasses), every card then showing its still as on tier 3, and the
-// sheet is bare under every box. The box at the pointer sits well inside
-// the hole.
-const STIR_PLACE = { chapter: "making-of", progress: 0.5 } as const;
+// Stirring (REQ-SCR-06) is measured inside the T7 mark the field chapter
+// holds at BLOOM_MARK_AT: an even, dense fill with nothing else drawn near
+// it, so a hole the pointer opens shows against the fill around it. The
+// chapter's screen is held there and the mark sits in the middle of the
+// window (BLOOM_STAGE), so it stays put while a finger scrolls the page a
+// little. Since P3.5 the contact chapter is three faint rings, too sparse to
+// measure a hole in, and the making-of no longer forms its sheet: its mark
+// sits in the middle card, where the card's live pass covers it.
+const STIR_PLACE = { chapter: "bloom", progress: BLOOM_MARK_AT } as const;
+
+// The mark's polygon (MARKS.logo, the one of public/brand/t7sen-purple.svg)
+// in its own units, y down: a bar across the top from y 0 to 73.13; under
+// it the T's stem, from x 113.09 to 186.22; and the 7's stroke, as thick as
+// the bar, slanting from under the bar's end (x 317.19 to 411.18) down to
+// the bottom left, with empty space between it and the stem. At 1280 x 800
+// the mark is about 540 px wide and its bar about 85 px thick; at 375 x 812
+// about 300 px and 47 px. The pointer stirs the bar near its start, with
+// only empty space above and below it there. The control boxes sit on the
+// bar's far end and on the stroke, at least 300 px from the pointer at
+// 1280 x 800 and about 170 px at 375 x 812, where the push has fallen to a
+// few px, and away from a finger's whole path. Every box sits a cell or more
+// inside the edges of the bar or the stroke it is on.
+const MARK_PLACES = {
+  pointer: { x: 60, y: 36.6 },
+  controls: [
+    { x: 385, y: 36.6 },
+    { x: 302, y: 150 },
+    { x: 197, y: 280 },
+  ],
+} as const;
+
+/** The mark's polygon's box, in its own units. */
+const MARK_BOX = (() => {
+  const ring = MARKS.logo[0]?.rings[0] ?? [];
+  const xs = ring.filter((_, index) => index % 2 === 0);
+  const ys = ring.filter((_, index) => index % 2 === 1);
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return {
+    left,
+    top,
+    width: Math.max(...xs) - left,
+    height: Math.max(...ys) - top,
+  };
+})();
 
 /**
- * Takes the making-of's live passes off the field: each live face loses its
- * data-live mark, so the story reads no card and sends the field none
- * (story-passes.ts). React leaves the mark off, since nothing it renders
- * changes during the test. Waits for the faces the tier draws first, so the
- * marks are there to take.
+ * Where a point of the T7 mark, in its polygon's units, is drawn on a host of
+ * this size while the field chapter holds the mark: the sampler centres the
+ * shape with its longer side from -1 to 1 (shapes/index.ts, layers), and the
+ * engine fits that to the bloom stage (bloomBox above).
  */
-async function stopLivePasses(page: Page, tier: 1 | 2) {
-  const faces = page.locator("main [data-pass-face][data-live]");
-  const look = await page.locator(FIELD).getAttribute("data-look");
-  await expect(faces).toHaveCount(
-    look === "halftone" ? LIVE_PASSES[tier].length : 0,
-  );
-  await faces.evaluateAll((elements) => {
-    for (const element of elements) element.removeAttribute("data-live");
-  });
-  await expect(faces).toHaveCount(0);
+function markPoint(
+  point: { x: number; y: number },
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  const unit = 2 / Math.max(MARK_BOX.width, MARK_BOX.height);
+  const sampleX = (point.x - MARK_BOX.left - MARK_BOX.width / 2) * unit;
+  const sampleY = (MARK_BOX.top + MARK_BOX.height / 2 - point.y) * unit;
+  const frame = { halfWidth: width / height, halfHeight: 1 };
+  const staged = stagedFrame(bloomStage(width / height), frame);
+  // Half the host's height is one unit of the frame on both axes.
+  const half = height / 2;
+  const perSample = fitScale(atlas.extents.logo, staged.frame) * half;
+  return {
+    x: width / 2 + staged.centreX * half + sampleX * perSample,
+    y: height / 2 - staged.centreY * half - sampleY * perSample,
+  };
 }
-const STIR_HALF = 50;
+
+/** The pointer's point and the boxes round it and at the controls, on a host. */
+function stirBoxes(host: Box, half: number, controlHalf: number) {
+  const point = markPoint(MARK_PLACES.pointer, host.width, host.height);
+  return {
+    point,
+    near: around(point.x, point.y, half),
+    controls: MARK_PLACES.controls.map((place) => {
+      const at = markPoint(place, host.width, host.height);
+      return around(at.x, at.y, controlHalf);
+    }),
+  };
+}
+
+// A box on the mark's fill holds a lit dot in nearly every halftone cell
+// whose centre it covers; one that slipped off the mark onto the void holds
+// few. Every box is checked against this before anything stirs, so a box in
+// the wrong place fails there instead of measuring nothing. Unmeasured: the
+// fill sits at FILL_TONE, whose dots pass the lit cell line (pixels.ts
+// LIT_CELL_LUMINANCE) in every cell.
+const LIT_CELLS = 0.8;
+
+/**
+ * The share of each box's halftone cells that hold a lit dot, in one frame
+ * of the host, on the lattice of a canvas of the host's size at a pixel
+ * ratio of 1 (halftone-rules.ts gridFor).
+ */
+async function litCellShares(
+  page: Page,
+  host: Box,
+  boxes: readonly Box[],
+): Promise<number[]> {
+  const png = await page.locator(HOST).screenshot();
+  const { cell, padX, padY } = gridFor(host.width, host.height);
+  const shares: number[] = [];
+  for (const box of boxes) {
+    const stats = await cellStats(page, png, { cell, padX, padY }, [box]);
+    shares.push(stats.cells === 0 ? 0 : stats.litCells / stats.cells);
+  }
+  return shares;
+}
+
+function sharesText(shares: readonly number[]): string {
+  return shares.map((share) => share.toFixed(2)).join(", ");
+}
+
+// The boxes at 1280 x 800: the bar is about 85 px thick, so the box at the
+// pointer is 50 px, inside the hole the cursor opens; the stroke is as thick
+// but slants, so a control box there is 40 px.
+const STIR_HALF = 25;
+const CONTROL_HALF = 20;
 // What the box at the pointer keeps of its light, against the field around
 // it, at most. Measured on the ambient field on 10 Nov 2026: 0.64 to 0.69
 // for the cursor and 0.52 for a finger. On the halftone sheet on 12 Nov
 // 2026: 0.287 and 0.291 for the cursor on tiers 1 and 2 and 0.088 for a
-// finger, while the control boxes kept 1.004 to 1.030 of theirs.
+// finger, while the control boxes kept 1.004 to 1.030 of theirs. Not yet
+// measured on the mark; the lines are kept.
 const HOLE_LIGHT = 0.8;
-// What the control boxes keep of their own light, at least: the field away
-// from the pointer is still there.
+// What the control keeps of its own light, at least: the field away from
+// the pointer is still there. For the cursor the control is three boxes on
+// the mark, 300 px or more from it; for a finger it is the whole frame (see
+// the touch test).
 const CONTROL_LIGHT = 0.7;
 
 for (const setup of TIERS) {
@@ -766,17 +900,12 @@ for (const setup of TIERS) {
     test.setTimeout(180_000);
     const { errors } = watchErrors(page);
     await openHome(page, setup);
-    await stopLivePasses(page, tier);
     await settleAt(page, STIR_PLACE, STIR_PLACE.chapter, REST_SETTLE_MS);
     const host = await hostBox(page);
-    const point = { x: 0.3 * host.width, y: 0.5 * host.height };
-    const near = around(point.x, point.y, STIR_HALF);
-    // Four boxes on the sheet in the other half of the frame.
-    const controls = [0.62, 0.78].flatMap((x) =>
-      [0.3, 0.7].map((y) => around(x * host.width, y * host.height, STIR_HALF)),
-    );
+    const { point, near, controls } = stirBoxes(host, STIR_HALF, CONTROL_HALF);
 
     const restore = await showFieldAlone(page);
+    const onMark = await litCellShares(page, host, [near, ...controls]);
     const stir = await measureStir(
       page,
       near,
@@ -784,6 +913,7 @@ for (const setup of TIERS) {
       `tier${tier}`,
       testInfo,
       async () => {
+        // From the empty space beside the mark onto its bar.
         await page.mouse.move(point.x - 80, point.y);
         await page.mouse.move(point.x, point.y, { steps: 10 });
         // Small circles keep the cursor at the point while the field
@@ -801,11 +931,20 @@ for (const setup of TIERS) {
       },
     );
     const stirLine =
-      `stir tier ${tier} mouse at (${Math.round(point.x)}, ${Math.round(point.y)}), ` +
-      `boxes ${2 * STIR_HALF} px: ${stir.text}`;
+      `stir tier ${tier} mouse at (${Math.round(point.x)}, ${Math.round(point.y)}) on the T7 mark's bar, ` +
+      `boxes ${2 * STIR_HALF} px and ${controls.length} controls of ${2 * CONTROL_HALF} px, ` +
+      `lit cells before at the pointer then the controls ${sharesText(onMark)}: ${stir.text}`;
     console.log(stirLine);
     testInfo.annotations.push({ type: "stir", description: stirLine });
 
+    for (const [index, share] of onMark.entries()) {
+      expect(
+        share,
+        index === 0
+          ? "the box at the pointer sits on the mark"
+          : `control box ${index} sits on the mark`,
+      ).toBeGreaterThanOrEqual(LIT_CELLS);
+    }
     expect(stir.before.lit, "the field is there to stir").toBeGreaterThan(0.05);
     expect(stir.hole, "the cursor thins the field where it is").toBeLessThan(
       HOLE_LIGHT,
@@ -819,7 +958,8 @@ for (const setup of TIERS) {
     await restore();
     // The bar is not sticky, so the click scrolls it into view at the top of
     // the page and the field goes back to the hero's dot. The still is taken
-    // on the sheet again, where the cursor stirred it.
+    // in the field chapter again, where the cursor stirred it; calm shows the
+    // chapter's wordmark there.
     await calmToggle(page).click();
     await expect(calmToggle(page)).toHaveAttribute("aria-checked", "true");
     await settleAt(page, STIR_PLACE, STIR_PLACE.chapter, 1_500);
@@ -850,10 +990,25 @@ for (const setup of TIERS) {
 // A finger on a touch screen: the touch listeners are passive, so the page
 // scrolls natively while the field reads the finger. Driven through the
 // DevTools protocol, which sends real touch events and lets the browser
-// turn them into a scroll, on a touch-emulated phone viewport.
-const DRAG_PX = 200;
-// The hole a finger opens on a phone frame is smaller in pixels.
-const TOUCH_HALF = 35;
+// turn them into a scroll, on a touch-emulated phone viewport. The field
+// chapter holds the whole mark from 0.42 to 0.5 of its room (runtime/story.ts,
+// BLOOM_AT), about 170 px of scroll on this phone, so the drag is 100 px and
+// starts half of it past the mark's middle: the page, scrolled back by the
+// drag, ends about as far before it, and the mark is whole at both ends.
+const DRAG_PX = 100;
+// The phone's mark is smaller: its bar and stroke are about 47 px thick, so
+// the box at the finger is 30 px and a box on the slanting stroke 24 px.
+const TOUCH_HALF = 15;
+const TOUCH_CONTROL_HALF = 12;
+// In the field chapter the pointer also turns the drawn field about itself
+// (halftone-rules.ts, SWIRL_RADIUS, 0.45 of the half height: about 183 px
+// on this phone, and still about 0.4 of a radian 210 px out). The phone's
+// mark is 300 px wide, so no box on it is out of the swirl's reach, and a
+// box there would measure light the swirl moved, not light the finger took
+// away. Each ring of the swirl turns whole, so the light keeps its area:
+// the control for a finger is the whole frame, whose light only the hole
+// takes from. The boxes on the mark still check the mark is where it is
+// worked out to be before anything stirs.
 
 test("REQ-SCR-06 REQ-SCR-02 on a touch screen a finger stirs the field while the page scrolls natively under it", async ({
   browser,
@@ -880,25 +1035,30 @@ test("REQ-SCR-06 REQ-SCR-02 on a touch screen a finger stirs the field while the
     }).toEqual({ tier: 2, reason: "phone" });
     await waitForStory(page);
     expect(await hasLenis(page), "no Lenis on touch").toBe(false);
-    await stopLivePasses(page, 2);
 
-    // The middle of the sheet: the drag scrolls the page back a little,
-    // still inside the making-of chapter, while the sheet holds.
-    const start = await goToChapter(
-      page,
-      STIR_PLACE.chapter,
-      STIR_PLACE.progress,
-    );
+    const room = await page
+      .locator('main [data-chapter="bloom"]')
+      .evaluate((section) => section.getBoundingClientRect().height);
+    const startAt = BLOOM_MARK_AT + DRAG_PX / 2 / room;
+    const start = await goToChapter(page, STIR_PLACE.chapter, startAt);
     await page.waitForTimeout(REST_SETTLE_MS);
     const host = await hostBox(page);
-    const finger = { x: Math.round(host.width / 2), y: 500 };
+    const stirred = stirBoxes(host, TOUCH_HALF, TOUCH_CONTROL_HALF);
+    const finger = {
+      x: Math.round(stirred.point.x),
+      y: Math.round(stirred.point.y),
+    };
     const near = around(finger.x, finger.y, TOUCH_HALF);
-    // On the sheet, above the finger's whole path and below where it stops.
-    const controls = [0.3, 0.7].flatMap((x) =>
-      [200, 640].map((y) => around(x * host.width, y, TOUCH_HALF)),
-    );
+    const { controls } = stirred;
+    const wholeFrame: Box = {
+      x: 0,
+      y: 0,
+      width: host.width,
+      height: host.height,
+    };
 
     await showFieldAlone(page);
+    const onMark = await litCellShares(page, host, [near, ...controls]);
     const cdp = await context.newCDPSession(page);
     const touch = (type: "touchStart" | "touchMove" | "touchEnd", y?: number) =>
       cdp.send("Input.dispatchTouchEvent", {
@@ -908,11 +1068,12 @@ test("REQ-SCR-06 REQ-SCR-02 on a touch screen a finger stirs the field while the
     const stir = await measureStir(
       page,
       near,
-      controls,
+      [wholeFrame],
       "touch",
       testInfo,
       async () => {
-        // The finger moves down the screen, so the page scrolls up.
+        // The finger moves down the screen, from the empty space above the
+        // mark onto its bar, so the page scrolls up.
         const from = finger.y - DRAG_PX;
         await touch("touchStart", from);
         for (let step = 1; step <= 12; step += 1) {
@@ -922,29 +1083,49 @@ test("REQ-SCR-06 REQ-SCR-02 on a touch screen a finger stirs the field while the
         // Held still on the point, the finger keeps stirring there.
         await page.waitForTimeout(1_200);
       },
+      "the whole frame",
     );
     const scrolled = start - (await page.evaluate(() => window.scrollY));
     await touch("touchEnd");
     await page.waitForTimeout(500);
     const chapter = await field.getAttribute("data-chapter");
+    const endAt = startAt - scrolled / room;
 
     const line =
-      `stir touch tier 2 particles ${PARTICLES.tier2Phone}: a ${DRAG_PX} px drag scrolled the page ${Math.round(scrolled)} px; ` +
-      `boxes ${2 * TOUCH_HALF} px: ${stir.text}; field chapter ${chapter}`;
+      `stir touch tier 2 particles ${PARTICLES.tier2Phone}: a ${DRAG_PX} px drag scrolled the page ${Math.round(scrolled)} px, ` +
+      `the field chapter from ${startAt.toFixed(3)} to ${endAt.toFixed(3)} of its ${Math.round(room)} px; ` +
+      `finger at (${finger.x}, ${finger.y}) on the T7 mark's bar, boxes ${2 * TOUCH_HALF} px and ` +
+      `${controls.length} boxes on the mark of ${2 * TOUCH_CONTROL_HALF} px, lit cells before at the finger then on the mark ` +
+      `${sharesText(onMark)}: ${stir.text}; field chapter ${chapter}`;
     console.log(line);
     testInfo.annotations.push({ type: "stir", description: line });
 
+    for (const [index, share] of onMark.entries()) {
+      expect(
+        share,
+        index === 0
+          ? "the box at the finger sits on the mark"
+          : `box ${index} sits on the mark`,
+      ).toBeGreaterThanOrEqual(LIT_CELLS);
+    }
     expect(scrolled, "the page scrolled under the finger").toBeGreaterThan(
       0.5 * DRAG_PX,
     );
     expect(scrolled).toBeLessThan(1.5 * DRAG_PX);
+    expect(startAt, "the stir started with the mark whole").toBeLessThan(
+      BLOOM_AT.morphFrom,
+    );
+    expect(
+      endAt,
+      "the drag left the page with the mark still whole",
+    ).toBeGreaterThan(BLOOM_AT.gathered);
     expect(stir.before.lit, "the field is there to stir").toBeGreaterThan(0.05);
     expect(stir.hole, "the finger thins the field where it is").toBeLessThan(
       HOLE_LIGHT,
     );
     expect(
       stir.control,
-      "away from the finger the field stays",
+      "the frame keeps its light: only the hole takes from it",
     ).toBeGreaterThan(CONTROL_LIGHT);
     expect(chapter).toBe(STIR_PLACE.chapter);
     expect(errors).toEqual([]);

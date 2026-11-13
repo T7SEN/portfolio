@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { WORK_SHAPES, workStep } from "@/engine/story";
+import { STEP_EDGE, WORK_SHAPES, workStep } from "@/engine/story";
 
 import {
+  FIRST_RISE,
   isReached,
   resolveStory,
   rowInView,
@@ -10,6 +11,7 @@ import {
   spanProgress,
   workProgress,
   type ChapterSpan,
+  type Span,
 } from "./story-progress";
 
 // A page laid out like the home page, in scroll pixels: each span starts
@@ -54,9 +56,9 @@ describe("spanProgress", () => {
 
 describe("resolveStory", () => {
   it("REQ-SCR-01 gives the chapter at the viewport's middle and how far through it", () => {
-    expect(resolveStory(0, PAGE)).toEqual({
+    expect(resolveStory(200, PAGE)).toEqual({
       chapter: "hero",
-      progress: 300 / 700,
+      progress: 0.5,
     });
     expect(resolveStory(1300, PAGE)).toEqual({
       chapter: "bloom",
@@ -67,6 +69,24 @@ describe("resolveStory", () => {
       progress: 0.5,
     });
     expect(resolveStory(4300, PAGE)).toEqual({ chapter: "about", progress: 0 });
+  });
+
+  it("REQ-SCR-01 the first chapter runs from the page's top to where its bottom reaches the middle", () => {
+    expect(resolveStory(0, PAGE)).toEqual({ chapter: "hero", progress: 0 });
+    expect(resolveStory(100, PAGE)).toEqual({
+      chapter: "hero",
+      progress: 0.25,
+    });
+    expect(resolveStory(400, PAGE)).toEqual({ chapter: "hero", progress: 1 });
+    // Only the first: every other chapter starts at the middle.
+    expect(resolveStory(1000, PAGE)).toEqual({
+      chapter: "bloom",
+      progress: 0.25,
+    });
+    // A first chapter ending above the page's top is whole from the start.
+    expect(
+      resolveStory(0, [{ chapter: "hero", start: -500, end: -100 }]),
+    ).toEqual({ chapter: "hero", progress: 1 });
   });
 
   it("REQ-SCR-01 a gap between two chapters belongs to the chapter above at 1", () => {
@@ -113,21 +133,72 @@ describe("workProgress", () => {
   it("REQ-SCR-01 each study row is one of workStep's equal steps, in study order", () => {
     expect(CARDS).toHaveLength(WORK_SHAPES.length);
     CARDS.forEach((card, index) => {
-      for (const local of [0, 0.25, 0.5, 0.75]) {
+      for (const local of [0, 0.25, 0.5, 0.75, 0.9]) {
         const position = card.start + local * (card.end - card.start);
         const step = workStep(workProgress(position, CARDS));
         expect(step.index).toBe(index);
-        expect(step.local).toBeCloseTo(local, 10);
+        // The first row holds its shape whole from its start (firstPlace):
+        // its span up to the turn is laid over the step's whole stretch.
+        const expected =
+          index === 0 && local < 1 - STEP_EDGE
+            ? STEP_EDGE + (local / (1 - STEP_EDGE)) * (1 - 2 * STEP_EDGE)
+            : local;
+        expect(step.local).toBeCloseTo(expected, 10);
       }
     });
   });
 
-  it("REQ-SCR-01 above the first row the first shape has not begun", () => {
+  it("REQ-SCR-01 with no screen height, above the first row the first shape has not begun", () => {
     expect(workProgress(1950, CARDS)).toBe(0);
     expect(workStep(workProgress(1950, CARDS))).toEqual({
       index: 0,
       local: 0,
     });
+  });
+
+  it("REQ-SCR-01 REQ-NAV-01 the first study's shape forms as its row comes up the screen and is whole before the row reaches the middle", () => {
+    // An 800 px screen: the first row's top shows at the bottom at 1700 and
+    // reaches the middle at 2100.
+    const height = 800;
+    const [first, second] = CARDS as [Span, Span, Span];
+    const shows = first.start - height / 2;
+    const whole = shows + (height / 2) * FIRST_RISE;
+    expect(workProgress(shows - 50, CARDS, WORK_SHAPES.length, height)).toBe(0);
+    const forming = workStep(
+      workProgress((shows + whole) / 2, CARDS, WORK_SHAPES.length, height),
+    );
+    expect(forming.index).toBe(0);
+    expect(forming.local).toBeCloseTo(STEP_EDGE / 2, 10);
+    // Whole from there through the row's own span up to the turn, wherever
+    // a jump lands: Skip intro puts the row's top anywhere in this stretch.
+    const turn = first.start + (1 - STEP_EDGE) * 200;
+    let before = -1;
+    for (let position = whole; position <= turn; position += 10) {
+      const step = workStep(
+        workProgress(position, CARDS, WORK_SHAPES.length, height),
+      );
+      expect(step.index).toBe(0);
+      expect(step.local).toBeGreaterThanOrEqual(STEP_EDGE - 1e-9);
+      expect(step.local).toBeLessThanOrEqual(1 - STEP_EDGE + 1e-9);
+      expect(step.local).toBeGreaterThanOrEqual(before);
+      before = step.local;
+    }
+    // The turn to the next study starts where it always did.
+    const late = first.start + 0.9 * 200;
+    expect(
+      workStep(workProgress(late, CARDS, WORK_SHAPES.length, height)).local,
+    ).toBeCloseTo(0.9, 10);
+    // Only the first row: the others keep their own spans.
+    const middle = second.start + 0.1 * 200;
+    expect(
+      workStep(workProgress(middle, CARDS, WORK_SHAPES.length, height)).local,
+    ).toBeCloseTo(0.1, 10);
+  });
+
+  it("REQ-SCR-01 the work chapter's first rise reaches resolveStory with the screen's height", () => {
+    const story = resolveStory(1950, PAGE, CARDS, 800);
+    expect(story?.chapter).toBe("work");
+    expect(workStep(story?.progress ?? -1).local).toBeCloseTo(STEP_EDGE, 10);
   });
 
   it("REQ-SCR-01 between two rows the next shape is at its start", () => {
@@ -152,6 +223,9 @@ describe("rowInView", () => {
     for (let position = 1800; position <= 3200; position += 25) {
       expect(rowInView(position, CARDS)).toBe(
         workStep(workProgress(position, CARDS)).index,
+      );
+      expect(rowInView(position, CARDS)).toBe(
+        workStep(workProgress(position, CARDS, WORK_SHAPES.length, 800)).index,
       );
     }
   });

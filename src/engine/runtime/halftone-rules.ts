@@ -428,6 +428,8 @@ export function frameLattice(inset: number, cell: number = CELL_PX): number {
 // token, measured on the preview's hero at twice the pixel density: about
 // 0.085 of glow inside the inner ring, 0.028 between the rings; halo dots in
 // glow at about 0.31 at 25 px, 0.17 at 62 px and gone by about 170 px.
+// The swell (story.ts, dotSwell) draws all of it larger, its soft edges too,
+// as the dot glides to the middle.
 export const HERO_DOT_PX = 7;
 export const RING_INNER_PX = 19;
 export const RING_OUTER_PX = 37;
@@ -455,13 +457,16 @@ export function heroLight(release: number): number {
   return 1 - smoothstep(0, HERO_FADE, release);
 }
 
-/** The soft rings' light at a distance from the dot's centre, in CSS pixels. */
-export function ringLight(distance: number, pulse: number): number {
-  const grow = 1 + RING_BREATH * pulse;
+/**
+ * The soft rings' light at a distance from the dot's centre, in CSS pixels,
+ * at a swell.
+ */
+export function ringLight(distance: number, pulse: number, swell = 1): number {
+  const grow = (1 + RING_BREATH * pulse) * swell;
   const light = 1 + RING_BREATH_LIGHT * pulse;
   const inner = RING_INNER_PX * grow;
   const outer = RING_OUTER_PX * grow;
-  const soft = RING_SOFTNESS_PX;
+  const soft = RING_SOFTNESS_PX * swell;
   return (
     light *
     (RING_INNER_LIGHT * (1 - smoothstep(inner - soft, inner + soft, distance)) +
@@ -469,17 +474,25 @@ export function ringLight(distance: number, pulse: number): number {
   );
 }
 
-/** The solid disc's coverage of a pixel, as discCoverage with no fade. */
-export function heroCore(distance: number, pixelRatio: number): number {
-  return clampUnit((HERO_DOT_PX - distance) * pixelRatio + 0.5);
+/**
+ * The solid disc's coverage of a pixel, as discCoverage with no fade, at a
+ * swell.
+ */
+export function heroCore(
+  distance: number,
+  pixelRatio: number,
+  swell = 1,
+): number {
+  return clampUnit((HERO_DOT_PX * swell - distance) * pixelRatio + 0.5);
 }
 
 /**
- * The halo lattice's alpha at a distance from the dot, both in CSS pixels:
- * the square of a straight fade, as the preview's halo falls off.
+ * The halo lattice's alpha at a distance from the dot, both in CSS pixels,
+ * at a swell: the square of a straight fade, as the preview's halo falls
+ * off.
  */
-export function haloAlpha(distance: number, reach: number): number {
-  const fade = clampUnit(1 - distance / Math.max(reach, 1));
+export function haloAlpha(distance: number, reach: number, swell = 1): number {
+  const fade = clampUnit(1 - distance / Math.max(reach * swell, 1));
   return HALO_ALPHA * fade * fade;
 }
 

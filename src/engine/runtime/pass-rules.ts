@@ -22,7 +22,6 @@ import {
   type Corners,
   type Matrix3,
 } from "./homography";
-import { SHEET_FIT } from "./story";
 
 /** The GPU tier a live backend draws: WebGPU is tier 1, WebGL2 tier 2. */
 export function tierOf(backend: Backend): GpuTier {
@@ -36,7 +35,7 @@ export function tierOf(backend: Backend): GpuTier {
  */
 export const VELOCITY_SUB = 2;
 
-/** A part of the frame in CSS pixels, from its top start corner, y down. */
+/** A part of the frame in CSS pixels, from its top left corner, y down. */
 export interface Crop {
   x: number;
   y: number;
@@ -45,47 +44,23 @@ export interface Crop {
 }
 
 /**
- * The largest part of the frame with the card's width over height, centred
- * on the frame: its full height on a frame wider than the card, its full
- * width on one narrower. A card as wide as the frame shows all of it.
+ * The part of the frame a card shows: the box round its face's four
+ * corners, in CSS pixels of the frame. For a flat face, as the page lays
+ * every card, that is the face's own rectangle, so each pixel of the card
+ * reads the frame at its own place, one to one, and the card shows its pass
+ * of whatever sits right behind it: the T7 mark in the middle card, the
+ * flow behind the others.
  */
-export function centreCrop(
-  aspect: number,
+export function faceCrop(
+  corners: Corners,
   cssWidth: number,
   cssHeight: number,
 ): Crop {
-  const width = Math.max(cssWidth, 1);
-  const height = Math.max(cssHeight, 1);
-  const wanted = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
-  if (wanted < width / height) {
-    const cropWidth = height * wanted;
-    return { x: (width - cropWidth) / 2, y: 0, width: cropWidth, height };
-  }
-  const cropHeight = width / wanted;
-  return { x: 0, y: (height - cropHeight) / 2, width, height: cropHeight };
-}
-
-/**
- * The part of the frame a card shows: the largest part with the face's own
- * width over height, centred inside the making-of sheet, which is the
- * frame's own shape at SHEET_FIT of it round the frame's centre
- * (runtime/story.ts). So the face is filled with the sheet edge to edge, and
- * every card shows the same part of the same frame.
- */
-export function sheetCrop(
-  aspect: number,
-  cssWidth: number,
-  cssHeight: number,
-): Crop {
-  const width = Math.max(cssWidth, 1);
-  const height = Math.max(cssHeight, 1);
-  const inside = centreCrop(aspect, width * SHEET_FIT, height * SHEET_FIT);
-  return {
-    x: inside.x + (width - width * SHEET_FIT) / 2,
-    y: inside.y + (height - height * SHEET_FIT) / 2,
-    width: inside.width,
-    height: inside.height,
-  };
+  const xs = corners.map((corner) => ((corner.x + 1) / 2) * cssWidth);
+  const ys = corners.map((corner) => ((1 - corner.y) / 2) * cssHeight);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
 }
 
 /**
@@ -213,11 +188,10 @@ export function sameCards(
  * The cards a tier draws, laid out on the frame: only the passes LIVE_PASSES
  * lists for the tier, the first card of each pass (one drawer each), and
  * only cards whose corners make a convex face with some area. Each shows its
- * pass inside the making-of sheet, cropped to the face's own width over
- * height (sheetCrop): a face turned in depth is drawn narrower than it
- * stands, and its picture narrows with it, as a still on the same face does.
- * Without the face's own size the crop takes its width over height as
- * drawn. How finely the card draws comes from its size as drawn.
+ * pass of the part of the frame behind its own face (faceCrop), so a flat
+ * face draws at the frame's own size. How finely the card draws comes from
+ * its size as drawn against that part; the face's own size sets only the
+ * radius of its corners.
  */
 export function layoutCards(
   cards: readonly PassCard[] | null,
@@ -240,11 +214,7 @@ export function layoutCards(
     if (inverse === null) continue;
 
     const face = faceSize(corners, cssWidth, cssHeight);
-    const own =
-      card.size !== undefined && card.size.width > 0 && card.size.height > 0
-        ? card.size
-        : face;
-    const crop = sheetCrop(own.width / own.height, cssWidth, cssHeight);
+    const crop = faceCrop(corners, cssWidth, cssHeight);
     const sharpness = Math.min(
       (face.width * ratio) / crop.width,
       (face.height * ratio) / crop.height,

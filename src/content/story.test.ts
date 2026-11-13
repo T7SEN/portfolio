@@ -117,6 +117,7 @@ describe("scene descriptions", () => {
     // then phase P3.5).
     expect(story.scenes.hero).not.toContain("centre");
     expect(story.scenes.hero).toContain("beside the headline");
+    expect(story.scenes.hero).toContain("glides to the middle of the screen");
     expect(story.scenes.bloom).toContain("the T7SEN mark");
     expect(story.scenes.bloom).toContain("the T7SEN wordmark");
     expect(story.scenes.bloom).toContain("flow lines");
@@ -126,19 +127,24 @@ describe("scene descriptions", () => {
         study.slug === "making-of" ? "the making-of" : study.title,
       );
     }
-    expect(story.scenes["making-of"]).toContain("one sheet");
+    expect(story.scenes["making-of"]).toContain("the T7 mark");
+    expect(story.scenes["making-of"]).not.toContain("sheet");
     expect(story.scenes.about).toContain("three thin strands");
     expect(story.scenes.contact).toContain("rings behind the contact panel");
   });
 });
 
 describe("making-of scene", () => {
-  it("REQ-A11Y-05 REQ-ENG-09 A14 the making-of scene says the pass cards are drawn live only where the device draws them", () => {
+  it("REQ-A11Y-05 REQ-ENG-09 A14 the making-of scene says the mark forms in the middle card, whose pass is drawn live only where the device draws it", () => {
     const scene = story.scenes["making-of"];
-    expect(scene).toContain("pass cards");
-    // A card the tier does not draw live shows a still, so the line claims
-    // a live pass only for the cards the device draws.
-    expect(scene).toContain("each card it draws live");
+    expect(scene).toContain("pass card in the middle of the row");
+    // The mark pours from card to card as the row moves (D-127).
+    expect(scene).toContain("pours into the next card");
+    // Only the middle card can be live, and a card the tier does not draw
+    // live shows a still, so the line claims a live pass only when that
+    // card is drawn live.
+    expect(scene).toContain("when that card is drawn live");
+    expect(scene).not.toMatch(/each card|every card/);
   });
 });
 

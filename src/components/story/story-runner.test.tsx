@@ -10,7 +10,8 @@ import {
 } from "vitest";
 
 import HomePage from "@/app/page";
-import type { ChapterId, PassCard, Stages } from "@/engine/types";
+import { SLIDE_MOVED } from "@/components/home/pass-slide";
+import type { ChapterId, PassCard, Stage, Stages } from "@/engine/types";
 import type { CalmSnapshot } from "@/lib/calm-store";
 
 import { REVEAL_START } from "./motion-timing";
@@ -984,7 +985,7 @@ describe("the field's layout", () => {
 
   describe("the pass viewer", () => {
     // The making-of chapter's viewer on the page, and one live card in it,
-    // its face 166 by 270 px as the turned face shows from 1024 px.
+    // its face 166 by 270 px.
     const VIEWER = { top: 4100, bottom: 4900, left: 88, right: 1192 };
     const FACE = { top: 4124, bottom: 4394, left: 300, right: 466, radius: 12 };
 
@@ -1004,12 +1005,28 @@ describe("the field's layout", () => {
       };
     }
 
+    // The middle card's face of the sliding row, 320 by 400 px, centred
+    // across the screen; its centre is 4,500 px down the page.
+    const MIDDLE_CENTRE = 4500;
+
+    /** The making-of stage with the page at position, as the screen shows it. */
+    function middleAt(position: number, nudge = 0): Stage {
+      return {
+        x: 0,
+        y: 1 - (2 * (MIDDLE_CENTRE - position)) / VIEW.innerHeight + nudge,
+        halfWidth: 0.25,
+        halfHeight: 0.5,
+      };
+    }
+
     function startViewer({
       calm = createCalm(false),
       isLive = true,
+      hasMiddle = false,
       lines = [] as PageLayout["lines"],
+      withRows = false,
     } = {}) {
-      const state = { isLive, reads: 0 };
+      const state = { isLive, hasMiddle, nudge: 0, reads: 0, middleReads: 0 };
       const fake = createFakeMotion(page);
       const tier = fakeTier(1);
       const stop = startStory(fake.motion, {
@@ -1021,7 +1038,7 @@ describe("the field's layout", () => {
         tier: tier.store,
         measure: () => ({
           stages: { hero },
-          frames: [],
+          frames: withRows ? FRAMES : [],
           width: WIDTH,
           lines,
           viewer: VIEWER,
@@ -1031,12 +1048,18 @@ describe("the field's layout", () => {
           state.reads += 1;
           return state.isLive ? [cardAt(page.position)] : [];
         },
+        middle: () => {
+          state.middleReads += 1;
+          return state.hasMiddle
+            ? middleAt(page.position, state.nudge)
+            : undefined;
+        },
       });
       const scrollTo = (position: number) => {
         page.position = position;
         fake.triggers[0]?.vars.onUpdate?.();
       };
-      return { stop, scrollTo, tier, state };
+      return { stop, scrollTo, tier, state, fake };
     }
 
     it("REQ-ENG-09 REQ-SCR-01 while the viewer is near, each scroll frame sends the live cards where the screen shows them, only when they moved; well off screen the field gets none, once", () => {
@@ -1152,5 +1175,279 @@ describe("the field's layout", () => {
       expect(kept?.style.clipPath).toBe("");
       still.stop();
     });
+
+    it("REQ-ENG-09 REQ-SCR-01 while the viewer is near, the middle card's face goes to the field as the making-of stage with the others, on every frame it moves; away from the viewer it is dropped, once", () => {
+      page.position = 1000;
+      const { stop, scrollTo, state } = startViewer({ hasMiddle: true });
+      // Far above the viewer: not read, not sent.
+      expect(bridge.setStage.mock.calls).toEqual([[{ hero }]]);
+      expect(state.middleReads).toBe(0);
+
+      scrollTo(2901);
+      expect(bridge.setStage).toHaveBeenLastCalledWith({
+        hero,
+        "making-of": middleAt(2901),
+      });
+      scrollTo(3800);
+      expect(bridge.setStage).toHaveBeenLastCalledWith({
+        hero,
+        "making-of": middleAt(3800),
+      });
+      expect(bridge.setStage).toHaveBeenCalledTimes(3);
+
+      // A face that did not move, or moved by less than a hair, sends
+      // nothing (sameStages).
+      scrollTo(3800);
+      state.nudge = 1e-5;
+      scrollTo(3800);
+      expect(bridge.setStage).toHaveBeenCalledTimes(3);
+      state.nudge = 0;
+
+      // Well past the viewer the field gets the other stages alone, once.
+      scrollTo(5400);
+      expect(bridge.setStage).toHaveBeenCalledTimes(4);
+      expect(bridge.setStage).toHaveBeenLastCalledWith({ hero });
+      const reads = state.middleReads;
+      scrollTo(5600);
+      scrollTo(6000);
+      expect(bridge.setStage).toHaveBeenCalledTimes(4);
+      expect(state.middleReads).toBe(reads);
+      stop();
+    });
+
+    it("REQ-ENG-09 REQ-SCR-01 the making-of stage goes out before the cards, and both before the story moves on", () => {
+      page.position = 3000;
+      const { stop, scrollTo } = startViewer({ hasMiddle: true });
+      scrollTo(3600);
+      const [stageOrder] = bridge.setStage.mock.invocationCallOrder.slice(-1);
+      const [passesOrder] = bridge.setPasses.mock.invocationCallOrder.slice(-1);
+      const [storyOrder] = bridge.setStory.mock.invocationCallOrder.slice(-1);
+      expect(bridge.setStage).toHaveBeenLastCalledWith({
+        hero,
+        "making-of": middleAt(3600),
+      });
+      expect(stageOrder).toBeLessThan(passesOrder ?? 0);
+      expect(passesOrder).toBeLessThan(storyOrder ?? 0);
+      stop();
+    });
+
+    it("REQ-A11Y-03 REQ-A11Y-04 with no middle card, as in the still grid, the field gets no making-of stage; the row's arrival brings it with the refresh, calm drops it on the next task and calm off brings it back", () => {
+      vi.useFakeTimers();
+      try {
+        const calm = createCalm(false);
+        page.position = 4000;
+        const { stop, state, fake } = startViewer({ calm });
+        expect(bridge.setStage.mock.lastCall?.[0]).toEqual({ hero });
+
+        // The still grid becomes the sliding row once the page's script
+        // runs; main grows, and the refresh that follows finds its middle
+        // card.
+        state.hasMiddle = true;
+        fake.ScrollTrigger.refresh();
+        expect(bridge.setStage).toHaveBeenLastCalledWith({
+          hero,
+          "making-of": middleAt(4000),
+        });
+
+        // Calm turns it back into the still grid, which marks no card.
+        state.hasMiddle = false;
+        calm.set(true);
+        vi.runOnlyPendingTimers();
+        expect(bridge.setStage).toHaveBeenLastCalledWith({ hero });
+
+        state.hasMiddle = true;
+        calm.set(false);
+        vi.runOnlyPendingTimers();
+        expect(bridge.setStage).toHaveBeenLastCalledWith({
+          hero,
+          "making-of": middleAt(4000),
+        });
+        stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("REQ-ENG-09 REQ-SCR-02 when the viewer says its row has moved or a new card is in the middle, the faces are read again with the page where it is, so a jump never leaves the field on the card before it", () => {
+      page.position = 4000;
+      const { stop, state } = startViewer({ hasMiddle: true });
+      const viewer = root.querySelector("[data-pass-viewer]");
+      expect(viewer).not.toBeNull();
+      expect(bridge.setStage).toHaveBeenLastCalledWith({
+        hero,
+        "making-of": middleAt(4000),
+      });
+      const stages = bridge.setStage.mock.calls.length;
+      const reads = state.reads;
+
+      // A Tab jump: the scroll reached the story before the row moved, so
+      // the story read the old card. The row then moves with no scroll, and
+      // says so.
+      state.nudge = 0.4;
+      viewer?.dispatchEvent(new Event(SLIDE_MOVED, { bubbles: true }));
+      expect(bridge.setStage).toHaveBeenCalledTimes(stages + 1);
+      expect(bridge.setStage).toHaveBeenLastCalledWith({
+        hero,
+        "making-of": middleAt(4000, 0.4),
+      });
+      expect(state.reads).toBe(reads + 1);
+
+      // The card turned live after React drew it: read with the same event.
+      state.isLive = false;
+      viewer?.dispatchEvent(new Event(SLIDE_MOVED, { bubbles: true }));
+      expect(bridge.setPasses).toHaveBeenLastCalledWith(null);
+      state.isLive = true;
+      viewer?.dispatchEvent(new Event(SLIDE_MOVED, { bubbles: true }));
+      expect(bridge.setPasses).toHaveBeenLastCalledWith([cardAt(4000)]);
+
+      // Nothing moved: nothing sent.
+      const sent = bridge.setPasses.mock.calls.length;
+      viewer?.dispatchEvent(new Event(SLIDE_MOVED, { bubbles: true }));
+      expect(bridge.setStage).toHaveBeenCalledTimes(stages + 1);
+      expect(bridge.setPasses).toHaveBeenCalledTimes(sent);
+
+      // After teardown the event is not heard.
+      stop();
+      const after = bridge.setStage.mock.calls.length;
+      state.nudge = 0;
+      viewer?.dispatchEvent(new Event(SLIDE_MOVED, { bubbles: true }));
+      expect(bridge.setStage).toHaveBeenCalledTimes(after);
+    });
+
+    it("REQ-ENG-03 REQ-SCR-05 with a study row and the viewer both on screen, a scroll frame that moves both stages sends them once", () => {
+      page.position = 2950;
+      const { stop, scrollTo } = startViewer({
+        hasMiddle: true,
+        withRows: true,
+      });
+      expect(bridge.setStage).toHaveBeenLastCalledWith({
+        hero,
+        work: frameAt(2, 2950),
+        "making-of": middleAt(2950),
+      });
+      const count = bridge.setStage.mock.calls.length;
+      scrollTo(2960);
+      expect(bridge.setStage).toHaveBeenCalledTimes(count + 1);
+      expect(bridge.setStage).toHaveBeenLastCalledWith({
+        hero,
+        work: frameAt(2, 2960),
+        "making-of": middleAt(2960),
+      });
+      stop();
+    });
+
+    it("REQ-SCR-04 after teardown the making-of stage is never sent again", () => {
+      page.position = 4000;
+      const { stop, scrollTo, state } = startViewer({ hasMiddle: true });
+      expect(bridge.setStage).toHaveBeenLastCalledWith({
+        hero,
+        "making-of": middleAt(4000),
+      });
+      const count = bridge.setStage.mock.calls.length;
+      stop();
+      scrollTo(4100);
+      state.hasMiddle = false;
+      scrollTo(5400);
+      expect(bridge.setStage).toHaveBeenCalledTimes(count);
+    });
+  });
+});
+
+describe("the page's height", () => {
+  // jsdom has no ResizeObserver: a stand-in that records what it watches,
+  // whose callback the tests call as a browser would.
+  class FakeResizeObserver {
+    static made: FakeResizeObserver[] = [];
+    readonly observe = vi.fn<(target: Element) => void>();
+    readonly disconnect = vi.fn<() => void>();
+    constructor(readonly callback: () => void) {
+      FakeResizeObserver.made.push(this);
+    }
+  }
+
+  let height: number;
+  let frames: Map<number, FrameRequestCallback>;
+  let cancelFrame: Mock<(id: number) => void>;
+
+  function runFrames() {
+    const due = [...frames.values()];
+    frames.clear();
+    for (const callback of due) callback(0);
+  }
+
+  beforeEach(() => {
+    FakeResizeObserver.made = [];
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    frames = new Map();
+    let last = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      last += 1;
+      frames.set(last, callback);
+      return last;
+    });
+    cancelFrame = vi.fn((id: number) => {
+      frames.delete(id);
+    });
+    vi.stubGlobal("cancelAnimationFrame", cancelFrame);
+    height = 5500;
+    root.getBoundingClientRect = () => ({ height }) as DOMRect;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("REQ-SCR-01 REQ-SCR-02 when main's height changes with no resize, as when the pass viewer turns from its grid into its row, every trigger is measured again once, on the next frame", () => {
+    const fake = createFakeMotion(page);
+    const stop = start(fake);
+    const [observer] = FakeResizeObserver.made;
+    expect(FakeResizeObserver.made).toHaveLength(1);
+    expect(observer?.observe).toHaveBeenCalledWith(root);
+    const refreshes = fake.ScrollTrigger.refresh.mock.calls.length;
+
+    // A browser reports the first size at once: the same height, nothing to do.
+    observer?.callback();
+    expect(frames.size).toBe(0);
+
+    // The row's stretch adds its screens: one refresh, a frame later, for
+    // any number of reports in between.
+    height = 7900;
+    observer?.callback();
+    observer?.callback();
+    expect(frames.size).toBe(1);
+    expect(fake.ScrollTrigger.refresh).toHaveBeenCalledTimes(refreshes);
+    runFrames();
+    expect(fake.ScrollTrigger.refresh).toHaveBeenCalledTimes(refreshes + 1);
+    observer?.callback();
+    expect(frames.size).toBe(0);
+
+    // Calm turns it back into the grid: measured again.
+    height = 5500;
+    observer?.callback();
+    runFrames();
+    expect(fake.ScrollTrigger.refresh).toHaveBeenCalledTimes(refreshes + 2);
+    stop();
+  });
+
+  it("REQ-SCR-04 teardown disconnects the observer and cancels a refresh still waiting", () => {
+    const fake = createFakeMotion(page);
+    const stop = start(fake);
+    const [observer] = FakeResizeObserver.made;
+    height = 7900;
+    observer?.callback();
+    const [[pending, waiting]] = [...frames.entries()] as [
+      [number, FrameRequestCallback],
+    ];
+    const refreshes = fake.ScrollTrigger.refresh.mock.calls.length;
+
+    stop();
+    expect(observer?.disconnect).toHaveBeenCalledTimes(1);
+    expect(cancelFrame).toHaveBeenCalledWith(pending);
+    expect(frames.size).toBe(0);
+    // Even a frame already under way refreshes nothing once stopped.
+    waiting(0);
+    expect(fake.ScrollTrigger.refresh).toHaveBeenCalledTimes(refreshes);
+    stop();
+    expect(observer?.disconnect).toHaveBeenCalledTimes(1);
   });
 });

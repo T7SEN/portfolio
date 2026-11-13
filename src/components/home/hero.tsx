@@ -65,19 +65,22 @@ export function Hero() {
             />
           </div>
           <div className="max-sm:contents lg:contents">
+            {/* The eyebrow's box is as wide as its words at every width,
+                and so, from 1024 px, is the headline's, not both columns:
+                the plates behind text follow these boxes and merge, so a
+                full width box would dim the dot beside them. The eyebrow
+                brings a denser plate of its own: on a narrow screen the dot
+                glides past it (D-128). */}
             <Label
               parts={[copy.eyebrow]}
               tone="violet"
               size="md"
+              dense
               className={cx(
-                "mt-2 max-sm:col-span-2 sm:mt-0 lg:col-span-2 lg:justify-self-start",
+                "mt-2 justify-self-start max-sm:col-span-2 sm:mt-0 lg:col-span-2",
                 "max-sm:[@media(max-height:40rem)]:mt-1",
               )}
             />
-            {/* From 1024 px the eyebrow's and the headline's boxes are as
-                wide as their words, not both columns: the plates behind
-                text follow these boxes and merge, so a full width box would
-                dim the dot beside them. */}
             <HeroHeadline
               id="hero-headline"
               className={cx(

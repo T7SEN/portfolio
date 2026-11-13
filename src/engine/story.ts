@@ -45,6 +45,14 @@ export type WorkShape = (typeof WORK_SHAPES)[number];
 export type ShapeId = "logo" | "wordmark" | WorkShape;
 
 /**
+ * The share at each end of a work step over which its shape forms or turns
+ * into the next: a shape is whole across the middle of its step, from
+ * STEP_EDGE to 1 - STEP_EDGE (runtime/story.ts, the work chapter; the page's
+ * first step, story-progress.ts).
+ */
+export const STEP_EDGE = 0.25;
+
+/**
  * The work chapter's progress covers the studies in equal steps: from i / N
  * to (i + 1) / N the field forms WORK_SHAPES[i], N being WORK_SHAPES.length.
  * The page sends progress in those steps, taken from the study row in view,

@@ -13,7 +13,6 @@ import {
 import {
   BLOOM_MARK_AT,
   RINGS,
-  SHEET_FIT,
   bloomStage,
   calmProgress,
   fitScale,
@@ -80,7 +79,7 @@ const TIERS = [
   { tier: 2, count: 250_000, backend: "webgl2" },
 ] as const;
 
-// The bloom's states (runtime/story.ts, BLOOM_SCREENS): the T7 mark in the
+// The bloom's states (runtime/story.ts, BLOOM_AT): the T7 mark in the
 // middle of its hold, and the wordmark at the calm still, the middle of its
 // own hold.
 const MARK_AT = BLOOM_MARK_AT;
@@ -106,6 +105,14 @@ interface Case {
   name: string;
   chapter: ChapterId;
   progress: number;
+  /** More of the development page's query, such as ?pass. */
+  query?: string;
+  /**
+   * A shape the field forms inside the making-of stage the page sends
+   * (data-making-of): its box is worked out once the stage is read, and is
+   * where nearly all the light must be.
+   */
+  stagedShape?: ShapeId;
   /** Where nearly all the light must be. */
   inside?: Box;
   /** Light inside the box, at least. */
@@ -162,10 +169,6 @@ function casesFor(width: number, height: number): Case[] {
   const strands = strandsBand(frame);
   const band = strands.halfHeight * (height / 2) + margin;
   const bandMiddle = height / 2 - strands.centreY * (height / 2);
-  const sheet = {
-    halfWidth: SHEET_FIT * (width / 2) + margin,
-    halfHeight: SHEET_FIT * (height / 2) + margin,
-  };
 
   return [
     {
@@ -208,15 +211,18 @@ function casesFor(width: number, height: number): Case[] {
       inFrame: true,
     })),
     {
-      name: "making-of 0.5: the flat sheet",
+      // The making-of forms the T7 mark only inside a stage the page sends,
+      // the middle pass card's face (runtime/story.ts, stagedTargets).
+      // ?pass= lays one flat 4:5 face in the middle, 320 by 400 or 208 by
+      // 260 under md, sends its box as that stage and draws one card there;
+      // the final pass is the frame behind the face to 2 of 255
+      // (e2e/gpu/passes.spec.ts), so the capture is the field's own frame,
+      // with the one live card the home page draws in its middle card.
+      name: "making-of 0.5: the T7 mark in the middle card's face",
       chapter: "making-of",
       progress: 0.5,
-      inside: {
-        x: width / 2 - sheet.halfWidth,
-        y: height / 2 - sheet.halfHeight,
-        width: 2 * sheet.halfWidth,
-        height: 2 * sheet.halfHeight,
-      },
+      query: "pass=final",
+      stagedShape: "logo",
       insideLit: 0.05,
       share: 0.9,
       inFrame: true,
@@ -391,6 +397,34 @@ function settled(page: Page, tier: 1 | 2) {
   return page.locator(`${VIEW}[data-tier="${tier}"][data-ready="true"]`);
 }
 
+/** A case's own part of the query, after the chapter and progress. */
+function queryOf(entry: Case): string {
+  return entry.query === undefined ? "" : `&${entry.query}`;
+}
+
+/**
+ * The case as it is measured: a shape formed in the making-of stage gets its
+ * box from the stage the page sent, in normalised device coordinates of the
+ * host the canvas fills.
+ */
+async function resolved(
+  page: Page,
+  entry: Case,
+  width: number,
+  height: number,
+): Promise<Case> {
+  if (entry.stagedShape === undefined) return entry;
+  const text = await page.locator(VIEW).getAttribute("data-making-of");
+  if (text === null || text === "") {
+    throw new Error(`${entry.name}: the page sent no making-of stage`);
+  }
+  const stage = JSON.parse(text) as Stage;
+  return {
+    ...entry,
+    inside: shapeBoxIn(entry.stagedShape, stage, width, height),
+  };
+}
+
 /** The drawing buffer's pixel ratio: its width over the canvas's CSS width. */
 function ratioOf(page: Page) {
   return page
@@ -532,15 +566,15 @@ for (const { tier, count, backend } of TIERS) {
     const { errors } = watchErrors(page);
     const lines: string[] = [];
 
-    for (const [index, entry] of casesFor(WIDTH, HEIGHT).entries()) {
+    for (const [index, listed] of casesFor(WIDTH, HEIGHT).entries()) {
       await open(
         page,
-        `tier=${tier}&count=${count}&bare=1&chapter=${entry.chapter}&progress=${entry.progress}`,
+        `tier=${tier}&count=${count}&bare=1&chapter=${listed.chapter}&progress=${listed.progress}${queryOf(listed)}`,
       );
       await expect(settled(page, tier)).toHaveCount(1, { timeout: 90_000 });
       await expect(page.locator(VIEW)).toHaveAttribute(
         "data-chapter",
-        entry.chapter,
+        listed.chapter,
       );
       // No look asked for, so the engine draws the halftone where it can;
       // the ready event reports the count asked for.
@@ -551,6 +585,7 @@ for (const { tier, count, backend } of TIERS) {
       );
       await page.waitForTimeout(SETTLE_MS);
       const ratioBefore = await atFullRatio(page);
+      const entry = await resolved(page, listed, WIDTH, HEIGHT);
 
       const measured = await frameOf(
         page,
@@ -597,14 +632,15 @@ test("REQ-SCR-01 REQ-TIER-02 on a portrait phone frame, 375 x 812, forced tier 2
   const height = 812;
   await page.setViewportSize({ width, height });
 
-  for (const [index, entry] of casesFor(width, height).entries()) {
+  for (const [index, listed] of casesFor(width, height).entries()) {
     await open(
       page,
-      `tier=2&count=100000&bare=1&chapter=${entry.chapter}&progress=${entry.progress}`,
+      `tier=2&count=100000&bare=1&chapter=${listed.chapter}&progress=${listed.progress}${queryOf(listed)}`,
     );
     await expect(settled(page, 2)).toHaveCount(1, { timeout: 90_000 });
     await page.waitForTimeout(SETTLE_MS);
     const ratioBefore = await atFullRatio(page);
+    const entry = await resolved(page, listed, width, height);
     const measured = await frameOf(
       page,
       entry,
@@ -720,12 +756,12 @@ for (const { tier, count } of TIERS) {
   });
 }
 
-// The dot lets the field go as the chapter arrives, and the released
-// particles fly straight on into the T7 mark (runtime/story.ts,
-// BLOOM_SCREENS), so the sweep runs from the dot through the release and
-// the gathering into the mark's hold. Once released, the field has left the
-// dot: far more cells are lit than the dot and its halo light.
-const BLOOM_SWEEP = [0.01, 0.02, 0.03, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.4];
+// The dot lets the field go over the chapter's first 0.3, and the field
+// then gathers into the T7 mark by 0.42 (runtime/story.ts, BLOOM_AT), so
+// the sweep runs from the dot through the release into the gathering. Once
+// released, the field has left the dot: far more cells are lit than the dot
+// and its halo light.
+const BLOOM_SWEEP = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4];
 const RELEASED_CELLS = 4;
 
 for (const { tier, count } of TIERS) {
@@ -746,8 +782,8 @@ for (const { tier, count } of TIERS) {
 
     const atDot = await cellStats(page, await canvas.screenshot(), lattice);
 
-    // Scrolled down through the release and the gathering into the mark's
-    // hold, about a second for each step, the way a reader moves.
+    // Scrolled down through the release into the gathering, about a
+    // second for each step, the way a reader moves.
     const progress = page.getByRole("slider", { name: "Progress" });
     await page.getByRole("combobox", { name: "Chapter" }).selectOption("bloom");
     let worst: CellStats | null = null;

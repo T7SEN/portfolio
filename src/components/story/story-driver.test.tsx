@@ -102,9 +102,9 @@ describe("StoryDriver", () => {
 
   it("REQ-SCR-01 sends the chapter in view as soon as it mounts, before any library loads", async () => {
     await mount();
-    const middle = window.innerHeight / 2;
     expect(setStory).toHaveBeenCalledTimes(1);
-    expect(setStory).toHaveBeenCalledWith("hero", middle / HEIGHT);
+    // At the page's top: the hero's progress starts there.
+    expect(setStory).toHaveBeenCalledWith("hero", 0);
     expect(mocks.loadMotion).not.toHaveBeenCalled();
   });
 

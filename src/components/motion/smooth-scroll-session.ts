@@ -1,5 +1,6 @@
 import type { CalmStore } from "@/lib/calm-store";
 import { loadLenis, loadScrollTrigger } from "@/lib/load-motion";
+import { wheelSteps } from "@/lib/wheel-steps";
 
 import { afterFirstContent } from "../engine/after-first-content";
 import { shouldSmoothScroll } from "./should-smooth-scroll";
@@ -12,12 +13,24 @@ const GSAP_ADJUSTED_LAG_MS = 33;
 
 type TickerCallback = (time: number) => void;
 
+/** One input as Lenis hands it to its virtualScroll option. */
+export type LenisInput = {
+  deltaX: number;
+  deltaY: number;
+  event: WheelEvent | TouchEvent;
+};
+
 /** The parts of Lenis, GSAP and ScrollTrigger that the wiring uses. */
 export type SmoothScrollModules = {
-  Lenis: new (options: { stopInertiaOnNavigate: boolean }) => {
+  Lenis: new (options: {
+    stopInertiaOnNavigate: boolean;
+    virtualScroll: (data: LenisInput) => boolean;
+  }) => {
     readonly isSmooth: boolean;
     /** The position Lenis last wrote while it glides. */
     readonly animatedScroll: number;
+    /** Where Lenis's glide is heading. */
+    readonly targetScroll: number;
     on(event: "scroll", callback: () => void): unknown;
     raf(time: number): void;
     stop(): void;
@@ -155,6 +168,32 @@ function stopGlideBeforeNativeScroll(
 }
 
 /**
+ * Lenis's hook for each input, before it moves the page (lenis 1.3.27,
+ * dist/lenis.mjs lines 582 to 584 and 630): a wheel input that the page's
+ * wheel step sends somewhere else has its delta set so that Lenis's target
+ * lands there, and Lenis's own glide carries the page (D-132); one that
+ * holds the page still is taken here and goes no further. Touch, a zoom
+ * (Ctrl and the wheel) and every input with no step pass through as they
+ * came.
+ */
+export function stepWheel(
+  lenis: { readonly targetScroll: number },
+  data: LenisInput,
+): boolean {
+  const { event } = data;
+  if (!event.type.includes("wheel") || event.ctrlKey) return true;
+  const to = wheelSteps.target(lenis.targetScroll, data.deltaY);
+  if (to === null) return true;
+  const move = to - lenis.targetScroll;
+  if (Math.abs(move) < 0.5) {
+    if (event.cancelable) event.preventDefault();
+    return false;
+  }
+  data.deltaY = move;
+  return true;
+}
+
+/**
  * Smooth wheel scrolling for the life of the root layout. Lenis is created
  * after first content, only on a fine primary pointer with calm off, and is
  * destroyed the moment either stops being true (REQ-SCR-03, REQ-A11Y-03,
@@ -205,7 +244,12 @@ export function createSmoothScroll({
       // the wheel's inertia: without it Lenis went on scrolling the new
       // page after the router had put it at the top, and a visitor who
       // clicked a study while scrolling landed at the bottom of the study.
-      const lenis = new Lenis({ stopInertiaOnNavigate: true });
+      // Each wheel input is offered to the page's wheel step first, so a
+      // notch in the making-of slide glides straight to the next card.
+      const lenis: InstanceType<SmoothScrollModules["Lenis"]> = new Lenis({
+        stopInertiaOnNavigate: true,
+        virtualScroll: (data: LenisInput): boolean => stepWheel(lenis, data),
+      });
       lenis.on("scroll", ScrollTrigger.update);
       const tick = (time: number) => lenis.raf(time * 1000);
       gsap.ticker.add(tick);

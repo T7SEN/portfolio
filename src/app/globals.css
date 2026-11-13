@@ -89,6 +89,20 @@
     box-shadow: 0 0 80px 40px var(--plate);
   }
 
+  /* A denser plate behind the words it is laid under, over the page's own:
+     the void at VEIL_DENSE in all (story-veil.ts), for the hero's violet
+     eyebrow, which the dot glides past on a narrow screen. */
+  [data-part="dense-plate"] {
+    --plate: color-mix(
+      in srgb,
+      var(--color-void) calc(100% * (1 - (1 - 0.94) / (1 - 0.8))),
+      transparent
+    );
+    background: var(--plate);
+    border-radius: 8px;
+    box-shadow: 0 0 16px 8px var(--plate);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     *,
     ::before,

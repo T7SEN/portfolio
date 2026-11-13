@@ -568,9 +568,9 @@ describe("recorded facts", () => {
       / KB$/.test(row.value),
     );
     expect(sized.map((row) => row.value)).toEqual([
-      "238.9 KB",
-      "244.6 KB",
-      "877.6 KB",
+      "239.0 KB",
+      "245.4 KB",
+      "745.5 KB",
     ]);
     // The day's budget file is written again at every gate, so the study
     // cites the making-of results, which keep the table of one build.
@@ -812,10 +812,13 @@ describe("pages", () => {
     expect(contact.panel.action.href).toBe("/contact");
   });
 
-  it("REQ-CNT-01 REQ-ENG-09 A14 the making-of line asks for a pass, as every card is a button, and claims no stirring", () => {
-    expect(pages.home.makingOf.intro).toMatch(
-      /Select a pass to read how it works.$/,
+  it("REQ-CNT-01 REQ-ENG-09 A14 the making-of line says the passes come one at a time on the T7 mark, asks for no pick and claims no stirring", () => {
+    expect(pages.home.makingOf.intro).toBe(
+      "The render passes that draw this field, one at a time, each shown on the T7 mark.",
     );
+    // The row brings each card to the middle as the page scrolls, and the
+    // still grid shows them all, so the line asks the visitor to pick none.
+    expect(pages.home.makingOf.intro).not.toMatch(/select|choose|pick/i);
     expect(pages.home.makingOf.intro).not.toMatch(/stirred|you stir/i);
   });
 });

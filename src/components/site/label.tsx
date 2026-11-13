@@ -28,6 +28,12 @@ type LabelProps = {
   size?: LabelSize;
   id?: string;
   className?: string;
+  /**
+   * Lays a denser plate of void behind the words, over the page's own
+   * (globals.css, the dense plate): for violet words the field can light
+   * from behind, the hero's eyebrow, which the dot glides past (D-128).
+   */
+  dense?: boolean;
 };
 
 const TONES: Record<LabelTone, string> = {
@@ -57,6 +63,7 @@ export function Label({
   size = "sm",
   id,
   className,
+  dense = false,
 }: LabelProps) {
   return (
     <Tag
@@ -65,9 +72,17 @@ export function Label({
         MONO_CAPS,
         TONES[tone],
         (number === undefined ? SIZES : CHAPTER_SIZES)[size],
+        dense && "relative isolate",
         className,
       )}
     >
+      {dense && (
+        <span
+          aria-hidden="true"
+          data-part="dense-plate"
+          className="pointer-events-none absolute -inset-1 -z-10"
+        />
+      )}
       {number !== undefined && <span aria-hidden="true">{`${number} / `}</span>}
       {parts.map((part, index) => (
         <Fragment key={index}>

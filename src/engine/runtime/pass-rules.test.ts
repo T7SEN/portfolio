@@ -10,23 +10,21 @@ import {
   POINTS_FULL,
   VELOCITY_FLOOR,
   VELOCITY_FULL,
-  centreCrop,
   cornerRadii,
   copyCards,
   densityShares,
   directionWeights,
+  faceCrop,
   finalSpread,
   glowShares,
   layoutCards,
   onRoundedFace,
   pointLight,
   sameCards,
-  sheetCrop,
   tierOf,
   velocityLight,
   velocityPresence,
 } from "./pass-rules";
-import { SHEET_FIT } from "./story";
 
 /** A flat card, CSS pixels on a 1280 by 800 frame, y down. */
 function cardAt(
@@ -112,94 +110,102 @@ function expectCrop(
 }
 
 describe("where a card's picture comes from", () => {
-  test("REQ-ENG-09 a portrait card on a landscape box shows the box's full height round its centre", () => {
-    expect(centreCrop(200 / 270, 1280, 800)).toEqual({
-      x: (1280 - (800 * 200) / 270) / 2,
-      y: 0,
-      width: (800 * 200) / 270,
-      height: 800,
+  test("REQ-ENG-09 a flat card shows the part of the frame right behind its face, its own rectangle in CSS pixels", () => {
+    // The desktop middle card, 320 by 400, in the middle of 1280 by 800.
+    const card = cardAt("final", 480, 200, 320, 400);
+    expectCrop(faceCrop(card.corners, 1280, 800), {
+      x: 480,
+      y: 200,
+      width: 320,
+      height: 400,
     });
-  });
-
-  test("REQ-ENG-09 a card wider than a portrait box shows the box's full width round its centre", () => {
-    const crop = centreCrop(1, 375, 812);
-    expect(crop).toEqual({ x: 0, y: (812 - 375) / 2, width: 375, height: 375 });
-  });
-
-  test("REQ-ENG-09 every card shows the sheet: its crop lies inside the middle SHEET_FIT of the frame, as tall or as wide as the sheet", () => {
-    expect(SHEET_FIT).toBe(0.7);
-    // The desktop face, 198 by 268 inside its border, on a 1280 by 800
-    // frame, where the sheet is 896 by 560 from (192, 120).
-    const sheet = { x: 192, y: 120, width: 896, height: 560 };
-    const portrait = sheetCrop(198 / 268, 1280, 800);
-    expectCrop(portrait, {
-      x: 640 - (560 * 198) / 268 / 2,
-      y: sheet.y,
-      width: (560 * 198) / 268,
-      height: sheet.height,
-    });
-    expect(portrait.x).toBeGreaterThanOrEqual(sheet.x);
-    expect(portrait.x + portrait.width).toBeLessThanOrEqual(
-      sheet.x + sheet.width,
+    // A phone card, 208 by 260, low on a 375 by 812 frame.
+    const x = (px: number) => (px / 375) * 2 - 1;
+    const y = (px: number) => 1 - (px / 812) * 2;
+    expectCrop(
+      faceCrop(
+        [
+          { x: x(83.5), y: y(500) },
+          { x: x(291.5), y: y(500) },
+          { x: x(291.5), y: y(760) },
+          { x: x(83.5), y: y(760) },
+        ],
+        375,
+        812,
+      ),
+      { x: 83.5, y: 500, width: 208, height: 260 },
     );
-    // A wide phone face on a 375 by 812 frame takes the sheet's width.
-    const sheetWidth = 375 * SHEET_FIT;
-    const wideHeight = (sheetWidth * 138) / 160;
-    expectCrop(sheetCrop(160 / 138, 375, 812), {
-      x: (375 - sheetWidth) / 2,
-      y: (812 - wideHeight) / 2,
-      width: sheetWidth,
-      height: wideHeight,
-    });
   });
 
-  test("REQ-ENG-09 a card over the sheet's own box shows the whole sheet, drawn as finely as the frame itself", () => {
-    const sheetCard: PassCard = {
+  test("REQ-ENG-09 a card over the whole canvas shows the whole frame", () => {
+    const whole: PassCard = {
       pass: "final",
       corners: [
-        { x: -SHEET_FIT, y: SHEET_FIT },
-        { x: SHEET_FIT, y: SHEET_FIT },
-        { x: SHEET_FIT, y: -SHEET_FIT },
-        { x: -SHEET_FIT, y: -SHEET_FIT },
+        { x: -1, y: 1 },
+        { x: 1, y: 1 },
+        { x: 1, y: -1 },
+        { x: -1, y: -1 },
       ],
     };
-    const [laid] = layoutCards([sheetCard], 1, 1280, 800, 1.5);
-    expectCrop(laid?.crop, { x: 192, y: 120, width: 896, height: 560 });
-    expect(laid?.sharpness).toBeCloseTo(1.5, 9);
+    const [laid] = layoutCards([whole], 1, 1280, 800, 1.5);
+    expectCrop(laid?.crop, { x: 0, y: 0, width: 1280, height: 800 });
   });
 
-  test("REQ-ENG-09 a thumbnail draws the frame smaller: its sharpness is its own pixels over the frame's", () => {
-    const [laid] = layoutCards([cardAt("final", 100, 100)], 1, 1280, 800, 2);
-    // 270 px tall showing the sheet's 560: 0.482 of a CSS px, 0.964 drawn.
-    expect(laid?.sharpness).toBeCloseTo((270 * 2) / 560, 9);
+  test("REQ-ENG-09 a flat card draws the frame one to one: each pixel of the face reads the frame at its own place, as finely as the frame itself", () => {
+    const card = cardAt("density", 480, 200, 320, 400);
+    for (const ratio of [1, 1.5, 2]) {
+      const [laid] = layoutCards([card], 1, 1280, 800, ratio);
+      expect(laid?.sharpness).toBeCloseTo(ratio, 9);
+      const m = laid?.inverse;
+      const crop = laid?.crop;
+      expect(m).toBeDefined();
+      if (m === undefined || crop === undefined) return;
+      // Any point of the face: through the inverse map to the face's own
+      // square, then onto the crop, lands on the same CSS pixel.
+      for (const [px, py] of [
+        [480, 200],
+        [640, 400],
+        [700.25, 333.5],
+        [800, 600],
+      ] as const) {
+        const nx = (px / 1280) * 2 - 1;
+        const ny = 1 - (py / 800) * 2;
+        const w = m[6] * nx + m[7] * ny + m[8];
+        const u = (m[0] * nx + m[1] * ny + m[2]) / w;
+        const v = (m[3] * nx + m[4] * ny + m[5]) / w;
+        expect(crop.x + u * crop.width).toBeCloseTo(px, 6);
+        expect(crop.y + v * crop.height).toBeCloseTo(py, 6);
+      }
+    }
   });
 
-  test("REQ-ENG-09 a face turned in depth crops its picture to its own width over height, not the narrower one it is drawn at", () => {
-    // Turned by rotateY(-34deg) with no perspective: drawn 166 px wide.
-    const drawn = cardAt("glow", 100, 100, 166, 270);
-    const [asDrawn] = layoutCards([drawn], 1, 1280, 800, 1);
+  test("REQ-ENG-09 a face turned in depth shows the box round its corners, and its own size sets only its corners' radius", () => {
+    // Turned in perspective: its far edge drawn shorter than its near one.
+    const x = (px: number) => (px / 1280) * 2 - 1;
+    const y = (px: number) => 1 - (px / 800) * 2;
+    const turned: PassCard = {
+      pass: "glow",
+      corners: [
+        { x: x(100), y: y(100) },
+        { x: x(266), y: y(120) },
+        { x: x(266), y: y(350) },
+        { x: x(100), y: y(370) },
+      ],
+    };
+    const [asDrawn] = layoutCards([turned], 1, 1280, 800, 1);
     const [own] = layoutCards(
-      [{ ...drawn, size: { width: 200, height: 270 } }],
+      [{ ...turned, size: { width: 200, height: 270 } }],
       1,
       1280,
       800,
       1,
     );
-    expect(asDrawn?.crop.width).toBeCloseTo((560 * 166) / 270, 9);
-    expect(own?.crop.width).toBeCloseTo((560 * 200) / 270, 9);
-    expect(own?.crop.height).toBeCloseTo(560, 9);
-    // How finely it draws still comes from the face as drawn, along its
-    // blurrier side: 166 px across the crop's 415.
-    expect(own?.sharpness).toBeCloseTo(166 / ((560 * 200) / 270), 9);
-    // A size that cannot be a face falls back to the face as drawn.
-    const [broken] = layoutCards(
-      [{ ...drawn, size: { width: 0, height: Number.NaN } }],
-      1,
-      1280,
-      800,
-      1,
-    );
-    expect(broken?.crop.width).toBeCloseTo((560 * 166) / 270, 9);
+    expectCrop(asDrawn?.crop, { x: 100, y: 100, width: 166, height: 270 });
+    expectCrop(own?.crop, { x: 100, y: 100, width: 166, height: 270 });
+    // How finely it draws comes from the face as drawn, along its blurrier
+    // side: its side edges, 270 and 230 px, average 250 down the box's 270.
+    expect(own?.sharpness).toBeCloseTo(250 / 270, 9);
+    expect(own?.radii).toEqual({ u: 0, v: 0 });
   });
 
   test("REQ-ENG-09 the corners' radius on the face's own square, at most half a side, and square without a size", () => {

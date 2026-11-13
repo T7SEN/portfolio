@@ -66,14 +66,15 @@ import {
 // corners as its outline, whose every pixel goes back through the inverse
 // projective map to its place on the face (homography.ts), then to the part
 // of the frame the face shows (pass-rules layoutCards), where it reads its
-// pass: a crop inside the making-of sheet at the face's own width over
-// height. Nothing is drawn past the face's rounded corners. Every card draws
-// in one render, so the frame is copied to the canvas once more, not once
-// per card. Each pass reads the halftone's own targets as
-// this frame left them; only the velocity pass draws anything new, and the
-// runtime builds it on WebGPU alone. No compute, no storage texture and no
-// atomics reach a card, so WebGL2 draws its four passes as WebGPU does
-// (REQ-ENG-05).
+// pass: the part right behind the face, so a flat face reads the frame at
+// its own pixel, one to one, and shows its pass of what it covers, the T7
+// mark in the middle card. Nothing is drawn past the face's rounded
+// corners. Every card draws in one render, so the frame is copied to the
+// canvas once more, not once per card. Each pass reads the halftone's own
+// targets as this frame left them; only the velocity pass draws anything
+// new, and the runtime builds it on WebGPU alone. No compute, no storage
+// texture and no atomics reach a card, so WebGL2 draws its four passes as
+// WebGPU does (REQ-ENG-05).
 
 type Colour = (point: Node<"vec2">, sharpness: Node<"float">) => Node<"vec3">;
 
@@ -86,6 +87,17 @@ function token(hex: Hex) {
 /** A texel of a source, its index clamped inside it. */
 function load(source: Texture, at: Node<"vec2">, size: Node<"vec2">) {
   return textureLoad(source, ivec2(clamp(at, vec2(0, 0), size.sub(1))));
+}
+
+/** A start that throws as a rejected promise, so one catch takes both. */
+function attempt(start: () => Promise<void> | undefined): Promise<void> {
+  try {
+    return Promise.resolve(start());
+  } catch (error) {
+    return Promise.reject(
+      error instanceof Error ? error : new Error(String(error)),
+    );
+  }
 }
 
 /** The face's own square: the corner each vertex takes, and the two triangles. */
@@ -328,6 +340,8 @@ export function createPasses(
     scene.add(made.mesh);
   }
   const clearColour = new Color();
+  // Set by dispose: a build still waiting then starts nothing.
+  let released = false;
 
   return {
     /**
@@ -385,10 +399,51 @@ export function createPasses(
       }
     },
     /**
+     * Builds every card's pipeline, and the velocity draw's, in the
+     * background, so the first time each pass is drawn live costs no frame.
+     * Built on first use, they held single frames for up to 92 ms on WebGL2
+     * as the making-of row reached each card (D-124). Call it once, after
+     * the halftone has drawn, with the canvas as the render target. A build
+     * that fails here is left to the first draw, as before.
+     */
+    warm(renderer: WebGPURenderer, fieldCamera: Camera): void {
+      const shown = [...drawers.values()];
+      // compileAsync gathers what it builds before its first wait, so the
+      // meshes are shown only for the call itself.
+      const buildCards = () => {
+        for (const each of shown) each.mesh.visible = true;
+        try {
+          return renderer.compileAsync(scene, camera);
+        } finally {
+          for (const each of shown) each.mesh.visible = false;
+        }
+      };
+      // The velocity draw renders into its own target, which is set only
+      // for the call. It waits for the cards: two builds at once break
+      // three's own record of the build under way (r187), and the first
+      // then fails.
+      const buildVelocity = () => {
+        if (velocity === null || released) return undefined;
+        renderer.setRenderTarget(velocityTarget);
+        try {
+          return renderer.compileAsync(velocity.scene, fieldCamera);
+        } finally {
+          renderer.setRenderTarget(null);
+        }
+      };
+      void attempt(buildCards)
+        .catch(() => undefined)
+        .then(() => attempt(buildVelocity))
+        .catch(() => {
+          // Left to the first draw.
+        });
+    },
+    /**
      * Frees the card materials, their shared geometry and the velocity
      * target; the velocity draw belongs to the field.
      */
     dispose() {
+      released = true;
       const parts: Array<() => void> = [
         ...[...drawers.values()].map((each) => () => each.material.dispose()),
         () => geometry.dispose(),

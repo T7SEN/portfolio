@@ -15,9 +15,10 @@ export default function EnginePage() {
         Development only. The engine alone: force a tier with ?tier=1, 2 or 3,
         set the particles with ?count=, start calm with ?calm=1, show a chapter
         with ?chapter= and ?progress= (0 to 1), draw the soft fallback field
-        with ?look=soft, draw the making-of passes in five test cards with
-        ?passes=1 or one pass over the making-of sheet with ?pass= (points,
-        velocity, density, glow or final), and show only the field with ?bare=1.
+        with ?look=soft, draw the making-of passes in a row of five flat cards,
+        the T7 mark in the middle one, with ?passes=1, or one card in the middle
+        with the mark inside it in one pass with ?pass= (points, velocity,
+        density, glow or final), and show only the field with ?bare=1.
       </p>
       <EngineView />
     </div>

@@ -129,8 +129,9 @@ export interface ChapterRoom {
    */
   content: number;
   /**
-   * How far the page scrolls while a sticky child of the section holds
-   * still, px; 0 without one.
+   * How far the page scrolls while a sticky screen in the section holds
+   * still, px; 0 without one. The field chapter's screen is a child of the
+   * section; the making-of slide's screen sits inside its stretch.
    */
   held: number;
   /** The tallest stretch of the section with no line of text in it, px. */
@@ -162,7 +163,6 @@ export function chapterRooms(page: Page): Promise<ChapterRoom[]> {
 
       let first = Number.POSITIVE_INFINITY;
       let last = Number.NEGATIVE_INFINITY;
-      let held = 0;
       for (const child of section.children) {
         const childStyle = getComputedStyle(child);
         if (
@@ -176,16 +176,29 @@ export function chapterRooms(page: Page): Promise<ChapterRoom[]> {
         const rect = child.getBoundingClientRect();
         first = Math.min(first, rect.top - px(childStyle.marginTop));
         last = Math.max(last, rect.bottom + px(childStyle.marginBottom));
-        if (childStyle.position === "sticky") {
-          held = Math.max(
-            held,
-            box.height -
-              borders -
-              px(style.paddingTop) -
-              px(style.paddingBottom) -
-              rect.height,
-          );
+      }
+
+      // A sticky screen holds while the page scrolls through what is left
+      // of its parent's content box below it.
+      let held = 0;
+      for (const element of section.querySelectorAll<HTMLElement>("*")) {
+        const holder = element.parentElement;
+        if (
+          holder === null ||
+          getComputedStyle(element).position !== "sticky"
+        ) {
+          continue;
         }
+        const holderStyle = getComputedStyle(holder);
+        held = Math.max(
+          held,
+          holder.getBoundingClientRect().height -
+            px(holderStyle.borderTopWidth) -
+            px(holderStyle.borderBottomWidth) -
+            px(holderStyle.paddingTop) -
+            px(holderStyle.paddingBottom) -
+            element.getBoundingClientRect().height,
+        );
       }
       const content =
         (last > first ? last - first : 0) +
@@ -270,6 +283,8 @@ export interface HeldText {
   /** Its box in the viewport, px. */
   top: number;
   bottom: number;
+  left: number;
+  right: number;
 }
 
 /**
@@ -307,10 +322,123 @@ export function heldScreenAt(
           text: (plate.textContent ?? "").trim(),
           top: rect.top,
           bottom: rect.bottom,
+          left: rect.left,
+          right: rect.right,
         };
       }),
     };
   }, share);
+}
+
+// The making-of slide (home/pass-viewer.tsx): a stretch of the page holding
+// a sticky screen, the row of pass cards in it moving sideways as the page
+// scrolls through the stretch. These read it as the viewer does.
+export const SLIDE_STRETCH = '[data-pass-viewer] [data-part="pass-stretch"]';
+export const SLIDE_SCREEN = '[data-part="pass-screen"]';
+
+/**
+ * The scroll position, clamped to the page, at which the slide stands at a
+ * progress from 0 to 1 through its stretch: 0 where its screen first fills
+ * the view, 1 where it starts to leave. The viewer measures its progress the
+ * same way.
+ */
+export function slideTop(page: Page, progress: number): Promise<number> {
+  return page.evaluate(
+    ({ selector, at }) => {
+      const stretch = document.querySelector(selector);
+      if (stretch === null) throw new Error(`Nothing matches ${selector}`);
+      const box = stretch.getBoundingClientRect();
+      const travel = box.height - window.innerHeight;
+      const top = box.top + window.scrollY + at * travel;
+      const max = document.documentElement.scrollHeight - window.innerHeight;
+      return Math.round(Math.min(Math.max(top, 0), max));
+    },
+    { selector: SLIDE_STRETCH, at: progress },
+  );
+}
+
+/**
+ * Puts a finger on the page, or lifts it, as the making-of viewer reads it:
+ * while one is down the slide never settles on a card (pass-viewer.tsx,
+ * D-131). A plain event carrying the touch count, so it works on a desktop
+ * project too.
+ */
+export function touchPage(page: Page, down: boolean): Promise<void> {
+  return page.evaluate((isDown) => {
+    const event = new Event(isDown ? "touchstart" : "touchend");
+    Object.defineProperty(event, "touches", {
+      value: { length: isDown ? 1 : 0 },
+    });
+    window.dispatchEvent(event);
+  }, down);
+}
+
+/** Jumps the page to a progress through the slide and returns the position. */
+export async function scrollToSlide(
+  page: Page,
+  progress: number,
+): Promise<number> {
+  const top = await slideTop(page, progress);
+  await page.evaluate(
+    (y) => window.scrollTo({ top: y, behavior: "instant" }),
+    top,
+  );
+  return top;
+}
+
+/**
+ * Scrolls the slide to a progress through its stretch and returns what its
+ * held screen shows there: the card in the middle (aria-current), named by
+ * its pass, and the text on that card's own plate with its box in the
+ * viewport. The middle is set on the frame after a scroll, so read it with
+ * expect.poll.
+ */
+export function slideScreenAt(
+  page: Page,
+  progress: number,
+): Promise<{
+  viewWidth: number;
+  viewHeight: number;
+  middle: string | null;
+  texts: HeldText[];
+}> {
+  return page.evaluate(
+    ({ selector, screenSelector, at }) => {
+      const stretch = document.querySelector<HTMLElement>(selector);
+      const screen = stretch?.querySelector<HTMLElement>(screenSelector);
+      if (!stretch || !screen) {
+        throw new Error("No sliding pass viewer in the making-of chapter");
+      }
+      const box = stretch.getBoundingClientRect();
+      const travel = box.height - screen.getBoundingClientRect().height;
+      window.scrollTo({
+        top: Math.round(box.top + window.scrollY + at * travel),
+        behavior: "instant",
+      });
+      const middle = screen.querySelector<HTMLElement>(
+        'li[aria-current="step"]',
+      );
+      return {
+        viewWidth: document.documentElement.clientWidth,
+        viewHeight: window.innerHeight,
+        middle: middle?.dataset.pass ?? null,
+        texts: [
+          ...(middle?.querySelectorAll<HTMLElement>('[data-plate="own"]') ??
+            []),
+        ].map((plate) => {
+          const rect = plate.getBoundingClientRect();
+          return {
+            text: (plate.textContent ?? "").trim(),
+            top: rect.top,
+            bottom: rect.bottom,
+            left: rect.left,
+            right: rect.right,
+          };
+        }),
+      };
+    },
+    { selector: SLIDE_STRETCH, screenSelector: SLIDE_SCREEN, at: progress },
+  );
 }
 
 /**
@@ -552,7 +680,10 @@ export function hiddenTitleParts(page: Page): Promise<string[]> {
   );
 }
 
-/** Every element positioned fixed or sticky, named by tag and its marks. */
+/**
+ * Every element positioned fixed or sticky, named by tag, its marks and its
+ * position, such as `div[data-part="pass-screen"] sticky`.
+ */
 export function fixedElements(page: Page): Promise<string[]> {
   return page.evaluate(() =>
     [...document.querySelectorAll<HTMLElement>("body *")]
@@ -560,12 +691,13 @@ export function fixedElements(page: Page): Promise<string[]> {
         ["fixed", "sticky"].includes(getComputedStyle(element).position),
       )
       .map((element) => {
-        const marks = ["id", "data-testid", "href"]
+        const marks = ["id", "data-testid", "data-part", "href"]
           .map((name) => [name, element.getAttribute(name)] as const)
           .filter(([, value]) => value !== null)
           .map(([name, value]) => `[${name}="${value}"]`)
           .join("");
-        return `${element.tagName.toLowerCase()}${marks}`;
+        const { position } = getComputedStyle(element);
+        return `${element.tagName.toLowerCase()}${marks} ${position}`;
       }),
   );
 }

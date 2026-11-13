@@ -10,7 +10,14 @@ import type {
   RuntimeOptions,
 } from "../types";
 import { sprinkle } from "./halftone-rules";
-import { FLOW_SHARE } from "./story";
+import {
+  DOT_SWELL,
+  dotSwell,
+  dotTravel,
+  meanStreamShare,
+  PASS_STREAM_SECONDS,
+  FLOW_SHARE,
+} from "./story";
 
 // The runtime with three.js, the simulation and the field replaced by
 // recorders: jsdom has no GPU, and what is checked here is the order of the
@@ -50,6 +57,7 @@ const fakes = vi.hoisted(() => {
       noiseLevel: { value: 1 },
       pulse: { value: 0 },
       dotCentre: { value: vector() },
+      dotSwell: { value: 1 },
       dotSeed: { value: vector() },
       rankScale: { value: Math.SQRT1_2 },
       shapeCentre: { value: vector() },
@@ -64,6 +72,8 @@ const fakes = vi.hoisted(() => {
     light: { value: 1 },
     /** The field's draw offset, swirl, sprinkle and grids, as last set. */
     drawOffset: [0, 0] as [number, number],
+    /** The making-of's stream as last drawn: x, y and its seconds. */
+    stream: [0, 0, 0] as [number, number, number],
     swirl: 0,
     sprinkle: [0, 0] as [number, number],
     grids: [] as Array<Record<string, number>>,
@@ -71,6 +81,8 @@ const fakes = vi.hoisted(() => {
     velocityAsked: [] as boolean[],
     /** Each pass viewer made: whether it was given a velocity draw. */
     passesBuilt: [] as boolean[],
+    /** How many times the pass viewer was asked to build its pipelines. */
+    passWarms: 0,
     /** The laid out cards of every pass render, in order. */
     passRenders: [] as Array<
       Array<{
@@ -296,6 +308,9 @@ const fakes = vi.hoisted(() => {
           cards.map(({ pass, crop, sharpness }) => ({ pass, crop, sharpness })),
         );
       },
+      warm() {
+        state.passWarms += 1;
+      },
       dispose() {
         if (state.throwingPart === "passes") throw new Error("passes stuck");
         state.log.push("passes dispose");
@@ -447,6 +462,9 @@ vi.mock("./field", () => ({
       setDrawOffset(x: number, y: number) {
         fakes.state.drawOffset = [x, y];
       },
+      setStream(x: number, y: number, seconds: number) {
+        fakes.state.stream = [x, y, seconds];
+      },
       setSwirl(amount: number) {
         fakes.state.swirl = amount;
       },
@@ -557,6 +575,7 @@ afterEach(() => {
   state.resetFlows = 0;
   state.applied.length = 0;
   state.drawOffset = [0, 0];
+  state.stream = [0, 0, 0];
   state.swirl = 0;
   state.sprinkle = [0, 0];
   state.grids.length = 0;
@@ -564,6 +583,7 @@ afterEach(() => {
   state.halftones.length = 0;
   state.velocityAsked.length = 0;
   state.passesBuilt.length = 0;
+  state.passWarms = 0;
   state.passRenders.length = 0;
   state.focus.length = 0;
   state.light.value = 1;
@@ -708,12 +728,12 @@ describe("the story", () => {
     expect(story.shapeFrom.value).toBe(2 + 2);
     expect(story.shapeMix.value).toBe(0);
 
+    // The making-of with no pass card in the middle: the ambient flow.
     runtime.setStory("making-of", 0.5);
     expect(story.shapeWeight.value).toBe(0);
-    expect(story.sheetWeight.value).toBe(1);
+    expect(story.sheetWeight.value).toBe(0);
 
     runtime.setStory("about", 0.5);
-    expect(story.sheetWeight.value).toBe(0);
     expect(story.strandsWeight.value).toBe(1);
 
     runtime.setStory("contact", 0.5);
@@ -1302,21 +1322,29 @@ describe("the stage", () => {
     work: { x: 0.5, y: 0, halfWidth: 0.5, halfHeight: 0.5 },
   };
 
-  test("REQ-SCR-01 REQ-SCR-07 the dot sits at the hero's stage and study shapes form inside the work stage, from the first story", async () => {
+  test("REQ-SCR-01 REQ-SCR-07 the dot sits at the hero's stage at the page's top, and study shapes form inside the work stage, from the first story", async () => {
     const { options } = mount("webgpu", 1000, 500);
     const runtime = await createRuntime(options);
     runtime.setStage(stages);
-    runtime.setStory("work", 0.1);
+    runtime.setStory("hero", 0);
 
     expect(story.dotCentre.value.x).toBeCloseTo(0);
     expect(story.dotCentre.value.y).toBeCloseTo(-0.5);
+    expect(story.dotSwell.value).toBe(1);
+    // The bloom ranks homes from the dot in the seeds' square.
+    expect(story.dotSeed.value.y).toBeCloseTo(-0.5 / 1.1);
+    expect(story.rankScale.value).toBeCloseTo(1 / Math.hypot(1, 1 + 0.5 / 1.1));
+
+    // The field has not stepped yet, so the next story is seated at once.
+    runtime.setStory("work", 0.1);
     expect(story.shapeCentre.value.x).toBeCloseTo(1);
     expect(story.shapeCentre.value.y).toBeCloseTo(0);
     // A stage of half 1 by 0.5 and a square box of half side 1.
     expect(story.shapeScaleFrom.value).toBeCloseTo(0.4);
-    // The bloom ranks homes from the dot in the seeds' square.
-    expect(story.dotSeed.value.y).toBeCloseTo(-0.5 / 1.1);
-    expect(story.rankScale.value).toBeCloseTo(1 / Math.hypot(1, 1 + 0.5 / 1.1));
+    // Past the hero the dot has glided to the middle, at its full swell.
+    expect(story.dotCentre.value.x).toBeCloseTo(0);
+    expect(story.dotCentre.value.y).toBeCloseTo(0);
+    expect(story.dotSwell.value).toBe(DOT_SWELL);
 
     // The field chapter forms in its own middle stage, 0.8 of the frame.
     runtime.setStory("bloom", 0.6);
@@ -1367,6 +1395,190 @@ describe("the stage", () => {
   });
 });
 
+describe("the making-of's middle card", () => {
+  // At 1000 by 500 the fake view is a half frame of 2 by 1, so this face is
+  // centred at (0.4, -0.1) with halves of 0.32 by 0.4 at the focus plane.
+  const card = { x: 0.2, y: -0.1, halfWidth: 0.16, halfHeight: 0.4 };
+
+  test("REQ-ENG-09 REQ-SCR-01 the making-of forms the T7 mark, whole, inside the middle card's face, and is the ambient flow while no card is in the middle", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage({ "making-of": card });
+    runtime.setStory("making-of", 0.5);
+
+    expect(story.shapeWeight.value).toBe(1);
+    // The mark is the atlas's first row, morphing into nothing else.
+    expect(story.shapeFrom.value).toBe(0);
+    expect(story.shapeTo.value).toBe(0);
+    expect(story.shapeMix.value).toBe(0);
+    expect(story.keep.value).toBe(0);
+    expect(story.sheetWeight.value).toBe(0);
+    expect(story.shapeCentre.value.x).toBeCloseTo(0.4);
+    expect(story.shapeCentre.value.y).toBeCloseTo(-0.1);
+    // A square box of half side 1 inside halves of 0.32 by 0.4.
+    expect(story.shapeScaleFrom.value).toBeCloseTo(0.32 * 0.8);
+
+    runtime.run();
+    for (let frame = 0; frame < 60; frame += 1) state.loop?.(16 * frame);
+
+    // The viewer leaves the screen: the mark lets go into the flow.
+    runtime.setStage({});
+    expect(story.shapeWeight.value).toBe(0);
+    expect(state.applied.at(-1)).toMatchObject({ shape: 0 });
+    // A card reaches the middle again: the mark forms in it again.
+    runtime.setStage({ "making-of": card });
+    expect(story.shapeWeight.value).toBe(1);
+    // No seat: the particles fly there with their own inertia, gathered
+    // from the flow into the card, with nothing drawn ahead of them.
+    expect(state.computes.filter((value) => value === 1)).toHaveLength(1);
+    state.loop?.(16 * 60);
+    expect(story.shapeCentre.value.x).toBeCloseTo(0.4, 6);
+    expect(Math.abs(state.drawOffset[0])).toBeLessThan(0.01);
+    expect(Math.abs(state.drawOffset[1])).toBeLessThan(0.01);
+  });
+
+  test("REQ-ENG-09 a making-of stage aims nothing in another chapter", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStory("about", 0.5);
+    runtime.run();
+    state.loop?.(16);
+    const applied = state.applied.length;
+
+    runtime.setStage({ "making-of": card });
+    runtime.setStage({});
+    expect(state.applied).toHaveLength(applied);
+    expect(story.strandsWeight.value).toBe(1);
+  });
+
+  test("REQ-SCR-05 a making-of stage sent after the first story, before the field has stepped, seats the mark on its card at once", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStory("making-of", 0.5);
+    expect(story.shapeWeight.value).toBe(0);
+
+    runtime.setStage({ "making-of": card });
+    expect(story.shapeWeight.value).toBe(1);
+    expect(story.shapeCentre.value.x).toBeCloseTo(0.4);
+
+    runtime.run();
+    state.loop?.(16);
+    expect(state.computes).toEqual([1, 0]);
+    expect(story.shapeCentre.value.x).toBeCloseTo(0.4);
+  });
+
+  test("REQ-SCR-05 REQ-ENG-09 the mark rides with its card, and the next card in the middle takes it at once, drawn ahead while its particles catch up and streaming over from the card it left", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage({ "making-of": card });
+    runtime.setStory("making-of", 0.5);
+    runtime.run();
+    for (let frame = 0; frame < 300; frame += 1) state.loop?.(16 * frame);
+    expect(story.shapeCentre.value.x).toBeCloseTo(0.4, 6);
+    const applied = state.applied.length;
+
+    // The row slides by a fortieth of the screen: taken at once.
+    runtime.setStage({ "making-of": { ...card, x: 0.25 } });
+    state.loop?.(4816);
+    expect(story.shapeCentre.value.x).toBeCloseTo(0.5, 6);
+    // The particles have barely moved, so they are drawn ahead by the move.
+    expect(state.drawOffset[0]).toBeGreaterThan(0.09);
+    expect(state.drawOffset[0]).toBeLessThanOrEqual(0.1);
+
+    // A small move starts no stream.
+    expect(state.stream[0]).toBe(0);
+    expect(state.stream[2]).toBeCloseTo(PASS_STREAM_SECONDS, 6);
+
+    // The next card in the middle, most of a screen away: the mark forms
+    // there at once, drawn ahead while its particles catch up, and is drawn
+    // back at the card it left as the stream begins: 1.3 to the right.
+    runtime.setStage({ "making-of": { ...card, x: -0.4 } });
+    state.loop?.(4832);
+    expect(story.shapeCentre.value.x).toBeCloseTo(-0.8, 6);
+    expect(state.drawOffset[0]).toBeLessThan(-1.1);
+    expect(state.stream[0]).toBeCloseTo(1.3, 6);
+    expect(state.stream[1]).toBeCloseTo(0, 6);
+    expect(state.stream[2]).toBeGreaterThan(0);
+    expect(state.stream[2]).toBeLessThan(0.05);
+    for (let frame = 0; frame < 300; frame += 1) {
+      state.loop?.(4848 + 16 * frame);
+    }
+    expect(story.shapeCentre.value.x).toBeCloseTo(-0.8, 6);
+    expect(Math.abs(state.drawOffset[0])).toBeLessThan(0.01);
+    // The stream has ended: the mark is drawn where it forms.
+    expect(state.stream).toEqual([0, 0, PASS_STREAM_SECONDS]);
+    // A card that moves changes where the mark forms, never what forms.
+    expect(state.applied).toHaveLength(applied);
+    expect(story.shapeWeight.value).toBe(1);
+  });
+
+  test("REQ-ENG-09 a stream that starts while another is under way begins where the mark is drawn, and the mark coming or going ends it", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage({ "making-of": card });
+    runtime.setStory("making-of", 0.5);
+    runtime.run();
+    for (let frame = 0; frame < 300; frame += 1) state.loop?.(16 * frame);
+
+    runtime.setStage({ "making-of": { ...card, x: -0.4 } });
+    state.loop?.(4800);
+    // Half way through, on average: the next card comes, 1.3 further.
+    const half = PASS_STREAM_SECONDS / 2;
+    for (let at = 16; at <= half * 1000; at += 16) state.loop?.(4800 + at);
+    const before = state.stream[0];
+    const seconds = state.stream[2];
+    runtime.setStage({ "making-of": { ...card, x: -1 } });
+    state.loop?.(4800 + half * 1000 + 16);
+    expect(state.stream[0]).toBeCloseTo(
+      before * (1 - meanStreamShare(seconds)) + 1.2,
+      2,
+    );
+    expect(state.stream[2]).toBeLessThan(0.05);
+
+    // The viewer leaves the screen: no mark, no stream.
+    runtime.setStage({});
+    state.loop?.(4800 + half * 1000 + 32);
+    expect(state.stream).toEqual([0, 0, PASS_STREAM_SECONDS]);
+    // It comes back: the mark gathers from the flow with no stream either.
+    runtime.setStage({ "making-of": card });
+    state.loop?.(4800 + half * 1000 + 48);
+    expect(state.stream).toEqual([0, 0, PASS_STREAM_SECONDS]);
+  });
+
+  test("REQ-A11Y-03 REQ-ENG-09 a calm making-of is the ambient flow with no card in the middle, and is settled and drawn once when a card comes, moves or goes", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStory("making-of", 0.5);
+    await runtime.drawStill();
+    expect(story.shapeWeight.value).toBe(0);
+    state.computes.length = 0;
+    const renders = count("render");
+
+    runtime.setStage({ "making-of": card });
+    // Aimed at once, settled and drawn once the task's commands are in.
+    expect(story.shapeWeight.value).toBe(1);
+    expect(state.computes).toEqual([]);
+    await settled();
+    expect(state.computes).toEqual(settle([1]));
+    expect(count("render")).toBe(renders + 1);
+    expect(story.shapeCentre.value.x).toBeCloseTo(0.4);
+
+    state.computes.length = 0;
+    runtime.setStage({ "making-of": { ...card, x: 0.25 } });
+    await settled();
+    expect(state.computes).toEqual(settle([1]));
+    expect(count("render")).toBe(renders + 2);
+    expect(story.shapeCentre.value.x).toBeCloseTo(0.5);
+    expect(story.shapeWeight.value).toBe(1);
+
+    runtime.setStage({});
+    await settled();
+    expect(story.shapeWeight.value).toBe(0);
+    expect(count("render")).toBe(renders + 3);
+    expect(state.loop).toBeNull();
+  });
+});
+
 describe("the look", () => {
   test("REQ-ENG-08 a device that cannot draw and blend a half-float target gets the soft field, never an empty one", async () => {
     state.halftoneWorks = false;
@@ -1401,6 +1613,24 @@ describe("the look", () => {
       expect(count("render")).toBe(1);
     },
   );
+
+  test("REQ-ENG-09 REQ-PERF-06 the pass cards' pipelines are built once, in the background, at the field's first draw, and never on the soft look", async () => {
+    const { options } = mount("webgpu");
+    const runtime = await createRuntime(options);
+    expect(state.passWarms).toBe(0);
+    await runtime.drawStill();
+    expect(state.passWarms).toBe(1);
+    await runtime.drawStill();
+    runtime.run();
+    for (let frame = 0; frame < 5; frame += 1) state.loop?.(frame * 16);
+    expect(state.passWarms).toBe(1);
+
+    state.passWarms = 0;
+    const soft = mount("webgpu", 1000, 500, "soft");
+    const softRuntime = await createRuntime(soft.options);
+    await softRuntime.drawStill();
+    expect(state.passWarms).toBe(0);
+  });
 
   test("REQ-ENG-08 a runtime asked for the soft look draws it without the check", async () => {
     const { options } = mount("webgpu", 1000, 500, "soft");
@@ -1459,6 +1689,7 @@ describe("the hero dot and the work frame in the halftone", () => {
       reach: 125,
       light: 1,
       pulse: 0,
+      swell: 1,
     });
 
     runtime.run();
@@ -1497,10 +1728,13 @@ describe("the hero dot and the work frame in the halftone", () => {
     expect(record?.frame?.light).toBeLessThan(0.01);
   });
 
-  test("REQ-A11Y-06 only a study shape or the sheet turns its densest cells white; the about strands and the contact rings never do", async () => {
+  test("REQ-A11Y-06 only a formed shape, a study's or the making-of's mark, turns its densest cells white; the about strands and the contact rings never do", async () => {
     const { options } = mount("webgpu", 1000, 500);
     const runtime = await createRuntime(options);
     const record = state.halftones[0];
+    runtime.setStage({
+      "making-of": { x: 0, y: 0, halfWidth: 0.16, halfHeight: 0.4 },
+    });
     runtime.run();
     let time = 0;
     const settleFor = (chapter: ChapterId, progress: number) => {
@@ -1516,6 +1750,88 @@ describe("the hero dot and the work frame in the halftone", () => {
     expect(settleFor("making-of", 0.5)).toBeGreaterThan(0.99);
     expect(settleFor("about", 0.5)).toBeLessThan(0.01);
     expect(settleFor("contact", 0.9)).toBeLessThan(0.01);
+  });
+});
+
+describe("the hero's glide", () => {
+  // At 1000 by 500 the fake view is a half frame of 2 by 1: the box's centre
+  // is at 1, -0.5 in world units, and the middle at 0, 0.
+  const hero = { x: 0.5, y: -0.5, halfWidth: 0.25, halfHeight: 0.5 };
+  const at = (progress: number) => {
+    const travel = dotTravel(progress);
+    return { x: 1 - travel, y: -0.5 * (1 - travel), swell: dotSwell(travel) };
+  };
+
+  async function heroAtTop() {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage({ hero });
+    runtime.setStory("hero", 0);
+    runtime.run();
+    for (let frame = 0; frame < 60; frame += 1) state.loop?.(16 * frame);
+    return runtime;
+  }
+
+  test("REQ-SCR-01 REQ-SCR-07 as the page scrolls the dot glides to the middle and swells, on the scroll's own frame", async () => {
+    const runtime = await heroAtTop();
+    expect(story.dotCentre.value.x).toBeCloseTo(1, 6);
+    expect(story.dotSwell.value).toBe(1);
+
+    for (let frame = 1; frame <= 50; frame += 1) {
+      const progress = 0.02 * frame;
+      runtime.setStory("hero", progress);
+      state.loop?.(960 + 16 * frame);
+      const expected = at(progress);
+      expect(story.dotCentre.value.x).toBeCloseTo(expected.x, 6);
+      expect(story.dotCentre.value.y).toBeCloseTo(expected.y, 6);
+      expect(story.dotSwell.value).toBeCloseTo(expected.swell, 6);
+      expect(state.halftones[0]?.hero?.swell).toBeCloseTo(expected.swell, 6);
+    }
+    // At the middle as the hero ends, at its full swell, and the bloom
+    // grows from there.
+    runtime.setStory("bloom", 0);
+    state.loop?.(2000);
+    expect(story.dotCentre.value.x).toBeCloseTo(0, 6);
+    expect(story.dotCentre.value.y).toBeCloseTo(0, 6);
+    expect(story.dotSwell.value).toBe(DOT_SWELL);
+    expect(story.dotSeed.value.x).toBeCloseTo(0, 6);
+    expect(story.dotSeed.value.y).toBeCloseTo(0, 6);
+    expect(state.halftones[0]?.hero).toMatchObject({ x: 500, y: 250 });
+
+    // Scrolling back runs it backwards.
+    runtime.setStory("hero", 0.98);
+    state.loop?.(2016);
+    expect(story.dotCentre.value.x).toBeCloseTo(at(0.98).x, 6);
+  });
+
+  test("REQ-SCR-05 a jump from the top to the field chapter glides the dot there, its swell with it", async () => {
+    const runtime = await heroAtTop();
+    runtime.setStory("bloom", 0.05);
+    state.loop?.(1000);
+    const x = story.dotCentre.value.x;
+    const swell = story.dotSwell.value;
+    expect(x).toBeLessThan(1);
+    expect(x).toBeGreaterThan(0);
+    // The swell keeps to the dot's place on its way.
+    expect(swell - 1).toBeCloseTo((DOT_SWELL - 1) * (1 - x), 6);
+    for (let frame = 1; frame < 300; frame += 1)
+      state.loop?.(1000 + 16 * frame);
+    expect(story.dotCentre.value.x).toBeCloseTo(0, 3);
+    expect(story.dotSwell.value).toBeCloseTo(DOT_SWELL, 3);
+  });
+
+  test("REQ-A11Y-03 a calm field keeps the dot in its box at its own size, wherever the hero is scrolled", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStage({ hero });
+    runtime.setStory("hero", 0.8);
+    await runtime.drawStill();
+    expect(state.halftones[0]?.hero).toMatchObject({
+      x: 750,
+      y: 375,
+      swell: 1,
+    });
+    expect(story.dotSwell.value).toBe(1);
   });
 });
 
@@ -1689,26 +2005,26 @@ describe("the making-of passes", () => {
     expect(drawnPasses()).toEqual([["points", "density", "glow", "final"]]);
   });
 
-  test("REQ-ENG-09 each card shows the making-of sheet cropped to its own width over height round the frame's centre, drawn as finely as the card draws it", async () => {
+  test("REQ-ENG-09 each card shows its pass of the part of the frame right behind its face, one to one", async () => {
     const { options } = mount("webgpu", 1000, 500);
     const runtime = await createRuntime(options);
 
     runtime.setPasses([flatCard("density", 0)]);
     await runtime.drawStill();
 
-    // 150 by 200 CSS px on a 1000 by 500 frame, whose sheet is 700 by 350
-    // from (150, 75): the sheet's full height and 262.5 px of its width.
+    // 150 by 200 CSS px in the middle of a 1000 by 500 frame: its own
+    // rectangle, drawn at the frame's own size.
     expect(state.passRenders).toEqual([
       [
         {
           pass: "density",
           crop: {
-            x: expect.closeTo(368.75, 9),
-            y: expect.closeTo(75, 9),
-            width: expect.closeTo(262.5, 9),
-            height: expect.closeTo(350, 9),
+            x: expect.closeTo(425, 9),
+            y: expect.closeTo(150, 9),
+            width: expect.closeTo(150, 9),
+            height: expect.closeTo(200, 9),
           },
-          sharpness: expect.closeTo(200 / 350, 9),
+          sharpness: expect.closeTo(1, 9),
         },
       ],
     ]);
@@ -1776,7 +2092,7 @@ describe("the making-of passes", () => {
       [
         expect.objectContaining({
           pass: "density",
-          sharpness: expect.closeTo(200 / 350, 9),
+          crop: expect.objectContaining({ x: expect.closeTo(425, 9) }),
         }),
       ],
     ]);

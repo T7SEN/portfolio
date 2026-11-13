@@ -1,15 +1,17 @@
 import { PASSES, type PassId } from "@/engine/story";
-import type { PassCard, Point } from "@/engine/types";
+import type { PassCard, Point, Stage } from "@/engine/types";
 
 import { FACE_CORNERS, type FaceCorner } from "./pass-face";
 import { hasArea, pageRect, type LayoutView } from "./story-stage";
 import type { ClearRect, PageRect } from "./story-veil";
 
-// The making-of pass viewer as the field needs it (REQ-ENG-09). A card whose
-// pass the field draws live is a window with no fill, its face marked
-// data-live (pass-face.ts); the field draws the pass inside the four corners
-// of that face. Every other card shows a still of its pass, so the field has
-// nothing to draw there.
+// The making-of pass viewer as the field needs it (REQ-ENG-09). The card in
+// the middle of the sliding row has its face marked data-middle: the field
+// forms the T7 mark inside it (the making-of stage). When the field draws
+// that card's pass live, the face is also marked data-live and is a window
+// with no fill (pass-face.ts); the field draws the pass of what lies behind
+// it inside its four corners. Every other card shows a still of its pass, so
+// the field has nothing to draw there.
 
 /** The viewer and its live faces, in page coordinates, from the layout. */
 export type PassLayout = {
@@ -143,6 +145,52 @@ export function measurePassCards(
       },
     ];
   });
+}
+
+// A face this far past the screen's top or bottom, in CSS pixels, still
+// counts as wholly on it: rounding, not the visitor's scroll.
+const FACE_SLACK_PX = 1;
+
+/**
+ * The making-of stage: the face of the card in the middle of the sliding
+ * row (data-middle), as the screen shows it now, in normalised device
+ * coordinates. The field forms the T7 mark inside it only while the face is
+ * wholly on the screen from top to bottom: before the row arrives and once
+ * it has scrolled away the field is the flow, so no particle waits in a card
+ * out of sight, and the flow gathers into the face as it comes back.
+ * Sideways the face may be partly off the screen, as it is while the row
+ * glides. Undefined when no card is in the middle (a still grid in calm
+ * mode, no viewer), when the face is not wholly on the screen, or when the
+ * screen has no size.
+ */
+export function measureMiddleStage(
+  root: ParentNode,
+  view: Pick<LayoutView, "innerHeight"> & {
+    document: Pick<Document, "documentElement">;
+  },
+): Stage | undefined {
+  const width = view.document.documentElement.clientWidth;
+  const height = view.innerHeight;
+  if (!(width > 0) || !(height > 0)) return undefined;
+  const face = root.querySelector("[data-pass-face][data-middle]");
+  if (face === null) return undefined;
+  const box = face.getBoundingClientRect();
+  if (!(box.width > 0) || !(box.height > 0)) return undefined;
+  if (box.top < -FACE_SLACK_PX || box.bottom > height + FACE_SLACK_PX) {
+    return undefined;
+  }
+  const centre = screenPoint(
+    (box.left + box.right) / 2,
+    (box.top + box.bottom) / 2,
+    width,
+    height,
+  );
+  return {
+    x: centre.x,
+    y: centre.y,
+    halfWidth: box.width / width,
+    halfHeight: box.height / height,
+  };
 }
 
 /** Whether the viewer is on the screen or within PASS_REACH of it. */

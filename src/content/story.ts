@@ -49,12 +49,12 @@ export type Story = {
 
 export const story = {
   scenes: {
-    hero: "Where your device draws the field live, a bright dot of violet light pulses beside the headline, or above it on a narrow screen. Otherwise one still picture of the field stays behind the page.",
+    hero: "Where your device draws the field live, a bright dot of violet light pulses beside the headline, or above it on a narrow screen, and as the page scrolls it glides to the middle of the screen, growing as it goes. Otherwise one still picture of the field stays behind the page.",
     bloom:
       "Where your device draws the field live, the dot opens into a field of violet and lavender light; the light gathers into the T7SEN mark, the mark turns into the T7SEN wordmark, and the wordmark dissolves into flow lines that curve across the screen.",
     work: "Where your device draws the field live, each full study's shape forms inside its frame as its row comes into view: layered sheets for the making-of, five fanned cards for Coup Online and a chat bubble with three lines for ArcheLab.",
     "making-of":
-      "Where your device draws the field live, the light flattens into one sheet behind the pass cards and the panel, and each card it draws live shows that pass of the frame as it is drawn.",
+      "Where your device draws the field live, all of its light gathers into the T7 mark inside the pass card in the middle of the row, moves with the row and pours into the next card as that card reaches the middle; when that card is drawn live, it shows its pass of the mark as it is drawn.",
     about:
       "Where your device draws the field live, three thin strands of light, one bright and two faint, wave slowly across the full width of the screen.",
     contact:

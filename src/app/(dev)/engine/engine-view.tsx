@@ -3,7 +3,6 @@
 import { useEffect, useRef } from "react";
 
 import { loadEngine } from "@/components/engine/load-engine";
-import { SHEET_FIT } from "@/engine/runtime/story";
 import { PASSES, type PassId } from "@/engine/story";
 import type {
   ChapterId,
@@ -12,6 +11,7 @@ import type {
   EngineOptions,
   PassCard,
   Point,
+  Stage,
   Stages,
   Tier,
 } from "@/engine/types";
@@ -35,28 +35,15 @@ const SPLIT_STAGES: Stages = {
   work: { x: 0.45, y: 0, halfWidth: 0.45, halfHeight: 0.9 },
 };
 
-// ?passes=1: one card per pass in a test layout over the field, some flat
-// and some turned in depth either way, as the making-of chapter turns its
-// thumbnails. The turn in degrees, per pass in PASSES order.
-const CARD_TURNS: Readonly<Record<PassId, number>> = {
-  points: 0,
-  velocity: -34,
-  density: 0,
-  glow: 34,
-  final: -34,
-};
-
-// ?pass=<id>: one card over the making-of sheet's own box, the middle
-// SHEET_FIT of the canvas, where every card takes its picture from
-// (runtime/pass-rules.ts, sheetCrop). It shows that part of the frame at its
-// own size, so a capture holds the pass as a card shows it (the tier 3 still
-// of the pass), and the final pass there is the frame itself.
-const SHEET_CARD: PassCard["corners"] = [
-  { x: -SHEET_FIT, y: SHEET_FIT },
-  { x: SHEET_FIT, y: SHEET_FIT },
-  { x: SHEET_FIT, y: -SHEET_FIT },
-  { x: -SHEET_FIT, y: -SHEET_FIT },
-];
+// The pass cards' test layouts: flat faces of 4:5, as the home page's
+// making-of row lays its cards. ?pass=<id>: one face in the middle of the
+// canvas, 320 by 400 CSS px, 208 by 260 below the md breakpoint, as the
+// home page's middle card; its box goes as the making-of stage, so the T7
+// mark forms inside it, and as the one card, so the face shows that pass of
+// the mark one to one. A capture of the face is the tier 3 still of the
+// pass. ?passes=1: one face per pass in a row across the middle, the middle
+// one (MIDDLE_PASS) the making-of stage.
+const MIDDLE_PASS: PassId = PASSES[Math.floor(PASSES.length / 2)] ?? "density";
 
 const BUTTON =
   "inline-flex min-h-11 items-center rounded-md border border-edge px-4 font-mono text-sm hover:border-glow hover:text-glow aria-pressed:border-glow aria-pressed:text-glow";
@@ -80,19 +67,31 @@ function readOptions(search: string) {
 
   const chapter = CHAPTERS.find((value) => value === params.get("chapter"));
   const progress = Number(params.get("progress") ?? 0);
+  const wholePass = PASSES.find((pass) => pass === params.get("pass")) ?? null;
 
   return {
     options,
     isCalm: params.get("calm") === "1",
     isBare: params.get("bare") === "1",
-    stages: params.get("stage") === "split" ? SPLIT_STAGES : null,
-    chapter: chapter ?? null,
+    split: params.get("stage") === "split" ? SPLIT_STAGES : null,
+    // ?pass=<id> shows the making-of unless another chapter is asked for.
+    chapter: chapter ?? (wholePass === null ? null : "making-of"),
     progress: Number.isFinite(progress)
       ? Math.min(Math.max(progress, 0), 1)
       : 0,
     hasPasses: params.get("passes") === "1",
-    wholePass: PASSES.find((pass) => pass === params.get("pass")) ?? null,
+    wholePass,
   };
+}
+
+/** What the test layout shows and sends, from the query. */
+interface Layout {
+  /** ?pass=<id>: the one face's pass; null for the row. */
+  wholePass: PassId | null;
+  /** ?passes=1. */
+  hasPasses: boolean;
+  /** ?stage=split. */
+  split: Stages | null;
 }
 
 function isPressed(button: HTMLButtonElement) {
@@ -100,11 +99,16 @@ function isPressed(button: HTMLButtonElement) {
 }
 
 /**
- * The cards of the test layout as the screen shows them: each corner mark's
- * place, in normalised device coordinates of the host the canvas fills, and
- * each face's own size.
+ * The faces of the test layout as the screen shows them: each card, its
+ * corner marks' places in normalised device coordinates of the host the
+ * canvas fills and its face's own size, and the middle face's box as a
+ * stage. ?pass=<id> lays out its one face, else the row.
  */
-function measureCards(host: HTMLElement, layer: HTMLElement): PassCard[] {
+function measureFaces(
+  host: HTMLElement,
+  layer: HTMLElement,
+  wholePass: PassId | null,
+): { cards: PassCard[]; middle: Stage | null } {
   const box = host.getBoundingClientRect();
   const toDevice = (mark: Element): Point => {
     const at = mark.getBoundingClientRect();
@@ -113,23 +117,46 @@ function measureCards(host: HTMLElement, layer: HTMLElement): PassCard[] {
       y: 1 - ((at.y - box.y) / box.height) * 2,
     };
   };
+  const faces =
+    wholePass === null
+      ? [...layer.querySelectorAll<HTMLElement>("[data-row] [data-face]")]
+      : [...layer.querySelectorAll<HTMLElement>("[data-single]")];
   const cards: PassCard[] = [];
-  for (const face of layer.querySelectorAll<HTMLElement>("[data-face]")) {
-    const pass = PASSES.find((id) => id === face.dataset.face);
+  let middle: Stage | null = null;
+  for (const face of faces) {
+    const pass =
+      wholePass ?? PASSES.find((id) => id === face.dataset.face) ?? null;
     const marks = ["0", "1", "2", "3"].map((corner) =>
       face.querySelector(`[data-corner="${corner}"]`),
     );
     const [a, b, c, d] = marks;
-    if (pass === undefined || !a || !b || !c || !d) continue;
-    // Its own size, which its turn does not change: the picture's width over
-    // height. The test faces are square cornered, so no radius goes with it.
+    if (pass === null || !a || !b || !c || !d) continue;
+    const corners = [
+      toDevice(a),
+      toDevice(b),
+      toDevice(c),
+      toDevice(d),
+    ] as const;
+    // The test faces are square cornered, so no radius goes with them.
     cards.push({
       pass,
-      corners: [toDevice(a), toDevice(b), toDevice(c), toDevice(d)],
+      corners,
       size: { width: face.clientWidth, height: face.clientHeight },
     });
+    if (wholePass !== null || pass === MIDDLE_PASS) {
+      const xs = corners.map((corner) => corner.x);
+      const ys = corners.map((corner) => corner.y);
+      const [left, right] = [Math.min(...xs), Math.max(...xs)];
+      const [bottom, top] = [Math.min(...ys), Math.max(...ys)];
+      middle = {
+        x: (left + right) / 2,
+        y: (bottom + top) / 2,
+        halfWidth: (right - left) / 2,
+        halfHeight: (top - bottom) / 2,
+      };
+    }
   }
-  return cards;
+  return { cards, middle };
 }
 
 function chosenChapter(select: HTMLSelectElement): ChapterId | null {
@@ -161,27 +188,40 @@ function sendStory(
 }
 
 /**
- * Sends the pass cards: the sheet's box for ?pass=<id>, else the test
- * layout's cards while Passes is on, else none. Mirrors them on the view as
- * data-pass and data-cards (the cards as sent, in JSON; empty for none).
+ * Sends the test layout: the cards while Passes is on, else none, and the
+ * middle face's box as the making-of stage, with ?stage=split's stages. With
+ * ?pass or ?passes the stage stays while Passes is off, so a capture without
+ * the cards holds the same field; without either it goes with the cards.
+ * Mirrors them on the view as data-pass, data-cards (the cards as sent, in
+ * JSON; empty for none) and data-making-of (the stage, likewise). Returns
+ * the stages sent, in JSON, so an unchanged one is not sent again: a calm
+ * field settles again for every stage it is sent.
  */
-function sendPasses(
+function sendLayout(
   engine: Engine | null,
   view: HTMLElement,
   host: HTMLElement,
   layer: HTMLElement,
-  wholePass: PassId | null,
+  layout: Layout,
   isOn: boolean,
-) {
-  const cards: PassCard[] | null =
-    wholePass !== null
-      ? [{ pass: wholePass, corners: SHEET_CARD }]
-      : isOn
-        ? measureCards(host, layer)
-        : null;
-  view.dataset.pass = wholePass ?? "";
-  view.dataset.cards = cards === null ? "" : JSON.stringify(cards);
-  engine?.setPasses(cards);
+  sentStages: string,
+): string {
+  const { cards, middle } = measureFaces(host, layer, layout.wholePass);
+  const staged = layout.wholePass !== null || layout.hasPasses || isOn;
+  const stages: Stages = {
+    ...layout.split,
+    ...(staged && middle !== null ? { "making-of": middle } : {}),
+  };
+  const sent = isOn ? cards : null;
+  view.dataset.pass = layout.wholePass ?? "";
+  view.dataset.cards = sent === null ? "" : JSON.stringify(sent);
+  const makingOf = stages["making-of"];
+  view.dataset.makingOf =
+    makingOf === undefined ? "" : JSON.stringify(makingOf);
+  const text = JSON.stringify(stages);
+  if (engine !== null && text !== sentStages) engine.setStage(stages);
+  engine?.setPasses(sent);
+  return engine === null ? sentStages : text;
 }
 
 /**
@@ -199,8 +239,9 @@ export function EngineView() {
   const progressRef = useRef<HTMLInputElement>(null);
   const passesRef = useRef<HTMLButtonElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
-  const wholePassRef = useRef<PassId | null>(null);
   const engineRef = useRef<Engine | null>(null);
+  // Sends the test layout again; set by the effect once the query is read.
+  const sendLayoutRef = useRef<(() => void) | null>(null);
 
   const sendStoryNow = () => {
     const view = viewRef.current;
@@ -208,24 +249,6 @@ export function EngineView() {
     const range = progressRef.current;
     if (view === null || select === null || range === null) return;
     sendStory(engineRef.current, view, select, range);
-  };
-
-  const sendPassesNow = () => {
-    const view = viewRef.current;
-    const host = hostRef.current;
-    const layer = layerRef.current;
-    const button = passesRef.current;
-    if (view === null || host === null || layer === null || button === null) {
-      return;
-    }
-    sendPasses(
-      engineRef.current,
-      view,
-      host,
-      layer,
-      wholePassRef.current,
-      isPressed(button),
-    );
   };
 
   useEffect(() => {
@@ -254,7 +277,7 @@ export function EngineView() {
       options,
       isCalm,
       isBare,
-      stages,
+      split,
       chapter,
       progress,
       hasPasses,
@@ -263,12 +286,35 @@ export function EngineView() {
     let engine: Engine | null = null;
     let isCancelled = false;
     let events = 0;
-    wholePassRef.current = wholePass;
-    passes.setAttribute("aria-pressed", String(hasPasses));
-    // The cards follow the layout, so a new window size measures them again.
-    const onResize = () =>
-      sendPasses(engine, view, host, layer, wholePass, isPressed(passes));
-    window.addEventListener("resize", onResize);
+    // The engine starts with no stages, so an empty set is never sent first.
+    let sentStages = "{}";
+    const layout: Layout = { wholePass, hasPasses, split };
+    // ?pass=<id> lays out its one face, everything else the row; its cards
+    // are on from the start, as with ?passes=1.
+    for (const part of layer.querySelectorAll<HTMLElement>("[data-single]")) {
+      part.hidden = wholePass === null;
+    }
+    for (const part of layer.querySelectorAll<HTMLElement>("[data-row]")) {
+      part.hidden = wholePass !== null;
+    }
+    passes.setAttribute(
+      "aria-pressed",
+      String(hasPasses || wholePass !== null),
+    );
+    const send = () => {
+      sentStages = sendLayout(
+        engine,
+        view,
+        host,
+        layer,
+        layout,
+        isPressed(passes),
+        sentStages,
+      );
+    };
+    sendLayoutRef.current = send;
+    // The faces follow the layout, so a new window size measures them again.
+    window.addEventListener("resize", send);
 
     Object.assign(view.dataset, {
       status: "loading",
@@ -280,11 +326,12 @@ export function EngineView() {
       error: "",
       chapter: "",
       progress: "",
-      stage: stages === null ? "" : "split",
+      stage: split === null ? "" : "split",
       look: options.look ?? "",
       particles: "",
       pass: "",
       cards: "",
+      makingOf: "",
     });
     // A bare view covers the window, so the page under it must not scroll:
     // its scrollbar would take its width from the host and the canvas.
@@ -329,10 +376,9 @@ export function EngineView() {
       engine = createEngine(host, { ...options, calm: isPressed(calm) });
       engineRef.current = engine;
       engine.on(onEvent);
-      if (stages !== null) engine.setStage(stages);
       // The controls may have changed while the engine was loading too.
+      send();
       sendStory(engine, view, select, range);
-      sendPasses(engine, view, host, layer, wholePass, isPressed(passes));
       await engine.start();
     })().catch((error: unknown) => {
       if (isCancelled) return;
@@ -345,7 +391,8 @@ export function EngineView() {
     return () => {
       isCancelled = true;
       engineRef.current = null;
-      window.removeEventListener("resize", onResize);
+      sendLayoutRef.current = null;
+      window.removeEventListener("resize", send);
       delete view.dataset.bare;
       root.style.overflow = rootOverflow;
       // Disposed at once, not after start: start resolves only when the field
@@ -372,6 +419,7 @@ export function EngineView() {
       data-particles=""
       data-pass=""
       data-cards=""
+      data-making-of=""
       className="group mt-4"
     >
       <div className="flex flex-wrap gap-3 group-data-[bare=true]:hidden">
@@ -408,7 +456,7 @@ export function EngineView() {
               "aria-pressed",
               String(!isPressed(event.currentTarget)),
             );
-            sendPassesNow();
+            sendLayoutRef.current?.();
           }}
         >
           Passes
@@ -468,41 +516,52 @@ export function EngineView() {
           }}
           onPointerLeave={() => engineRef.current?.setPointer(0, 0, false)}
         />
-        {/* The test layout's cards (?passes=1): unpainted boxes over the
-            canvas whose corner marks give the engine each face. A face's
-            corners are its own, not the reading direction's (types.ts,
-            PassCard), so this layer is laid out left to right and its
-            start marks are the faces' left corners. */}
+        {/* The test layout's faces: unpainted boxes over the canvas whose
+            corner marks give the engine each face, flat and 4:5. ?pass=<id>
+            shows the one face (data-single), anything else the row
+            (data-row); the effect hides the other. A face's corners are its
+            own, not the reading direction's (types.ts, PassCard), so this
+            layer is laid out left to right and its start marks are the
+            faces' left corners. */}
         <div
           ref={layerRef}
           dir="ltr"
           aria-hidden="true"
           data-part="cards"
-          className="pointer-events-none absolute inset-0 flex items-center justify-center gap-10 group-data-[bare=true]:fixed group-data-[bare=true]:z-50"
+          className="pointer-events-none absolute inset-0 flex items-center justify-center group-data-[bare=true]:fixed group-data-[bare=true]:z-50"
         >
-          {PASSES.map((pass) => (
-            <div
-              key={pass}
-              data-face={pass}
-              className="relative h-[243px] w-[180px] shrink-0"
-              style={{
-                transform: `perspective(1600px) rotateY(${CARD_TURNS[pass]}deg)`,
-              }}
-            >
-              <span data-corner="0" className="absolute start-0 top-0 size-0" />
-              <span data-corner="1" className="absolute end-0 top-0 size-0" />
-              <span
-                data-corner="2"
-                className="absolute end-0 bottom-0 size-0"
-              />
-              <span
-                data-corner="3"
-                className="absolute start-0 bottom-0 size-0"
-              />
-            </div>
-          ))}
+          <div
+            data-single
+            hidden
+            className="relative h-[260px] w-[208px] shrink-0 md:h-[400px] md:w-[320px]"
+          >
+            <FaceCorners />
+          </div>
+          <div data-row className="flex shrink-0 gap-6">
+            {PASSES.map((pass) => (
+              <div
+                key={pass}
+                data-face={pass}
+                className="relative h-[270px] w-[216px] shrink-0"
+              >
+                <FaceCorners />
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+/** A face's four corner marks, top left first, clockwise. */
+function FaceCorners() {
+  return (
+    <>
+      <span data-corner="0" className="absolute start-0 top-0 size-0" />
+      <span data-corner="1" className="absolute end-0 top-0 size-0" />
+      <span data-corner="2" className="absolute end-0 bottom-0 size-0" />
+      <span data-corner="3" className="absolute start-0 bottom-0 size-0" />
+    </>
   );
 }

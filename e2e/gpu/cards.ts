@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 
-import type { PassCard, PassId } from "../../src/engine/types";
+import type { PassCard, PassId, Stage } from "../../src/engine/types";
+import type { Box } from "./pixels";
 
 /** A card's face on the image: its four corners in image pixels, y down. */
 export interface Quad {
@@ -21,6 +22,29 @@ export function quadsOf(
       y: ((1 - corner.y) / 2) * height,
     })),
   }));
+}
+
+/**
+ * The box round a card's face on an image of this size, in image pixels:
+ * for a flat face, the face itself.
+ */
+export function boxOfCard(card: PassCard, width: number, height: number): Box {
+  const [quad] = quadsOf([card], width, height);
+  const xs = quad?.corners.map((corner) => corner.x) ?? [0];
+  const ys = quad?.corners.map((corner) => corner.y) ?? [0];
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+/** A stage on an image of this size, in image pixels. */
+export function boxOfStage(stage: Stage, width: number, height: number): Box {
+  return {
+    x: ((stage.x - stage.halfWidth + 1) / 2) * width,
+    y: ((1 - stage.y - stage.halfHeight) / 2) * height,
+    width: stage.halfWidth * width,
+    height: stage.halfHeight * height,
+  };
 }
 
 export interface CardRegion {

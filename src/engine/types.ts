@@ -73,8 +73,13 @@ export interface Stage {
  * headline, its centre the dot's and its halves the halo's reach; the bloom
  * grows from there. work: the frame of the study row in view, sent again on
  * every scroll frame while the row moves, and each shape forms inside it.
- * contact: the panel the contact rings centre on. A chapter with no stage
- * uses the whole screen.
+ * making-of: the face of the pass card in the middle of the making-of row,
+ * sent again on every scroll frame while the row slides; the T7 mark forms
+ * inside it, and that card shows its pass of the mark. Absent when no card
+ * is in the middle (the viewer away, calm mode's still grid, tier 3), and
+ * then the making-of chapter is the ambient flow. contact: the panel the
+ * contact rings centre on. Any other chapter with no stage uses the whole
+ * screen.
  */
 export type Stages = Partial<Record<ChapterId, Stage>>;
 
@@ -87,18 +92,19 @@ export interface Point {
 /**
  * One card of the making-of pass viewer as the page lays it out: the four
  * corners of its face in normalised device coordinates, in the order top
- * left, top right, bottom right, bottom left of the face as it stands
- * unturned. A card the page turns in 3D so keeps its pass on its face, the
- * right way round in either reading direction (a projective map).
+ * left, top right, bottom right, bottom left of the face. The card shows its
+ * pass of the part of the frame right behind its face, one to one: the
+ * middle card the T7 mark that forms inside it (Stages, making-of), the
+ * others the flow behind them. The page lays every face flat; a face turned
+ * in 3D keeps its pass on it the right way round (a projective map) and
+ * shows the box round its corners.
  */
 export interface PassCard {
   pass: PassId;
   corners: readonly [Point, Point, Point, Point];
   /**
-   * The face's own size in CSS pixels, as it stands unturned: its width over
-   * height is the picture's, which the corners of a face turned in depth
-   * cannot give. Without it the picture takes the face's width over height
-   * as drawn.
+   * The face's own size in CSS pixels, as it stands unturned, for the radius
+   * of its corners on its own plane. Without it the corners are square.
    */
   size?: { width: number; height: number };
   /**
@@ -120,12 +126,15 @@ export interface Engine {
   /** Scroll position: the chapter in view and how far through it, 0 to 1. */
   setStory(chapter: ChapterId, progress: number): void;
   /**
-   * Where the hero's dot sits, where the work chapter's shapes form and where
+   * Where the hero's dot sits, where the work chapter's shapes form, where
+   * the making-of's T7 mark forms (the middle pass card's face) and where
    * the contact rings centre, from the page's layout. Sent again when the
-   * layout changes and on every scroll frame while the work row moves; each
-   * call replaces the last. A stage that moves a little between frames is
-   * taken at once, so a shape stays inside its frame while the page scrolls;
-   * a jump glides (REQ-SCR-05).
+   * layout changes and on every scroll frame while the work row or the
+   * making-of row moves; each call replaces the last. A stage that moves a
+   * little between frames is taken at once, so a shape stays inside its
+   * frame or card while the page scrolls; a jump, such as the next card
+   * reaching the middle, glides (REQ-SCR-05). The making-of forms its mark
+   * only while its stage is sent.
    */
   setStage(stages: Stages): void;
   /**

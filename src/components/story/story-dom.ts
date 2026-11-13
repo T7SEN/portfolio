@@ -68,5 +68,6 @@ export function measureStory(
     view.scrollY,
     chapters.map(({ chapter, element }) => ({ chapter, ...span(element) })),
     steps.map(span),
+    view.innerHeight,
   );
 }

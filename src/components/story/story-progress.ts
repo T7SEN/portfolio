@@ -1,4 +1,4 @@
-import { WORK_SHAPES } from "@/engine/story";
+import { STEP_EDGE, WORK_SHAPES } from "@/engine/story";
 import type { ChapterId } from "@/engine/types";
 import type { StoryState } from "@/lib/story-bridge";
 
@@ -40,19 +40,54 @@ function workPlace(position: number, steps: readonly Span[], count: number) {
 }
 
 /**
+ * How far up the screen the first study's row comes, as a share of the way
+ * from the screen's bottom to its middle, while its shape forms (decision
+ * D-130): whole once the row's top is three quarters of the way down.
+ */
+export const FIRST_RISE = 0.5;
+
+// The first step's place. Its shape forms as its row comes up the screen,
+// from the moment the row's top shows at the bottom, and is whole before
+// the row reaches the middle, so wherever a jump lands (Skip intro) a row in
+// view holds its shape whole. The row's own span then holds it whole until
+// the turn to the next study, which starts where it always did.
+function firstPlace(
+  position: number,
+  first: Span,
+  local: number,
+  height: number,
+): number {
+  if (position < first.start) {
+    const reach = (height / 2) * FIRST_RISE;
+    if (!(reach > 0)) return 0;
+    return STEP_EDGE * unit((position - (first.start - height / 2)) / reach);
+  }
+  const turn = 1 - STEP_EDGE;
+  if (local >= turn) return local;
+  return STEP_EDGE + (local / turn) * (turn - STEP_EDGE);
+}
+
+/**
  * The work chapter's progress in workStep's equal steps (src/engine/story.ts):
  * the study row at the middle of the viewport gives the step, and how far
- * that row is through the middle gives the place inside it. Above the first
- * row the first step has not begun; between rows the next one is at its
- * start.
+ * that row is through the middle gives the place inside it. The first row's
+ * shape forms as the row comes up a screen height tall (firstPlace); without
+ * one, above the first row the first step has not begun. Between rows the
+ * next one is at its start.
  */
 export function workProgress(
   position: number,
   steps: readonly Span[],
   count: number = WORK_SHAPES.length,
+  height = 0,
 ): number {
   const { index, local } = workPlace(position, steps, count);
-  return unit((index + local) / count);
+  const first = steps[0];
+  const place =
+    index === 0 && first !== undefined && count > 0
+      ? firstPlace(position, first, local, height)
+      : local;
+  return unit((index + place) / count);
 }
 
 /**
@@ -75,14 +110,19 @@ export function rowInView(
 
 /**
  * The chapter at the middle of the viewport and how far through it the page
- * is. Chapters come in page order. A gap between two chapters belongs to the
- * chapter above it at 1. In the work chapter the study rows set the
- * progress, when there are any.
+ * is. Chapters come in page order. The first, which fills the first screen,
+ * starts at the page's top instead: its progress runs from the first pixel
+ * of scroll to where its bottom reaches the middle, which is where the hero's
+ * dot glides to the middle of the screen (runtime/story.ts, dotTravel). A
+ * gap between two chapters belongs to the chapter above it at 1. In the work
+ * chapter the study rows set the progress, when there are any, with the
+ * viewport's height for the first row's rise (workProgress).
  */
 export function resolveStory(
   position: number,
   chapters: readonly ChapterSpan[],
   steps: readonly Span[] = [],
+  height = 0,
 ): StoryState | null {
   let current: ChapterSpan | undefined;
   for (const span of chapters) {
@@ -90,10 +130,11 @@ export function resolveStory(
   }
   if (current === undefined) return null;
 
+  const span = current === chapters[0] ? { ...current, start: 0 } : current;
   const progress =
     current.chapter === "work" && steps.length > 0
-      ? workProgress(position, steps)
-      : spanProgress(position, current);
+      ? workProgress(position, steps, WORK_SHAPES.length, height)
+      : spanProgress(position, span);
   return { chapter: current.chapter, progress };
 }
 

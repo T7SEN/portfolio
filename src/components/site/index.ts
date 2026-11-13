@@ -8,6 +8,7 @@ export {
   HAIRLINE,
   HAIRLINE_STRONG,
   LINK_HOVER,
+  LINK_UNDERLINE,
   MONO_CAPS,
   RULE,
 } from "./class-names";

@@ -231,8 +231,16 @@ describe("StudyTable", () => {
       const inProgress = study?.kind === "short" && study.inProgress;
 
       expect(classesOf(link)).toEqual(
-        expect.arrayContaining(["underline", "min-h-11", "hover:text-paper"]),
+        expect.arrayContaining(["min-h-11", "hover:text-paper"]),
       );
+      // The underline on the words alone, never under the arrow.
+      expect(classesOf(link)).not.toContain("underline");
+      const words = link?.querySelector('[data-part="link-words"]') ?? null;
+      expect(classesOf(words)).toContain("underline");
+      expect(words?.textContent).toBe(
+        row.querySelector("a")?.textContent?.replace("→", ""),
+      );
+      expect(classesOf(arrow ?? null)).not.toContain("underline");
       if (inProgress) {
         expect(link?.getAttribute("data-state")).toBe("in-progress");
         expect(classesOf(link)).toContain("text-glow");

@@ -911,7 +911,14 @@ describe("ShortCard", () => {
       expect(card?.textContent).toContain(study.listing.line);
       expect(card?.textContent).toContain(study.listing.stack.join(" · "));
       const read = card?.querySelector(`a[href="${studyHref(study.slug)}"]`);
-      const [wide, phone] = [...(read?.querySelectorAll("span") ?? [])];
+      // Both labels sit in the words' box, which carries the underline from
+      // 640 px and none on a phone, where the row is the target.
+      const words = read?.querySelector('[data-part="link-words"]');
+      expect(classesOf(words)).toEqual(
+        expect.arrayContaining(["underline", "max-sm:no-underline"]),
+      );
+      expect(classesOf(read)).not.toContain("underline");
+      const [wide, phone] = [...(words?.children ?? [])];
       expect(wide?.textContent).toBe(readShort);
       expect(classesOf(wide)).toContain("max-sm:hidden");
       expect(phone?.textContent).toBe(study.listing.studyLabel);

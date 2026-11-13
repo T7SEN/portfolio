@@ -15,6 +15,13 @@ export const HAIRLINE_STRONG = "border-edge/55";
 export const RULE = "border-raised";
 
 /**
+ * A link's underline, laid on its words' own box and never the link's: a
+ * link laid out as a flex box (inline-flex, for its 44 px target) makes its
+ * arrow a flex item, and a flex item takes its parent's underline.
+ */
+export const LINK_UNDERLINE = "underline underline-offset-2";
+
+/**
  * Link hover and focus: the text brightens to the lightest token. The preview
  * goes to full white; paper (#F4F4F7) is the nearest colour the palette has.
  */

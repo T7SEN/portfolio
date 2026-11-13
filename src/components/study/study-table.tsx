@@ -1,4 +1,10 @@
-import { cx, HAIRLINE, LINK_HOVER, MONO_CAPS } from "@/components/site";
+import {
+  cx,
+  HAIRLINE,
+  LINK_HOVER,
+  LINK_UNDERLINE,
+  MONO_CAPS,
+} from "@/components/site";
 import { SiteAnchor } from "@/components/site/site-anchor";
 import { studies, studyHref, studyNumber } from "@/content";
 import { pages } from "@/content/pages";
@@ -163,14 +169,18 @@ export function StudyTable({ labelledBy, className }: StudyTableProps) {
                 aria-label={`${row.link.label}, ${row.title}`}
                 data-state={row.inProgress ? "in-progress" : undefined}
                 className={cx(
-                  "inline-flex min-h-11 items-center text-[0.9375rem] font-medium underline underline-offset-2",
+                  "inline-flex min-h-11 items-center text-[0.9375rem] font-medium",
                   // In progress keeps the glow, so a study that is not
                   // finished reads apart from the rest; the words say it too.
                   row.inProgress ? "text-glow" : "text-text",
                   LINK_HOVER,
                 )}
               >
-                {row.link.label}
+                {/* The underline on the words alone, never under the
+                    arrow (LINK_UNDERLINE). */}
+                <span data-part="link-words" className={LINK_UNDERLINE}>
+                  {row.link.label}
+                </span>
                 <span
                   aria-hidden="true"
                   className={cx(

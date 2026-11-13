@@ -78,6 +78,11 @@ function arrowOf(link: Element | null) {
   return link?.querySelector('[aria-hidden="true"]') ?? null;
 }
 
+/** A link's words: the box that carries its underline. */
+function wordsOf(link: Element | null) {
+  return link?.querySelector('[data-part="link-words"]') ?? null;
+}
+
 /** The text assistive technology reads: aria-hidden parts left out. */
 function spokenText(element: Element | null) {
   if (element === null) return null;
@@ -442,13 +447,64 @@ describe("TextLink", () => {
     const [main, second] = [...host.querySelectorAll("a")];
 
     expect(classesOf(main ?? null)).toEqual(
-      expect.arrayContaining(["text-text", "underline", "hover:text-paper"]),
+      expect.arrayContaining(["text-text", "hover:text-paper"]),
     );
+    expect(classesOf(wordsOf(main ?? null))).toContain("underline");
     expect(arrowOf(main ?? null)?.className).toContain("text-glow");
     expect(classesOf(second ?? null)).toEqual(
-      expect.arrayContaining(["text-muted", "underline", "hover:text-paper"]),
+      expect.arrayContaining(["text-muted", "hover:text-paper"]),
     );
+    expect(classesOf(wordsOf(second ?? null))).toContain("underline");
     expect(arrowOf(second ?? null)?.className).not.toContain("text-glow");
+  });
+
+  it("REQ-A11Y-06 the underline is on the words alone, never under the arrow, however the link is laid out", () => {
+    const host = render(
+      <>
+        <TextLink href="/work/archelab" className="inline-flex min-h-11">
+          Read the case study
+        </TextLink>
+        <TextLink
+          href="https://coup.example"
+          variant="muted"
+          className="inline-flex min-h-11"
+        >
+          Play it
+        </TextLink>
+        <TextLink href="/about" variant="footer">
+          About
+        </TextLink>
+      </>,
+    );
+    const [main, second, footer] = [...host.querySelectorAll("a")];
+    for (const link of [main, second]) {
+      const anchor = link ?? null;
+      // A flex link makes its arrow a flex item, which would take the
+      // link's own underline.
+      expect(classesOf(anchor)).not.toContain("underline");
+      expect(classesOf(arrowOf(anchor))).not.toContain("underline");
+      const words = wordsOf(anchor);
+      expect(classesOf(words)).toEqual(
+        expect.arrayContaining(["underline", "underline-offset-2"]),
+      );
+      expect(words?.contains(arrowOf(anchor))).toBe(false);
+    }
+    expect(wordsOf(main ?? null)?.textContent).toBe("Read the case study");
+    expect(wordsOf(second ?? null)?.textContent).toBe("Play it");
+    // The footer's links have no underline at all.
+    expect(classesOf(wordsOf(footer ?? null))).not.toContain("underline");
+    expect(classesOf(footer ?? null)).not.toContain("underline");
+  });
+
+  it("REQ-A11Y-06 classes for the words reach the words' own box", () => {
+    const link = render(
+      <TextLink href="/work" wordsClassName="max-sm:no-underline">
+        Work
+      </TextLink>,
+    ).querySelector("a");
+    expect(classesOf(wordsOf(link))).toEqual(
+      expect.arrayContaining(["underline", "max-sm:no-underline"]),
+    );
   });
 
   it("REQ-I18N-01 the arrow mirrors on right-to-left pages", () => {

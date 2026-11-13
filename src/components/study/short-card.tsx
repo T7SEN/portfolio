@@ -68,7 +68,8 @@ export function ShortCard({ study, readLabel }: ShortCardProps) {
         <TextLink
           href={studyHref(slug)}
           aria-label={name}
-          className="inline-flex min-h-11 items-center text-[0.9375rem] font-medium max-sm:font-mono max-sm:text-xs max-sm:tracking-[0.08em] max-sm:uppercase max-sm:no-underline max-sm:after:absolute max-sm:after:inset-0"
+          className="inline-flex min-h-11 items-center text-[0.9375rem] font-medium max-sm:font-mono max-sm:text-xs max-sm:tracking-[0.08em] max-sm:uppercase max-sm:after:absolute max-sm:after:inset-0"
+          wordsClassName="max-sm:no-underline"
         >
           <span className="max-sm:hidden">{readLabel}</span>
           <span

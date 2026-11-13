@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { cx, LINK_HOVER } from "./class-names";
+import { cx, LINK_HOVER, LINK_UNDERLINE } from "./class-names";
 import { isOnSite, SiteAnchor } from "./site-anchor";
 
 /**
@@ -21,11 +21,13 @@ type TextLinkProps = {
    * It must hold the visible words (WCAG 2.5.3, label in name).
    */
   "aria-label"?: string;
+  /** Classes for the words' own box, which carries the underline. */
+  wordsClassName?: string;
 };
 
 const VARIANTS: Record<TextLinkVariant, string> = {
-  inline: "text-text underline underline-offset-2",
-  muted: "text-muted underline underline-offset-2",
+  inline: "text-text",
+  muted: "text-muted",
   footer: "inline-flex min-h-11 items-center text-text",
 };
 
@@ -35,13 +37,14 @@ export function TextLink({
   variant = "inline",
   className,
   "aria-label": name,
+  wordsClassName,
 }: TextLinkProps) {
   const onSite = isOnSite(href);
   const hideAtRest = variant === "footer" && onSite;
 
   // The arrow tells where the link goes, inside the site or out of it, and
-  // it mirrors on right-to-left pages. An inline block, so the underline
-  // stops at the words.
+  // it mirrors on right-to-left pages. It sits beside the words' box, so the
+  // underline stops at the words (LINK_UNDERLINE).
   const arrow = (
     <span
       aria-hidden="true"
@@ -62,7 +65,12 @@ export function TextLink({
       className={cx("group", VARIANTS[variant], LINK_HOVER, className)}
       aria-label={name}
     >
-      {children}
+      <span
+        data-part="link-words"
+        className={cx(variant !== "footer" && LINK_UNDERLINE, wordsClassName)}
+      >
+        {children}
+      </span>
       {arrow}
     </SiteAnchor>
   );

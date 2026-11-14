@@ -12,6 +12,37 @@ export const HOST = `${FIELD} [data-part="host"]`;
 export const CANVAS = `${HOST} > canvas`;
 export const STILL = `${FIELD} img[data-part="still"]`;
 
+/**
+ * Sets the field's veil to a strength, or back to the page's own with null,
+ * and waits until the veil shows it: the veil fades to a new strength over
+ * 0.7 s (engine-host.tsx, D-146), so a screenshot taken at once would catch
+ * it partway.
+ */
+export async function setFieldVeil(
+  page: Page,
+  veil: number | null,
+): Promise<void> {
+  await page.locator(FIELD).evaluate((wrapper, value) => {
+    const element = wrapper as HTMLElement;
+    if (value === null) element.style.removeProperty("--field-veil");
+    else element.style.setProperty("--field-veil", String(value));
+  }, veil);
+  await page.waitForFunction((field) => {
+    const wrapper = document.querySelector(field);
+    const layer = wrapper?.querySelector('[data-part="veil"]');
+    if (wrapper === null || wrapper === undefined || !layer) return true;
+    const target = Number(
+      getComputedStyle(wrapper).getPropertyValue("--field-veil"),
+    );
+    const shown = Number(getComputedStyle(layer).opacity);
+    return Number.isFinite(target) && Math.abs(shown - target) < 0.005;
+  }, FIELD);
+}
+/** The tier 3 contact sky, a 2D canvas, not the engine's (D-146). */
+export const TIER_SKY = `${FIELD} canvas[data-part="tier-sky"]`;
+/** Every canvas but the tier 3 sky's: on tier 3 there must be none. */
+export const ENGINE_CANVASES = 'canvas:not([data-part="tier-sky"])';
+
 // Many workers share one GPU in the gate, so a field can take far longer to
 // draw its first frame than it does alone. Bounded, so a field that never
 // arrives still fails. Playwright stops a test at 30 s by default, so a test

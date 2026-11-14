@@ -9,6 +9,7 @@ import { tierStore } from "@/lib/tier-store";
 
 import { createEngineSession, type EngineSession } from "./engine-session";
 import { startPointerInput } from "./pointer-input";
+import { TierSky } from "./tier-sky";
 import { TierStill } from "./tier-still";
 
 // The routes that show the field. Every other route hides the wrapper, so
@@ -77,12 +78,18 @@ export function EngineHost() {
       data-testid="engine-field"
       aria-hidden="true"
       hidden={!isFieldRoute}
-      className="pointer-events-none fixed inset-0 -z-10 opacity-0 transition-opacity duration-700 ease-out [--field-veil:0.7] data-[ready=true]:opacity-100 data-[tier=3]:[--field-veil:0.75]"
+      className="group/field pointer-events-none fixed inset-0 -z-10 opacity-0 transition-opacity duration-700 ease-out [--field-veil:0.7] data-[ready=true]:opacity-100 data-[tier=3]:[--field-veil:0.75]"
     >
       {/* The engine owns this element and the canvas inside it. React never
           renders children here. */}
       <div ref={hostRef} data-part="host" className="absolute inset-0" />
-      {tier === 3 && isFieldRoute ? <TierStill /> : null}
+      {tier === 3 && isFieldRoute ? (
+        <>
+          <TierStill />
+          {/* The contact chapter's sky over the picture (D-146). */}
+          <TierSky />
+        </>
+      ) : null}
       {/* Dims the field so the text over it keeps 4.5 to 1 against the
           brightest pixel behind it. The strength is --field-veil on the
           wrapper, set from the headed contrast measurement: 0.7, and 0.75
@@ -90,7 +97,7 @@ export function EngineHost() {
           sprinkle behind the hero's muted text read 4.49 to 1 at 0.7. */}
       <div
         data-part="veil"
-        className="absolute inset-0 bg-void opacity-(--field-veil)"
+        className="absolute inset-0 bg-void opacity-(--field-veil) transition-opacity duration-700 ease-out motion-reduce:transition-none"
       />
     </div>
   );

@@ -12,7 +12,15 @@ import {
   readSurface,
   watchErrors,
 } from "../gpu/frame-times";
+import { withoutLoader } from "../support/loader";
 import { afterTwoFrames, frameRateEvents } from "../support/tiers";
+
+// Every tab opens the home page with no loader cover: withoutLoader
+// serves each page with its inline script emptied, as a blocked script
+// leaves it. e2e/headed/loader.spec.ts covers the cover (REQ-LOAD-01).
+test.beforeEach(async ({ context }) => {
+  await withoutLoader(context);
+});
 
 // The home page of the production build, headed, on this machine's GPU: the
 // order the field arrives in, the headline swap and the frame rate.

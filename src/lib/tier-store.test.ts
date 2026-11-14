@@ -98,6 +98,39 @@ describe("tier store", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("REQ-LOAD-01 REQ-ENG-03 rendererStarted and probeStarted change nothing and wake no listener, before a tier and after one", () => {
+    const store = createTierStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.apply({ type: "rendererStarted", backend: "webgpu" });
+    store.apply({ type: "probeStarted", durationMs: 2000 });
+    expect(store.getSnapshot()).toBe(store.getServerSnapshot());
+    expect(listener).not.toHaveBeenCalled();
+
+    store.apply({ type: "tierChosen", tier: 2, reason: "probe-slow" });
+    store.apply({
+      type: "ready",
+      tier: 2,
+      particles: 250_000,
+      look: "halftone",
+    });
+    const settled = store.getSnapshot();
+    listener.mockClear();
+    store.apply({ type: "rendererStarted", backend: "webgl2" });
+    store.apply({ type: "probeStarted", durationMs: 2000 });
+    expect(store.getSnapshot()).toBe(settled);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("REQ-LOAD-01 REQ-ENG-08 a rendererStarted while a chosen tier waits for its ready, as a lost device's rebuild sends, leaves it waiting", () => {
+    const store = createTierStore();
+    store.apply({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    const chosen = store.getSnapshot();
+    store.apply({ type: "rendererStarted", backend: "webgl2" });
+    expect(store.getSnapshot()).toBe(chosen);
+    expect(store.getSnapshot().ready).toBe(false);
+  });
+
   it("REQ-ENG-03 a repeated ready keeps the same snapshot object", () => {
     const store = createTierStore();
     store.apply({ type: "tierChosen", tier: 3, reason: "save-data" });

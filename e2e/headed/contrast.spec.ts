@@ -9,6 +9,8 @@ import {
 } from "../../src/engine/runtime/story";
 import { colors } from "../../src/tokens/colors";
 import { pixelStats, type Box } from "../gpu/pixels";
+import { withoutLoader } from "../support/loader";
+import { setFieldVeil } from "../support/tiers";
 
 // Text over the field keeps 4.5 to 1 against the brightest pixel behind it
 // (REQ-A11Y-06). Measured on the production build, headed, from screenshots
@@ -20,10 +22,11 @@ const MINIMUM = 4.5;
 // The page's text is hidden while the field is measured. The plates that
 // text held on screen brings along (home/held-plate.tsx) and the hero
 // eyebrow's dense plate (site/label.tsx) are part of the veil, as the
-// veil's own plates are, so they stay.
+// veil's own plates are, so they stay. So does the field chapter's tier 3
+// wordmark still (home/field-still.tsx), which is the field there.
 const HIDE_TEXT =
   "header, main, footer { visibility: hidden !important; } " +
-  "main :is([data-part='own-plate'], [data-part='dense-plate']) { visibility: visible !important; }";
+  "main :is([data-part='own-plate'], [data-part='dense-plate'], [data-part='field-still']) { visibility: visible !important; }";
 const FRAMES = Number(process.env.CONTRAST_FRAMES ?? 12);
 // From the top of the page, the field leaves its starting haze and gathers
 // into the hero's dot in under this.
@@ -140,6 +143,7 @@ for (const { name, viewport, tier, setup } of CASES) {
       viewport,
     });
     const page = await context.newPage();
+    await withoutLoader(page);
     try {
       if (setup === "no-webgpu") {
         await page.addInitScript(() => {
@@ -205,14 +209,7 @@ for (const { name, viewport, tier, setup } of CASES) {
       const veils = new Set([0, ...EXTRA_VEILS, shipped, 1]);
       test.setTimeout(60_000 + veils.size * FRAMES * 2_000);
       for (const veil of veils) {
-        await field.evaluate(
-          (element, value) =>
-            (element as HTMLElement).style.setProperty(
-              "--field-veil",
-              String(value),
-            ),
-          veil,
-        );
+        await setFieldVeil(page, veil);
         // The veil's plates behind the text (story-veil.ts) and the plates
         // the held words bring (held-plate.tsx) are part of the shipped
         // veil, so they stay for every measured strength. The control looks
@@ -284,7 +281,7 @@ for (const { name, viewport, tier, setup } of CASES) {
 
 // Further down the page the field gathers into formations: the mark then
 // the wordmark in the field chapter, a shape per study inside its frame, the
-// mark in the making-of's middle pass card, the strands and the rings. They
+// mark in the making-of's middle pass card, the strands and the sky. They
 // pack the particles far more densely than the ambient field, so the text in
 // view at each one is measured too (accessibility.md section 7).
 
@@ -373,6 +370,21 @@ const CHAPTER_CASES = [
     viewport: { width: 375, height: 812 },
     tier: 2,
     setup: "touch",
+  },
+  // Tier 3 has no formations, only stills; the field chapter's held words
+  // lie over the wordmark still, which has no veil of its own from P4.5
+  // (D-143), so only the field chapter's states are measured there.
+  {
+    name: "tier 3 still at 1280 x 800",
+    viewport: { width: 1280, height: 800 },
+    tier: 3,
+    setup: "save-data",
+  },
+  {
+    name: "tier 3 still at 375 x 812",
+    viewport: { width: 375, height: 812 },
+    tier: 3,
+    setup: "save-data",
   },
 ] as const;
 
@@ -473,7 +485,7 @@ const FORMED_STATES = [
     text: true,
   },
   {
-    name: "contact 0.5, the rings",
+    name: "contact 0.5, the sky",
     chapter: "contact",
     progress: 0.5,
     text: true,
@@ -503,12 +515,27 @@ for (const { name, viewport, tier, setup } of CHAPTER_CASES) {
       viewport,
     });
     const page = await context.newPage();
+    await withoutLoader(page);
     try {
       if (setup === "no-webgpu") {
         await page.addInitScript(() => {
           Reflect.deleteProperty(Navigator.prototype, "gpu");
         });
       }
+      if (setup === "save-data") {
+        await page.addInitScript(() => {
+          Object.defineProperty(navigator, "connection", {
+            value: { saveData: true },
+            configurable: true,
+          });
+        });
+      }
+      const states =
+        setup === "save-data"
+          ? FORMED_STATES.filter(
+              (state) => "chapter" in state && state.chapter === "bloom",
+            )
+          : FORMED_STATES;
 
       await page.goto("/");
       const field = page.locator(FIELD);
@@ -528,7 +555,7 @@ for (const { name, viewport, tier, setup } of CHAPTER_CASES) {
       );
 
       const results: Array<{ state: string; worst: number }> = [];
-      for (const state of FORMED_STATES) {
+      for (const state of states) {
         // A card rests in the middle halfway through its stretch of scroll,
         // where its own button takes the page (pass-slide.ts, restProgress).
         const place: Place =
@@ -577,6 +604,12 @@ for (const { name, viewport, tier, setup } of CHAPTER_CASES) {
           top,
         );
         await page.waitForTimeout(FORMED_SETTLE_MS);
+        // On tier 3 the wordmark still is the field the held words lie over.
+        if (setup === "save-data") {
+          await expect(
+            page.locator('main [data-part="field-still"]'),
+          ).toHaveCSS("opacity", "1");
+        }
         const chapter = await field.getAttribute("data-chapter");
         const { boxes, own } = await textOnField(page);
 

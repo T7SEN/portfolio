@@ -35,6 +35,7 @@ const NEXT_DIR = ".next";
 const CHUNKS_DIR = join(NEXT_DIR, "static", "chunks");
 const MANIFEST_PATH = "src/engine/manifest.json";
 const RUNTIME_DIR = "src/engine/runtime";
+const SKY_CATALOGUE_FILE = "src/engine/sky/catalogue.ts";
 const MOTION_LOADER = "src/lib/load-motion.ts";
 const SCRIPT_FILE = /\.(?:js|jsx|mjs|cjs|ts|tsx|mts|cts)$/;
 
@@ -149,6 +150,20 @@ if (engineJs.shared > 0) {
     "the engine entry shares a chunk with three.js, so tier 3 would download three.js",
   );
 }
+if (engineJs.skyShared > 0) {
+  failures.push(
+    "the sky catalogue shares a chunk with three.js, so tier 3 would download three.js",
+  );
+}
+if (
+  existsSync(SKY_CATALOGUE_FILE) &&
+  engineJs.sky.count === 0 &&
+  engineJs.skyShared === 0
+) {
+  failures.push(
+    `${SKY_CATALOGUE_FILE} exists but no built chunk holds its data, so the sky catalogue is uncounted`,
+  );
+}
 
 let payloadLines = [];
 const engineHasCode =
@@ -181,6 +196,7 @@ if (existsSync(MANIFEST_PATH)) {
     sizeOf,
     engineJs.three.bytes,
     engineJs.entry.bytes,
+    engineJs.sky.bytes,
   );
   failures.push(...result.failures);
   payloadLines = result.totals.map(
@@ -221,6 +237,8 @@ const report = [
   `Built chunks holding three.js: ${engineJs.three.count}, ${formatKb(engineJs.three.bytes)} gzip, counted in tiers 1 and 2.`,
   "",
   `Built chunks holding the engine entry and no three.js: ${engineJs.entry.count}, ${formatKb(engineJs.entry.bytes)} gzip, counted in every tier.`,
+  "",
+  `Built chunks holding the contact sky's catalogue and no three.js (D-146): ${engineJs.sky.count}, ${formatKb(engineJs.sky.bytes)} gzip, counted in every tier.`,
   "",
   ...(payloadLines.length > 0
     ? [

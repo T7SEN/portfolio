@@ -18,9 +18,12 @@ import type {
   Runtime,
   RuntimeFactory,
   RuntimeOptions,
+  SkyView,
   Stage,
   Stages,
 } from "../types";
+import type * as Catalogue from "../sky/catalogue";
+import { skyFrame, type SkyCatalogue } from "../sky/sky";
 import { nextResolution, startResolution } from "./adaptive";
 import { packAtlas, type Atlas } from "./atlas";
 import { liveBackend } from "./backend";
@@ -38,6 +41,7 @@ import {
 } from "./halftone-rules";
 import { copyCards, layoutCards, sameCards, tierOf } from "./pass-rules";
 import { createPasses } from "./passes";
+import { createSkyField } from "./sky-field";
 import {
   FIELD_MARGIN,
   FORM_DRAG,
@@ -177,11 +181,29 @@ function finiteStage(stage: Stage): Stage {
   };
 }
 
+/**
+ * The contact sky's catalogue (D-146), or an empty one when its chunk fails
+ * to load: the sky then has no stars, and the field still runs (rule A11).
+ */
+export function loadSkyCatalogue(
+  load: () => Promise<typeof Catalogue> = () => import("../sky/catalogue"),
+): Promise<SkyCatalogue> {
+  return load().then(
+    (module) => ({
+      stars: module.SKY_STARS,
+      segments: module.SKY_SEGMENTS,
+      constellations: module.SKY_CONSTELLATIONS,
+    }),
+    () => ({ stars: [], segments: [], constellations: [] }),
+  );
+}
+
 function startRuntime(
   renderer: WebGPURenderer,
   options: RuntimeOptions,
   loss: Loss,
   look: FieldLook,
+  catalogue: SkyCatalogue,
 ): Runtime {
   const { canvas } = options;
   const backend = liveBackend(renderer);
@@ -196,7 +218,9 @@ function startRuntime(
   let view = viewFor(firstSize.width / firstSize.height);
   const atlas = packAtlas();
   const shapes = atlasTexture(atlas);
-  const simulation = createSimulation(particleCount, view, shapes);
+  // The contact sky's stars, moved to this year once (D-146).
+  const skyField = createSkyField(catalogue, Date.now());
+  const simulation = createSimulation(particleCount, view, shapes, skyField);
   // The making-of's passes are the halftone's own, so the soft look has
   // none; the velocity draw is built only for a tier that shows it live.
   const tier = tierOf(backend);
@@ -259,9 +283,9 @@ function startRuntime(
   // The making-of's stream (story.ts, streamShare): how far back toward the
   // card it left the mark is drawn as it begins, and its clock.
   const stream = { x: 0, y: 0, seconds: PASS_STREAM_SECONDS };
-  // Where the page puts the dot, the work chapter's shapes, the making-of's
-  // mark and the contact rings (types.ts, Stage); none until the page has
-  // measured its layout.
+  // Where the page puts the dot, the work chapter's shapes and the
+  // making-of's mark (types.ts, Stage); none until the page has measured
+  // its layout.
   let stages: Stages = {};
   // The dot's centre and how many times its size it is drawn (story.ts,
   // glideStage and dotSwell), and the formation's centre.
@@ -269,6 +293,9 @@ function startRuntime(
   // The making-of's pass cards as the page last sent them (types.ts,
   // PassCard); null while none are on screen, and then no pass is drawn.
   let cards: PassCard[] | null = null;
+  // The page's view of the contact sky (types.ts, SkyView); null until it
+  // sends one, and then the sky is the moment, unturned, with no lines.
+  let skyView: SkyView | null = null;
   // The last pointer the page sent. It pushes the particles only while the
   // field runs: the page lets go of the pointer only after calm has frozen
   // the field, and a settle with the push on would press a hole at the
@@ -311,14 +338,15 @@ function startRuntime(
       shapes.frame,
     );
     formTarget = Math.min(
-      targets.shape + targets.sheet + targets.strands + targets.rings,
+      targets.shape + targets.sheet + targets.strands + targets.sky,
       1,
     );
-    // Only a shape or the sheet turns its densest cells white. The preview
-    // draws the about strands and the contact rings in violet and glow
-    // alone, and on a phone the strands' crossings reached white under the
-    // about text, 3.18 to 1 for muted text through its plate (REQ-A11Y-06).
-    whiteTarget = Math.min(targets.shape + targets.sheet, 1);
+    // Only a shape, the sheet or the sky turns its densest cells white: the
+    // sky's brightest stars. The preview draws the about strands in violet
+    // and glow alone, and on a phone the strands' crossings reached white
+    // under the about text, 3.18 to 1 for muted text through its plate
+    // (REQ-A11Y-06).
+    whiteTarget = Math.min(targets.shape + targets.sheet + targets.sky, 1);
     // The halftone's fill lands on the glow token whatever the area the
     // formation packs into; the soft look keeps its own rule.
     lightTarget =
@@ -627,8 +655,37 @@ function startRuntime(
     // The flow clock runs only once the release this step simulates is
     // complete (story.ts, flowClockStep).
     simulation.advanceFlow(seconds, followed.release);
+    placeSky();
     void renderer.compute(simulation.update);
     steps += 1;
+  };
+
+  // The contact sky's stars and lines for this step, while the sky shows:
+  // placed for the page's view on the screen's CSS size, the horizon where
+  // the page puts it or the sky band's own (sky.ts skyFrame), then carried
+  // to the focus plane.
+  const placeSky = () => {
+    if (targets.sky <= 0) return;
+    const { width, height } = cssSize();
+    const horizon = skyView?.horizon ?? null;
+    const frame =
+      horizon === null ? skyFrame(width, height) : { width, height, horizon };
+    simulation.skyPixel.value = (2 * view.halfWidth) / width;
+    skyField.update(
+      skyView ?? {
+        at: Date.now(),
+        turn: 0,
+        tilt: 0,
+        horizon: null,
+        reveal: [],
+        trace: null,
+      },
+      frame,
+      (x, y) => ({
+        x: ((x / width) * 2 - 1) * view.halfWidth,
+        y: (1 - (y / height) * 2) * view.halfHeight,
+      }),
+    );
   };
 
   // One step of no length with reseat on puts every particle on its target
@@ -843,6 +900,7 @@ function startRuntime(
       () => simulation.velocities.value.dispose(),
       () => simulation.seeds.value.dispose(),
       () => shapes.dispose(),
+      () => skyField.dispose(),
       () => timer.dispose(),
       () => observer.disconnect(),
     ];
@@ -987,6 +1045,19 @@ function startRuntime(
       // keep to the page while it scrolls.
       if (still) owe("redraw");
     },
+    setSky(next) {
+      if (disposal !== null || loss.message !== null) return;
+      // Kept for the next step. A calm field holds its still: the page sends
+      // the frozen moment and no lines while calm (REQ-A11Y-03).
+      skyView =
+        next === null
+          ? null
+          : {
+              ...next,
+              reveal: [...next.reveal],
+              trace: next.trace === null ? null : { ...next.trace },
+            };
+    },
     dispose() {
       disposal ??= release();
       return disposal;
@@ -1031,7 +1102,19 @@ export const createRuntime: RuntimeFactory = async (options) => {
     const works =
       options.look === "halftone" && (await halftoneWorks(renderer));
     if (loss.message !== null) throw new Error(loss.message);
-    return startRuntime(renderer, options, loss, liveLook(options.look, works));
+    // The contact sky's catalogue, by dynamic import: the page loads the
+    // same chunk for its names (D-146), so it is downloaded once. A chunk
+    // that fails to load leaves the contact chapter without stars, never
+    // the page without its field (rule A11).
+    const catalogue = await loadSkyCatalogue();
+    if (loss.message !== null) throw new Error(loss.message);
+    return startRuntime(
+      renderer,
+      options,
+      loss,
+      liveLook(options.look, works),
+      catalogue,
+    );
   } catch (error) {
     await renderer.dispose();
     throw error;

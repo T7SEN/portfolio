@@ -2,8 +2,16 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { pages } from "../src/content/pages";
+import { withoutLoader } from "./support/loader";
 import { ROUTES } from "./support/routes";
 import { ENGINE_TIMEOUT_MS, waitForFieldShown } from "./support/tiers";
+
+// Every tab opens the home page with no loader cover: withoutLoader
+// serves each page with its inline script emptied, as a blocked script
+// leaves it. e2e/loader.spec.ts covers the cover (REQ-LOAD-01).
+test.beforeEach(async ({ context }) => {
+  await withoutLoader(context);
+});
 
 const HERO = heroCopy(STATIC_TIER);
 

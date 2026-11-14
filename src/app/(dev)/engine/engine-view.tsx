@@ -3,6 +3,20 @@
 import { useEffect, useRef } from "react";
 
 import { loadEngine } from "@/components/engine/load-engine";
+import {
+  SKY_CONSTELLATIONS,
+  SKY_SEGMENTS,
+  SKY_STARS,
+} from "@/engine/sky/catalogue";
+import {
+  chooseTrace,
+  constellationsInView,
+  createPlaced,
+  placeSky,
+  prepareSky,
+  skyFrame,
+  traceProgress,
+} from "@/engine/sky/sky";
 import { PASSES, type PassId } from "@/engine/story";
 import type {
   ChapterId,
@@ -11,6 +25,7 @@ import type {
   EngineOptions,
   PassCard,
   Point,
+  SkyView,
   Stage,
   Stages,
   Tier,
@@ -45,6 +60,51 @@ const SPLIT_STAGES: Stages = {
 // one (MIDDLE_PASS) the making-of stage.
 const MIDDLE_PASS: PassId = PASSES[Math.floor(PASSES.length / 2)] ?? "density";
 
+// The contact sky's test view (D-146, D-147): ?when=<ISO time> fixes the
+// moment (else the time the page opened), ?words=<n> traces that many lines
+// of the brightest constellation wholly in view, ?reveal=<IAU abbreviation>
+// shows one constellation's lines. The horizon is the sky band's, as the
+// engine puts it with no horizon sent (sky.ts skyFrame).
+interface SkyQuery {
+  at: number;
+  words: number;
+  reveal: string | null;
+}
+
+function skyViewFor(host: HTMLElement, query: SkyQuery): SkyView {
+  const box = host.getBoundingClientRect();
+  const sky = prepareSky(
+    {
+      stars: SKY_STARS,
+      segments: SKY_SEGMENTS,
+      constellations: SKY_CONSTELLATIONS,
+    },
+    query.at,
+  );
+  const placed = placeSky(
+    sky,
+    query.at,
+    skyFrame(box.width, box.height),
+    { turn: 0, tilt: 0 },
+    createPlaced(sky.count),
+  );
+  const traced =
+    query.words > 0 ? chooseTrace(-1, constellationsInView(sky, placed)) : -1;
+  const progress = traceProgress(
+    query.words,
+    0,
+    traced < 0 ? 0 : (sky.segmentsOf[traced] ?? 0),
+  );
+  return {
+    at: query.at,
+    turn: 0,
+    tilt: 0,
+    horizon: null,
+    reveal: SKY_CONSTELLATIONS.map((name) => (name === query.reveal ? 1 : 0)),
+    trace: traced < 0 ? null : { constellation: traced, ...progress, flash: 0 },
+  };
+}
+
 const BUTTON =
   "inline-flex min-h-11 items-center rounded-md border border-edge px-4 font-mono text-sm hover:border-glow hover:text-glow aria-pressed:border-glow aria-pressed:text-glow";
 
@@ -68,6 +128,8 @@ function readOptions(search: string) {
   const chapter = CHAPTERS.find((value) => value === params.get("chapter"));
   const progress = Number(params.get("progress") ?? 0);
   const wholePass = PASSES.find((pass) => pass === params.get("pass")) ?? null;
+  const when = Date.parse(params.get("when") ?? "");
+  const words = Number(params.get("words") ?? 0);
 
   return {
     options,
@@ -81,6 +143,11 @@ function readOptions(search: string) {
       : 0,
     hasPasses: params.get("passes") === "1",
     wholePass,
+    sky: {
+      at: Number.isFinite(when) ? when : Date.now(),
+      words: Number.isInteger(words) && words > 0 ? words : 0,
+      reveal: params.get("reveal"),
+    } satisfies SkyQuery,
   };
 }
 
@@ -282,10 +349,13 @@ export function EngineView() {
       progress,
       hasPasses,
       wholePass,
+      sky,
     } = readOptions(window.location.search);
     let engine: Engine | null = null;
     let isCancelled = false;
     let events = 0;
+    let renderers = 0;
+    let probes = 0;
     // The engine starts with no stages, so an empty set is never sent first.
     let sentStages = "{}";
     const layout: Layout = { wholePass, hasPasses, split };
@@ -323,6 +393,9 @@ export function EngineView() {
       ready: "false",
       fps: "",
       events: "0",
+      backend: "",
+      renderers: "0",
+      probes: "0",
       error: "",
       chapter: "",
       progress: "",
@@ -332,6 +405,7 @@ export function EngineView() {
       pass: "",
       cards: "",
       makingOf: "",
+      sky: "",
     });
     // A bare view covers the window, so the page under it must not scroll:
     // its scrollbar would take its width from the host and the canvas.
@@ -351,21 +425,45 @@ export function EngineView() {
       events += 1;
       view.dataset.events = String(events);
 
-      if (event.type === "frameRate") {
-        view.dataset.fps = String(event.fps);
-      } else if (event.type === "tierChosen") {
-        view.dataset.tier = String(event.tier);
-        view.dataset.tierReason = event.reason;
-        view.dataset.ready = "false";
-        view.dataset.status = "loading";
-      } else {
-        view.dataset.ready = "true";
-        view.dataset.status = event.tier === 3 ? "still" : "running";
-        view.dataset.particles = String(event.particles);
+      switch (event.type) {
+        case "frameRate":
+          view.dataset.fps = String(event.fps);
+          break;
+        case "tierChosen":
+          view.dataset.tier = String(event.tier);
+          view.dataset.tierReason = event.reason;
+          view.dataset.ready = "false";
+          view.dataset.status = "loading";
+          break;
+        case "ready":
+          view.dataset.ready = "true";
+          view.dataset.status = event.tier === 3 ? "still" : "running";
+          view.dataset.particles = String(event.particles);
+          break;
+        // The loading signals (REQ-LOAD-01): data-backend is the backend of
+        // the last renderer started, data-renderers and data-probes count
+        // the renderers started and the probe windows opened.
+        case "rendererStarted":
+          renderers += 1;
+          view.dataset.backend = event.backend;
+          view.dataset.renderers = String(renderers);
+          break;
+        case "probeStarted":
+          probes += 1;
+          view.dataset.probes = String(probes);
+          break;
       }
 
-      const { status, tier, tierReason, fps } = view.dataset;
-      readout.textContent = `${status}: tier ${tier} (${tierReason}), ${fps === "" ? "no frame rate yet" : `${fps} fps`}, ${events} events`;
+      const { status, tier, tierReason, fps, backend } = view.dataset;
+      const started =
+        renderers === 0
+          ? "no renderer yet"
+          : `${backend} renderer, ${renderers} started`;
+      const probed =
+        probes === 0
+          ? "no probe window"
+          : `${probes} probe window${probes === 1 ? "" : "s"}`;
+      readout.textContent = `${status}: tier ${tier} (${tierReason}), ${started}, ${probed}, ${fps === "" ? "no frame rate yet" : `${fps} fps`}, ${events} events`;
     };
 
     void (async () => {
@@ -378,6 +476,11 @@ export function EngineView() {
       engine.on(onEvent);
       // The controls may have changed while the engine was loading too.
       send();
+      // The sky's test view, mirrored as data-sky, sent once: it shows only
+      // in the contact chapter.
+      const skyView = skyViewFor(host, sky);
+      view.dataset.sky = JSON.stringify(skyView);
+      engine.setSky(skyView);
       sendStory(engine, view, select, range);
       await engine.start();
     })().catch((error: unknown) => {
@@ -411,6 +514,9 @@ export function EngineView() {
       data-ready="false"
       data-fps=""
       data-events="0"
+      data-backend=""
+      data-renderers="0"
+      data-probes="0"
       data-error=""
       data-chapter=""
       data-progress=""
@@ -420,6 +526,7 @@ export function EngineView() {
       data-pass=""
       data-cards=""
       data-making-of=""
+      data-sky=""
       className="group mt-4"
     >
       <div className="flex flex-wrap gap-3 group-data-[bare=true]:hidden">

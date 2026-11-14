@@ -1,6 +1,14 @@
 import { expect, test } from "@playwright/test";
 import { expectNoAxeViolations } from "./support/axe";
+import { withoutLoader } from "./support/loader";
 import { ENGINE_TIMEOUT_MS, waitForFieldShown } from "./support/tiers";
+
+// Every tab opens the home page with no loader cover: withoutLoader
+// serves each page with its inline script emptied, as a blocked script
+// leaves it. e2e/loader.spec.ts covers the cover (REQ-LOAD-01).
+test.beforeEach(async ({ context }) => {
+  await withoutLoader(context);
+});
 
 test.describe("without JavaScript", () => {
   test.use({ javaScriptEnabled: false });

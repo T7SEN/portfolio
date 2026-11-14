@@ -1,6 +1,11 @@
 import type { Metadata, Viewport } from "next";
 
 import { EngineHost } from "@/components/engine/engine-host";
+import { LoaderCover } from "@/components/loader/loader-cover";
+import {
+  LOADER_NOSCRIPT,
+  LOADER_SCRIPT,
+} from "@/components/loader/loader-script";
 import { SmoothScroll } from "@/components/motion/smooth-scroll";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
@@ -29,8 +34,25 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang={LOCALE.lang} dir={LOCALE.dir} className={fontVariables}>
+    // The loader's inline script marks the html element before React
+    // hydrates, so React keeps those attributes as they are.
+    <html
+      lang={LOCALE.lang}
+      dir={LOCALE.dir}
+      className={fontVariables}
+      suppressHydrationWarning
+    >
+      <head>
+        {/* Runs while the page is parsed, before the first paint: it
+            decides whether the home page's loader shows on this load. */}
+        <script dangerouslySetInnerHTML={{ __html: LOADER_SCRIPT }} />
+        <noscript dangerouslySetInnerHTML={{ __html: LOADER_NOSCRIPT }} />
+      </head>
       <body className="flex min-h-dvh flex-col bg-void font-sans text-body text-text antialiased">
+        {/* First in body, so the browser never paints the hero before it,
+            and every element after it can be made inert while it is up. It
+            holds no Tab stop. */}
+        <LoaderCover />
         <SkipLink />
         <SiteHeader />
         {/* Focusable so the skip link moves focus here, not only the scroll

@@ -14,6 +14,7 @@ import { story } from "../src/content/story";
 import { BLOOM_ROOMS } from "../src/engine/runtime/story";
 import { PASSES } from "../src/engine/story";
 import { expectNoAxeViolations } from "./support/axe";
+import { withoutLoader } from "./support/loader";
 import {
   calmToggle,
   chapterInLayout,
@@ -60,6 +61,13 @@ import {
 // chapter the field's wrapper mirrors, Lenis's class on html, the titles and
 // the frameRate events.
 test.describe.configure({ timeout: 120_000 });
+
+// Every tab opens the home page with no loader cover: withoutLoader
+// serves each page with its inline script emptied, as a blocked script
+// leaves it. e2e/loader.spec.ts covers the cover (REQ-LOAD-01).
+test.beforeEach(async ({ context }) => {
+  await withoutLoader(context);
+});
 
 const HERO = heroCopy(STATIC_TIER);
 

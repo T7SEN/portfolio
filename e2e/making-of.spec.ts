@@ -15,6 +15,7 @@ import { pages } from "../src/content/pages";
 import { passPosition, passViewer } from "../src/content/passes";
 import { LIVE_PASSES, PASSES, type PassId } from "../src/engine/story";
 import { expectNoAxeViolations } from "./support/axe";
+import { withoutLoader } from "./support/loader";
 import {
   calmToggle,
   focusedView,
@@ -36,6 +37,13 @@ import {
   FIELD,
   waitForField,
 } from "./support/tiers";
+
+// Every tab opens the home page with no loader cover: withoutLoader
+// serves each page with its inline script emptied, as a blocked script
+// leaves it. e2e/loader.spec.ts covers the cover (REQ-LOAD-01).
+test.beforeEach(async ({ context }) => {
+  await withoutLoader(context);
+});
 
 // The making-of chapter's pass viewer (REQ-ENG-09) at 1280 and 375. Once the
 // page's script runs and calm is off, the five pass cards slide sideways

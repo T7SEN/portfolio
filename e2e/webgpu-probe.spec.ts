@@ -1,5 +1,13 @@
 import { writeFileSync } from "node:fs";
 import { expect, test } from "@playwright/test";
+import { withoutLoader } from "./support/loader";
+
+// Every tab opens the home page with no loader cover: withoutLoader
+// serves each page with its inline script emptied, as a blocked script
+// leaves it. e2e/loader.spec.ts covers the cover (REQ-LOAD-01).
+test.beforeEach(async ({ context }) => {
+  await withoutLoader(context);
+});
 
 // Records what WebGPU and WebGL2 report in this browser, headless in the
 // desktop project and headed in playwright.gpu.config.ts. The result decides

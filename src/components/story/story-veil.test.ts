@@ -4,21 +4,48 @@ import { colors } from "@/tokens/colors";
 
 import {
   PLATE_ALPHA,
+  PLATE_ALPHA_SKY,
   PLATE_PAD,
   PLATE_REACH,
   PLATE_SOFT,
   VEIL_OPEN,
+  VEIL_SKY,
   VEIL_TEXT,
+  VEIL_TEXT_SKY,
   clearAreas,
   plateClip,
   plateColour,
   plates,
+  veilFor,
 } from "./story-veil";
 
 describe("the veil over the field", () => {
   it("REQ-A11Y-06 a plate over the open veil lets through exactly what the text veil does", () => {
     expect(VEIL_OPEN).toBeLessThan(VEIL_TEXT);
     expect((1 - VEIL_OPEN) * (1 - PLATE_ALPHA)).toBeCloseTo(1 - VEIL_TEXT, 12);
+  });
+
+  it("REQ-A11Y-06 D-146 over the contact sky the veil opens and the plates darken, so text keeps more than the text veil, the sky's white stars being brighter", () => {
+    expect(VEIL_SKY).toBeLessThan(VEIL_OPEN);
+    expect(VEIL_TEXT_SKY).toBeGreaterThan(VEIL_TEXT);
+    expect((1 - VEIL_SKY) * (1 - PLATE_ALPHA_SKY)).toBeCloseTo(
+      1 - VEIL_TEXT_SKY,
+      12,
+    );
+    expect(veilFor("contact")).toEqual({
+      veil: VEIL_SKY,
+      plate: PLATE_ALPHA_SKY,
+    });
+    for (const chapter of [
+      "hero",
+      "bloom",
+      "work",
+      "making-of",
+      "about",
+      null,
+    ] as const) {
+      expect(veilFor(chapter)).toEqual({ veil: VEIL_OPEN, plate: PLATE_ALPHA });
+    }
   });
 
   it("REQ-A11Y-06 each line of text gets a plate PLATE_PAD larger on every side", () => {
@@ -69,7 +96,7 @@ describe("the veil over the field", () => {
       parseInt(colors.void.slice(index, index + 2), 16),
     );
     expect(plateColour()).toBe(
-      `rgb(${r} ${g} ${b} / ${PLATE_ALPHA.toFixed(4)})`,
+      `rgb(${r} ${g} ${b} / var(--plate-alpha, ${PLATE_ALPHA.toFixed(4)}))`,
     );
   });
 });

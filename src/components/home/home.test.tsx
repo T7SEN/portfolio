@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 
 import { act, type ReactElement } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { renderToStaticMarkup } from "react-dom/server";
+import { createRoot, hydrateRoot, type Root } from "react-dom/client";
+import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import HomePage from "@/app/page";
@@ -32,7 +32,13 @@ import {
   VEIL_OPEN,
   VEIL_TEXT,
 } from "@/components/story/story-veil";
+import {
+  COVER_SKIPS,
+  FAILSAFE_MARGIN_MS,
+  LOADER_OFF_ATTRIBUTE,
+} from "@/components/loader/loader-config";
 import { calmStore } from "@/lib/calm-store";
+import { LIFT_LIMIT_MS } from "@/lib/loader-store";
 import { tierStore } from "@/lib/tier-store";
 
 import { findPhysicalClasses } from "../../../scripts/class-scan-lib.mjs";
@@ -44,7 +50,7 @@ import { FieldNote } from "./field-note";
 import { FieldStill } from "./field-still";
 import { FIELD_STILLS } from "./field-stills";
 import { Hero } from "./hero";
-import { HeroHeadline } from "./hero-headline";
+import { HELD_BEFORE_HYDRATION, HeroHeadline } from "./hero-headline";
 import { MakingOfSection } from "./making-of-section";
 import { PointerRing } from "./pointer-ring";
 import { TierReadout } from "./tier-readout";
@@ -406,6 +412,256 @@ describe("HeroHeadline with the tier store", () => {
   });
 });
 
+// T7SEN, 14 Nov 2026, "Hold the line": in calm mode and under reduced motion
+// no cover hides the swap, so the second line waits, hidden with its room
+// kept, until the tier is known, then shows once.
+describe("HeroHeadline holds its second line in calm mode and under reduced motion", () => {
+  useLiveRoot();
+
+  const REDUCED = "(prefers-reduced-motion: reduce)";
+  const PRE_HYDRATION = HELD_BEFORE_HYDRATION.split(" ");
+
+  function line() {
+    const h1 = container.querySelector("h1");
+    const span = h1?.querySelector("span");
+    return {
+      h1,
+      span,
+      words: span?.textContent,
+      // Hydrated markup keeps React's comment between the text nodes.
+      spoken: spokenText(h1).replace(/\s+/g, " ").trim(),
+      reserve: h1?.parentElement?.getAttribute("data-reserve"),
+      isHeld:
+        classesOf(span).includes("invisible") &&
+        span?.getAttribute("aria-hidden") === "true",
+      isShown:
+        !classesOf(span).includes("invisible") &&
+        !span?.hasAttribute("aria-hidden") &&
+        !PRE_HYDRATION.some((name) => classesOf(span).includes(name)),
+    };
+  }
+
+  /** Stands in for matchMedia: true answers the reduced motion query. */
+  function stubReducedMotion() {
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      matches: media === REDUCED,
+      media,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+    }));
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("REQ-A11Y-03 REQ-A11Y-04 REQ-CNT-01 the static HTML holds the line only where the first paint script marked calm or reduced motion, so with no mark (JavaScript off, a blocked script, the cover) the tier 3 words show", () => {
+    const span = render(<HeroHeadline id="x" />).querySelector("h1 span");
+    expect(span?.textContent).toBe(headlineParts.second.still);
+    expect(classesOf(span)).toEqual(expect.arrayContaining(PRE_HYDRATION));
+    expect(classesOf(span)).not.toContain("invisible");
+    expect(span?.hasAttribute("aria-hidden")).toBe(false);
+    // Each hold is keyed on the html element's mark and nothing else, and
+    // names exactly the two reasons the inline script writes.
+    expect(PRE_HYDRATION).toHaveLength(2);
+    const marks = PRE_HYDRATION.map(
+      (name) => /^\[html\[([a-z-]+)=([a-z]+)\]_&\]:/.exec(name)?.slice(1) ?? [],
+    );
+    expect(marks).toEqual([
+      [LOADER_OFF_ATTRIBUTE, "calm"],
+      [LOADER_OFF_ATTRIBUTE, "reduced"],
+    ]);
+    for (const [, reason] of marks) {
+      expect(COVER_SKIPS).toContain(reason);
+    }
+  });
+
+  it("REQ-A11Y-03 REQ-A11Y-04 never stuck before hydration: the CSS hold runs the cover's failsafe keyframes in reverse, hidden through the delay that reduced motion leaves alone, then shown at the cover's own 11 s", () => {
+    const css = readFileSync("src/app/globals.css", "utf8");
+    for (const name of PRE_HYDRATION) {
+      const animation = /:\[animation:([^\]]+)\]$/.exec(name)?.[1];
+      const [keyframes, duration, easing, delay, direction, fill] =
+        animation?.split("_") ?? [];
+      expect([keyframes, easing, direction, fill]).toEqual([
+        "loader-failsafe",
+        "ease-out",
+        "reverse",
+        "backwards",
+      ]);
+      expect(duration).toBe("0.3s");
+      expect(Number.parseFloat(delay ?? "") * 1000).toBe(
+        LIFT_LIMIT_MS + FAILSAFE_MARGIN_MS,
+      );
+    }
+    // Played in reverse, the delay is filled with the keyframes' end.
+    expect(css).toMatch(
+      /@keyframes loader-failsafe \{\s*to \{\s*opacity: 0;\s*visibility: hidden;\s*\}\s*\}/,
+    );
+    const reducedRule =
+      /@media \(prefers-reduced-motion: reduce\) \{\s*\*,\s*::before,\s*::after \{([^}]*)\}/.exec(
+        css,
+      )?.[1];
+    expect(reducedRule).toContain("animation-duration");
+    expect(reducedRule).not.toContain("animation-delay");
+  });
+
+  it.each([
+    [1, "probe-pass", "gpu"],
+    [2, "no-webgpu", "gpu"],
+    [3, "save-data", "still"],
+  ] as const)(
+    "REQ-A11Y-04 REQ-CNT-10 REQ-PERF-03 A14 in calm mode the line is hidden, its room kept and out of the h1's name, until tier %i is ready, then shows once with its words",
+    async (tier, reason, form) => {
+      await setCalm(true);
+      await mount(<HeroHeadline id="x" />);
+      const before = line();
+      expect(before.isHeld).toBe(true);
+      expect(before.spoken).toBe(headlineParts.first);
+      // The room of both forms stays: the h1 keeps the line, the reserve
+      // the other form.
+      expect(before.words).toBe(headlineParts.second.still);
+      expect(before.reserve).toBe(
+        `${headlineParts.first}\n${headlineParts.second.gpu}`,
+      );
+
+      await report({ type: "tierChosen", tier, reason });
+      expect(line().isHeld).toBe(true);
+
+      await report(ready(tier));
+      const after = line();
+      expect(after.isShown).toBe(true);
+      expect(after.words).toBe(headlineParts.second[form]);
+      expect(after.spoken).toBe(headlines[form]);
+      expect(after.h1).toBe(before.h1);
+      expect(after.span).toBe(before.span);
+    },
+  );
+
+  it("REQ-A11Y-03 REQ-CNT-10 A14 under OS reduced motion the line waits the same way, with calm mode off", async () => {
+    stubReducedMotion();
+    vi.resetModules();
+    // Fresh stores, so the calm store reads the stubbed setting.
+    const { HeroHeadline: Headline } = await import("./hero-headline");
+    const fresh = await import("@/lib/tier-store");
+    const calm = await import("@/lib/calm-store");
+    expect(calm.calmStore.getSnapshot()).toEqual({
+      calm: true,
+      system: true,
+      chosen: false,
+    });
+
+    await mount(<Headline id="x" />);
+    expect(line().isHeld).toBe(true);
+    expect(line().spoken).toBe(headlineParts.first);
+
+    await act(async () => {
+      fresh.tierStore.apply({
+        type: "tierChosen",
+        tier: 2,
+        reason: "no-webgpu",
+      });
+    });
+    expect(line().isHeld).toBe(true);
+    await act(async () => {
+      fresh.tierStore.apply(ready(2));
+    });
+    expect(line().isShown).toBe(true);
+    expect(line().spoken).toBe(headlines.gpu);
+  });
+
+  it("REQ-A11Y-04 REQ-CNT-01 hydration matches the static HTML, then the island holds the line itself, with no mismatch", async () => {
+    await setCalm(true);
+    await act(async () => {
+      root.unmount();
+    });
+    container.remove();
+    container = document.createElement("div");
+    container.innerHTML = renderToString(<HeroHeadline id="x" />);
+    document.body.append(container);
+    expect(classesOf(container.querySelector("h1 span"))).toEqual(
+      expect.arrayContaining(PRE_HYDRATION),
+    );
+    const onRecoverableError = vi.fn();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await act(async () => {
+      root = hydrateRoot(container, <HeroHeadline id="x" />, {
+        onRecoverableError,
+      });
+    });
+    expect(onRecoverableError).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+    expect(line().isHeld).toBe(true);
+    expect(
+      PRE_HYDRATION.some((name) => classesOf(line().span).includes(name)),
+    ).toBe(false);
+
+    await report({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    await report(ready(1));
+    expect(line().isShown).toBe(true);
+    expect(line().spoken).toBe(headlines.gpu);
+  });
+
+  it("REQ-A11Y-04 REQ-CNT-10 A14 never stuck: with no tier LIFT_LIMIT_MS after mount the tier 3 words show, and a tier 1 or 2 field that draws later still swaps them", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    await setCalm(true);
+    await mount(<HeroHeadline id="x" />);
+    await act(async () => {
+      vi.advanceTimersByTime(LIFT_LIMIT_MS - 1);
+    });
+    expect(line().isHeld).toBe(true);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(line().isShown).toBe(true);
+    expect(line().spoken).toBe(headlines.still);
+
+    await report({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    await report(ready(1));
+    expect(line().isShown).toBe(true);
+    expect(line().spoken).toBe(headlines.gpu);
+  });
+
+  it("REQ-A11Y-04 REQ-CNT-10 calm turned off while the line waits keeps it waiting for the tier, so the words never shift; once shown, calm never hides it", async () => {
+    await setCalm(true);
+    await mount(<HeroHeadline id="x" />);
+    await setCalm(false);
+    expect(line().isHeld).toBe(true);
+
+    await report({ type: "tierChosen", tier: 2, reason: "no-webgpu" });
+    await report(ready(2));
+    expect(line().isShown).toBe(true);
+
+    await setCalm(true);
+    expect(line().isShown).toBe(true);
+    // A later change of tier swaps the words as before, never hides them.
+    await report({ type: "tierChosen", tier: 2, reason: "device-lost" });
+    expect(line().isShown).toBe(true);
+    expect(line().spoken).toBe(headlines.still);
+  });
+
+  it("REQ-A11Y-04 REQ-CNT-10 with calm off the line shows from mount, as before, and calm turned on later never hides it", async () => {
+    await mount(<HeroHeadline id="x" />);
+    expect(line().isShown).toBe(true);
+    expect(line().spoken).toBe(headlines.still);
+    await setCalm(true);
+    expect(line().isShown).toBe(true);
+    await report({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    await report(ready(1));
+    expect(line().spoken).toBe(headlines.gpu);
+  });
+
+  it("REQ-A11Y-04 REQ-CNT-10 A14 a move to the home page in calm mode with the tier already ready shows the line at once, with that tier's words", async () => {
+    await setCalm(true);
+    await report({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    await report(ready(1));
+    await mount(<HeroHeadline id="x" />);
+    expect(line().isShown).toBe(true);
+    expect(line().spoken).toBe(headlines.gpu);
+  });
+});
+
 describe("TierReadout with the tier store", () => {
   useLiveRoot();
 
@@ -706,6 +962,28 @@ describe("FieldStill, the wordmark on tier 3", () => {
       container.querySelector("img")?.dispatchEvent(new Event("error"));
     });
     expect(container.querySelector("img")).toBeNull();
+  });
+
+  it("REQ-TIER-03 REQ-A11Y-06 the wordmark's still lies under no veil, as the study stills do, and makes each held plate after it the void at VEIL_TEXT", async () => {
+    stubPointer(true);
+    await mount(<BloomSection />);
+    await report({ type: "tierChosen", tier: 3, reason: "save-data" });
+    await report(ready(3));
+    const still = container.querySelector('[data-part="field-still"]');
+    // The picture alone: no void layer dims the wordmark.
+    expect([...(still?.children ?? [])].map((child) => child.tagName)).toEqual([
+      "PICTURE",
+    ]);
+    // With no open veil under them, the held plates make VEIL_TEXT on their
+    // own while the still shows, and the class reaches all three.
+    expect(classesOf(still)).toContain(
+      `[&~*_[data-part=own-plate]]:[--plate:color-mix(in_srgb,var(--color-void)_${Math.round(VEIL_TEXT * 100)}%,transparent)]`,
+    );
+    expect(
+      container.querySelectorAll(
+        '[data-part="field-still"] ~ * [data-part="own-plate"]',
+      ),
+    ).toHaveLength(3);
   });
 });
 
@@ -1017,7 +1295,7 @@ describe("ContactSection", () => {
     }
   });
 
-  it("REQ-CNT-05 REQ-SCR-05 its panel, which the field's rings centre on, leads to /contact until the form arrives, with no fields", () => {
+  it("REQ-CNT-05 REQ-SCR-05 its panel, which stands in front of the field's sky, leads to /contact until the form arrives, with no fields", () => {
     const contact = section();
     const heading = contact?.querySelector("h2");
     expect(heading?.textContent).toBe(pages.home.contact.title);

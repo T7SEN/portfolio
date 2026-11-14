@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { PassCard, Stages } from "@/engine/types";
+import type { PassCard, SkyView, Stages } from "@/engine/types";
 
 import { createStoryBridge, type StoryTarget } from "./story-bridge";
 
@@ -24,6 +24,9 @@ function recorder() {
       calls.push(
         `passes ${cards === null ? "none" : cards.map((card) => card.pass).join(",")}`,
       );
+    }),
+    setSky: vi.fn((view: SkyView | null) => {
+      calls.push(`sky ${view === null ? "none" : view.at}`);
     }),
   } satisfies StoryTarget;
   return { calls, target };
@@ -213,6 +216,60 @@ describe("story bridge", () => {
     const second = recorder();
     bridge.connect(second.target);
     expect(second.calls).toEqual(["story contact 0.9"]);
+  });
+
+  it("D-147 the sky reaches the target clamped, a broken view is dropped, and a later target hears the latest", () => {
+    const bridge = createStoryBridge();
+    const { calls, target } = recorder();
+    bridge.connect(target);
+    const view: SkyView = {
+      at: 1000,
+      turn: 1,
+      tilt: 0,
+      horizon: 300,
+      reveal: [0.5, 2, -1],
+      trace: { constellation: 59, done: 1, partial: 0.5, flash: 0 },
+    };
+    bridge.setSky(view);
+    expect(target.setSky).toHaveBeenLastCalledWith({
+      ...view,
+      reveal: [0.5, 1, 0],
+    });
+    bridge.setSky({ ...view, at: Number.NaN });
+    bridge.setSky(null);
+    expect(calls).toEqual(["sky 1000", "sky none", "sky none"]);
+
+    bridge.setSky({ ...view, at: 2000 });
+    const later = recorder();
+    bridge.connect(later.target);
+    expect(later.calls).toEqual(["sky 2000"]);
+  });
+
+  it("D-147 a trace reaches the target cleaned: whole lines, a part clamped, and a broken trace dropped", () => {
+    const bridge = createStoryBridge();
+    const { target } = recorder();
+    bridge.connect(target);
+    const view: SkyView = {
+      at: 1000,
+      turn: 0,
+      tilt: 0,
+      horizon: null,
+      reveal: [],
+      trace: { constellation: 59, done: 2.7, partial: 3, flash: -1 },
+    };
+    bridge.setSky(view);
+    expect(target.setSky).toHaveBeenLastCalledWith({
+      ...view,
+      trace: { constellation: 59, done: 2, partial: 1, flash: 0 },
+    });
+    for (const trace of [
+      { constellation: -1, done: 1, partial: 0, flash: 0 },
+      { constellation: 1.5, done: 1, partial: 0, flash: 0 },
+      { constellation: 3, done: Number.NaN, partial: 0, flash: 0 },
+    ]) {
+      bridge.setSky({ ...view, trace });
+      expect(target.setSky).toHaveBeenLastCalledWith({ ...view, trace: null });
+    }
   });
 
   it("REQ-ENG-09 the pass cards reach the target as sent, and none is null", () => {

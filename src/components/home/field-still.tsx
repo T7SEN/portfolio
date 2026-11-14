@@ -15,10 +15,13 @@ import { FIELD_STILLS } from "./field-stills";
  * wordmark themselves, and the static HTML has no picture, so only a tier 3
  * visitor downloads it, as the chapter nears the screen. It shows the
  * wordmark, so its alt names it (REQ-A11Y-05). The void under it keeps the
- * field still behind the page from showing through, and a veil of 0.75
- * over it matches the one over that still on tier 3 (engine-host.tsx), so
- * the words over it keep their contrast. A failed load leaves the field
- * still showing.
+ * field still behind the page from showing through. No veil lies over it,
+ * as none lies over the study stills in their frames, so the wordmark is as
+ * bright as they are. The words held over it keep their contrast through
+ * their own plates (held-plate.tsx): with no open veil under them, each
+ * plate is the void at VEIL_TEXT itself while the still shows, which the
+ * class below sets for every held plate after this element (a unit test
+ * holds it to VEIL_TEXT). A failed load leaves the field still showing.
  */
 export function FieldStill() {
   const { tier } = useSyncExternalStore(
@@ -36,7 +39,7 @@ export function FieldStill() {
     <div
       data-part="field-still"
       className={cx(
-        "absolute inset-0 -z-20 bg-void transition-opacity duration-700 ease-out",
+        "absolute inset-0 -z-20 bg-void transition-opacity duration-700 ease-out [&~*_[data-part=own-plate]]:[--plate:color-mix(in_srgb,var(--color-void)_80%,transparent)]",
         status === "loaded" ? "opacity-100" : "opacity-0",
       )}
     >
@@ -54,7 +57,6 @@ export function FieldStill() {
           className="absolute inset-0 size-full object-cover"
         />
       </picture>
-      <div aria-hidden="true" className="absolute inset-0 bg-void opacity-75" />
     </div>
   );
 }

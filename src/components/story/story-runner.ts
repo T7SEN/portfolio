@@ -39,11 +39,12 @@ import {
 } from "./story-stage";
 import {
   PLATE_SOFT,
-  VEIL_OPEN,
+  VEIL_FADE_MS,
   clearAreas,
   plateClip,
   plateColour,
   plates,
+  veilFor,
   type ClearRect,
   type PageRect,
 } from "./story-veil";
@@ -367,6 +368,32 @@ export function startStory(
     if (next === null || sameStory(last, next)) return;
     last = next;
     bridge.setStory(next.chapter, next.progress);
+    openVeilFor(next.chapter);
+  }
+
+  // The contact chapter's sky opens the veil and darkens the plates to
+  // match (story-veil.ts, veilFor): darker plates first, then the veil;
+  // leaving it, the veil closes first and the plates lighten once it has.
+  let skyVeil = false;
+  let plateTimer: ReturnType<typeof setTimeout> | null = null;
+  function openVeilFor(chapter: ChapterId | null) {
+    const sky = chapter === "contact";
+    if (plateLayer === null || sky === skyVeil) return;
+    skyVeil = sky;
+    const { veil, plate } = veilFor(chapter);
+    const layer = plateLayer;
+    if (plateTimer !== null) clearTimeout(plateTimer);
+    plateTimer = null;
+    if (sky) {
+      layer.style.setProperty("--plate-alpha", String(plate));
+      bridge.setVeil(veil);
+      return;
+    }
+    bridge.setVeil(veil);
+    plateTimer = setTimeout(() => {
+      plateTimer = null;
+      layer.style.setProperty("--plate-alpha", String(plate));
+    }, VEIL_FADE_MS);
   }
 
   // Tier 3's still keeps its own veil, so it shows no plates either.
@@ -375,8 +402,7 @@ export function startStory(
     if (plateLayer !== null) plateLayer.hidden = live !== 1 && live !== 2;
   }
 
-  // A new layout moves the dot, the frames, the contact panel and the
-  // page's text. The plates are laid before the veil opens, and again for
+  // A new layout moves the dot, the frames and the page's text. The plates are laid before the veil opens, and again for
   // each new layout.
   function remeasure() {
     if (isStopped) return;
@@ -397,7 +423,10 @@ export function startStory(
       plateLayer = createPlateLayer(root.ownerDocument);
       showPlates();
       drawPlates(plateLayer, blocks, clear);
-      bridge.setVeil(VEIL_OPEN);
+      const { veil, plate } = veilFor(last?.chapter ?? null);
+      skyVeil = last?.chapter === "contact";
+      plateLayer.style.setProperty("--plate-alpha", String(plate));
+      bridge.setVeil(veil);
     } else {
       drawPlates(plateLayer, blocks, clear);
     }
@@ -531,6 +560,8 @@ export function startStory(
     unsubscribeTier = null;
     if (remeasureTimer !== null) clearTimeout(remeasureTimer);
     remeasureTimer = null;
+    if (plateTimer !== null) clearTimeout(plateTimer);
+    plateTimer = null;
     // The field draws no pass once the page has gone.
     if (sentPasses !== null) {
       sentPasses = null;

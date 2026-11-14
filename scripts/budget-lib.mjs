@@ -11,6 +11,13 @@ export const FIRST_LOAD_LIMIT_BYTES = 200 * 1024;
 export const ENGINE_MARKER = "portfolio-field";
 export const ENGINE_ENTRY = "engine entry";
 
+// The contact sky's catalogue (D-146) builds into a chunk of its own, which
+// the engine and the page load after first content on every tier. It is
+// found by the start of its constellation list, which only the data holds:
+// app code reads the list through property names.
+export const SKY_CATALOGUE = "sky catalogue";
+export const SKY_SIGNATURE = '["And","Ant","Aps","Aql"';
+
 // Strings that survive minification in each library that must load after
 // first content. Each one was checked against the pinned package source and
 // against a Turbopack production build that imported the library.
@@ -25,6 +32,7 @@ export const ENGINE_ENTRY = "engine entry";
 export const DEFERRED_LIBRARIES = [
   { name: "three.js", signatures: ["__THREE__", "THREE.WebGPURenderer"] },
   { name: ENGINE_ENTRY, signatures: [ENGINE_MARKER] },
+  { name: SKY_CATALOGUE, signatures: [SKY_SIGNATURE] },
   { name: "GSAP", signatures: ["GSAP target"] },
   {
     name: "ScrollTrigger",
@@ -130,23 +138,34 @@ export const PAYLOAD_LIMIT_BYTES = {
 // of { bytes, libraries }, with libraries from findDeferredLibraries. Chunks
 // with three.js load on tiers 1 and 2 only. The engine's entry loads on every
 // tier, because it is the code that decides the tier; it must never share a
-// chunk with three.js, or tier 3 would download three.js with it.
+// chunk with three.js, or tier 3 would download three.js with it. The sky
+// catalogue loads on every tier too, under the same rule (skyShared).
 export function engineChunkBytes(chunks) {
   const totals = {
     three: { count: 0, bytes: 0 },
     entry: { count: 0, bytes: 0 },
+    sky: { count: 0, bytes: 0 },
     shared: 0,
+    skyShared: 0,
   };
   for (const { bytes, libraries } of chunks) {
     const hasThree = libraries.includes("three.js");
     const hasEntry = libraries.includes(ENGINE_ENTRY);
+    const hasSky = libraries.includes(SKY_CATALOGUE);
     if (hasThree) {
       totals.three.count += 1;
       totals.three.bytes += bytes;
       if (hasEntry) totals.shared += 1;
-    } else if (hasEntry) {
-      totals.entry.count += 1;
-      totals.entry.bytes += bytes;
+      if (hasSky) totals.skyShared += 1;
+    } else {
+      if (hasEntry) {
+        totals.entry.count += 1;
+        totals.entry.bytes += bytes;
+      }
+      if (hasSky) {
+        totals.sky.count += 1;
+        totals.sky.bytes += bytes;
+      }
     }
   }
   return totals;
@@ -157,12 +176,14 @@ export function engineChunkBytes(chunks) {
 // the file is missing. engineJsBytes is the gzip size of the built chunks
 // that hold three.js and the runtime; tiers 1 and 2 download them, tier 3
 // does not. entryJsBytes is the gzip size of the engine's entry chunks, which
-// every tier downloads.
+// every tier downloads, and skyJsBytes that of the sky catalogue's chunks,
+// which every tier downloads too.
 export function payloadFailures(
   manifest,
   sizeOf,
   engineJsBytes = 0,
   entryJsBytes = 0,
+  skyJsBytes = 0,
 ) {
   const failures = [];
   const totals = [];
@@ -175,7 +196,10 @@ export function payloadFailures(
       failures.push(`tier ${tier}: unknown device "${device}"`);
       continue;
     }
-    let bytes = entryJsBytes + (tier === 1 || tier === 2 ? engineJsBytes : 0);
+    let bytes =
+      entryJsBytes +
+      skyJsBytes +
+      (tier === 1 || tier === 2 ? engineJsBytes : 0);
     for (const file of Array.isArray(files) ? files : []) {
       const size = sizeOf(file);
       if (size === null)

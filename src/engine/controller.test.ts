@@ -21,6 +21,7 @@ import type {
   Runtime,
   RuntimeFactory,
   RuntimeOptions,
+  TierReason,
 } from "./types";
 
 // A desktop with a real adapter: the decision table sends it to the probe.
@@ -97,6 +98,9 @@ function stubRuntimes(outcomes: readonly Outcome[] = []) {
       },
       setPasses(cards) {
         stub.log.push(`passes ${JSON.stringify(cards)}`);
+      },
+      setSky(view) {
+        stub.log.push(`sky ${JSON.stringify(view)}`);
       },
       dispose() {
         stub.isDisposed = true;
@@ -187,17 +191,28 @@ function setHidden(hidden: boolean): void {
 /** Lets every promise chain that is ready to run finish. */
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
+// The two loading signals the home page's loader moves on (REQ-LOAD-01).
+// mount's events holds the other three, which the tests of the tier flow
+// read; its log holds every event in the order sent, which the tests of the
+// signals read.
+const SIGNALS: ReadonlySet<EngineEvent["type"]> = new Set([
+  "rendererStarted",
+  "probeStarted",
+]);
+
 function mount(options: EngineOptions) {
   const host = document.createElement("div");
   document.body.append(host);
   const engine = createEngine(host, options);
   engines.push(engine);
   const events: EngineEvent[] = [];
+  const log: EngineEvent[] = [];
   engine.on((event) => {
-    events.push(event);
+    log.push(event);
+    if (!SIGNALS.has(event.type)) events.push(event);
   });
   const canvas = () => host.querySelector("canvas");
-  return { host, engine, events, canvas };
+  return { host, engine, events, log, canvas };
 }
 
 async function startWith(
@@ -256,7 +271,7 @@ afterEach(async () => {
 });
 
 describe("commands and events", () => {
-  test("REQ-ENG-03 REQ-ENG-09 the engine offers seven commands, on and dispose", () => {
+  test("REQ-ENG-03 REQ-ENG-09 the engine offers eight commands, on and dispose", () => {
     const { engine } = mount({});
 
     expect(Object.keys(engine).sort()).toEqual([
@@ -265,6 +280,7 @@ describe("commands and events", () => {
       "setCalm",
       "setPasses",
       "setPointer",
+      "setSky",
       "setStage",
       "setStory",
       "setTier",
@@ -334,6 +350,7 @@ describe("commands and events", () => {
     nth(stubs.built, 0).frame();
 
     expect(heard).toEqual([
+      { type: "rendererStarted", backend: "webgl2" },
       { type: "tierChosen", tier: 2, reason: "no-webgpu" },
     ]);
     expect(events).toHaveLength(2);
@@ -482,6 +499,46 @@ describe("commands and events", () => {
       "story making-of 0.5",
       `passes ${JSON.stringify([card("glow", 0)])}`,
     ]);
+  });
+
+  test("REQ-ENG-03 D-147 setSky sent before the runtime exists reaches it after the story, each call replaces the last, and the last view reaches a new runtime after a tier change", async () => {
+    const stubs = stubRuntimes();
+    const { engine } = mount({
+      environment: facts(NO_WEBGPU),
+      loadRuntime: stubs.loadRuntime,
+    });
+    const view = (at: number) => ({
+      at,
+      turn: 1,
+      tilt: -0.5,
+      horizon: null,
+      reveal: [0, 0.5],
+      trace: null,
+    });
+
+    engine.setSky(view(1));
+    engine.setSky(view(2));
+    engine.setStory("contact", 0.5);
+    void engine.start();
+    await settle();
+
+    const first = nth(stubs.built, 0);
+    expect(first.log.slice(0, 2)).toEqual([
+      "story contact 0.5",
+      `sky ${JSON.stringify(view(2))}`,
+    ]);
+
+    engine.setSky(view(3));
+    expect(first.log.at(-1)).toBe(`sky ${JSON.stringify(view(3))}`);
+
+    engine.setSky(null);
+    expect(first.log.at(-1)).toBe("sky null");
+
+    engine.setTier(2);
+    await settle();
+    expect(
+      nth(stubs.built, 1).log.filter((line) => line.startsWith("sky")),
+    ).toEqual([]);
   });
 
   test("REQ-ENG-09 REQ-ENG-07 null sent after cards reaches the runtime, and a new runtime after it hears no cards at all", async () => {
@@ -1747,5 +1804,394 @@ describe("the canvas", () => {
     await engine.dispose();
 
     expect([...host.children]).toEqual([neighbour]);
+  });
+});
+
+describe("loading signals", () => {
+  const started = (backend: Backend): EngineEvent => ({
+    type: "rendererStarted",
+    backend,
+  });
+  const PROBING: EngineEvent = {
+    type: "probeStarted",
+    durationMs: PROBE.durationMs,
+  };
+  const still = (reason: TierReason): EngineEvent[] => [
+    { type: "tierChosen", tier: 3, reason },
+    { type: "ready", tier: 3, particles: 0 },
+  ];
+  const ready = (tier: 1 | 2): EngineEvent => ({
+    type: "ready",
+    tier,
+    particles: tier === 1 ? PARTICLES.tier1 : PARTICLES.tier2Desktop,
+    look: "halftone",
+  });
+  const withoutRates = (log: readonly EngineEvent[]) =>
+    log.filter((event) => event.type !== "frameRate");
+
+  test("REQ-LOAD-01 REQ-TIER-01 REQ-ENG-03 a passing probe sends rendererStarted, then probeStarted with the probe's length, then tierChosen, then ready", async () => {
+    const { log, stubs } = await startWith({ environment: facts() });
+    const runtime = nth(stubs.built, 0);
+
+    expect(log).toEqual([started("webgpu"), PROBING]);
+    expect(PROBING).toEqual({ type: "probeStarted", durationMs: 2000 });
+
+    await playProbe(runtime, 10);
+    runtime.frame();
+
+    expect(log).toEqual([
+      started("webgpu"),
+      PROBING,
+      { type: "tierChosen", tier: 1, reason: "probe-pass" },
+      ready(1),
+    ]);
+  });
+
+  for (const [reason, frameMs, frames] of [
+    ["probe-slow", 40, 30],
+    ["probe-failed", 10, PROBE.minFrames - 1],
+  ] as const) {
+    test(`REQ-LOAD-01 REQ-TIER-01 a probe that ends ${reason} sends rendererStarted twice, webgpu then webgl2, around one probeStarted`, async () => {
+      const { log, stubs } = await startWith({ environment: facts() });
+
+      await playProbe(nth(stubs.built, 0), frameMs, frames);
+      nth(stubs.built, 1).frame();
+
+      expect(log).toEqual([
+        started("webgpu"),
+        PROBING,
+        started("webgl2"),
+        { type: "tierChosen", tier: 2, reason },
+        ready(2),
+      ]);
+    });
+  }
+
+  test("REQ-LOAD-01 REQ-TIER-01 REQ-TIER-02 the decision table's WebGL2 sends rendererStarted and never probeStarted", async () => {
+    const desktop = await startTier2();
+    desktop.runtime.frame();
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs * 2);
+
+    expect(withoutRates(desktop.log)).toEqual([
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "no-webgpu" },
+      ready(2),
+    ]);
+
+    const phone = await startWith({
+      environment: facts({ coarsePointer: true }),
+    });
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs * 2);
+
+    expect(withoutRates(phone.log)).toEqual([
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "phone" },
+    ]);
+  });
+
+  test("REQ-LOAD-01 REQ-TIER-04 a forced tier sends rendererStarted for each runtime it builds and never probeStarted", async () => {
+    const one = await startWith({ environment: facts(), forcedTier: 1 });
+    nth(one.stubs.built, 0).frame();
+    expect(one.log).toEqual([
+      started("webgpu"),
+      { type: "tierChosen", tier: 1, reason: "forced" },
+      ready(1),
+    ]);
+
+    const two = await startWith({ environment: facts(), forcedTier: 2 });
+    expect(two.log).toEqual([
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "forced" },
+    ]);
+
+    const three = await startWith({ environment: facts(), forcedTier: 3 });
+    expect(three.log).toEqual(still("forced"));
+
+    // setTier on a running engine: the new runtime's own signal, no probe.
+    one.engine.setTier(2);
+    await settle();
+    one.engine.setTier(3);
+    await settle();
+    expect(withoutRates(one.log).slice(3)).toEqual([
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "forced" },
+      ...still("forced"),
+    ]);
+  });
+
+  test("REQ-LOAD-01 REQ-TIER-03 tier 3 from the decision table sends neither signal", async () => {
+    const { log, stubs } = await startWith({
+      environment: facts({ saveData: true }),
+    });
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs * 2);
+
+    expect(log).toEqual(still("save-data"));
+    expect(stubs.loadRuntime).not.toHaveBeenCalled();
+  });
+
+  test("REQ-LOAD-01 REQ-TIER-01 a probe cut short by a hidden tab sends probeStarted again when its window opens again, and never after the probe", async () => {
+    const { log, stubs } = await startWith({ environment: facts() });
+    const runtime = nth(stubs.built, 0);
+
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs - 1);
+    setHidden(true);
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs * 3);
+    expect(log).toEqual([started("webgpu"), PROBING]);
+
+    setHidden(false);
+    expect(log).toEqual([started("webgpu"), PROBING, PROBING]);
+
+    await playProbe(runtime, 10);
+    runtime.frame();
+    setHidden(true);
+    setHidden(false);
+
+    expect(withoutRates(log)).toEqual([
+      started("webgpu"),
+      PROBING,
+      PROBING,
+      { type: "tierChosen", tier: 1, reason: "probe-pass" },
+      ready(1),
+    ]);
+  });
+
+  test("REQ-LOAD-01 REQ-TIER-01 a probe that waits for a hidden tab sends probeStarted only when its window opens", async () => {
+    documentHidden = true;
+    const { log } = await startWith({ environment: facts() });
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs * 3);
+
+    expect(log).toEqual([started("webgpu")]);
+
+    setHidden(false);
+    expect(log).toEqual([started("webgpu"), PROBING]);
+  });
+
+  test("REQ-LOAD-01 REQ-TIER-01 a probe that waits for its host to come into view sends probeStarted only when its window opens", async () => {
+    vi.stubGlobal("IntersectionObserver", FakeObserver);
+    const stubs = stubRuntimes();
+    const { engine, log } = mount({
+      environment: facts(),
+      loadRuntime: stubs.loadRuntime,
+    });
+    void engine.start();
+    nth(FakeObserver.instances, 0).report(false);
+    await settle();
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs * 3);
+
+    expect(log).toEqual([started("webgpu")]);
+
+    nth(FakeObserver.instances, 0).report(true);
+    expect(log).toEqual([started("webgpu"), PROBING]);
+  });
+
+  test("REQ-LOAD-01 REQ-ENG-08 WebGPU that falls back to WebGL2 inside init sends rendererStarted with webgl2 and no probeStarted", async () => {
+    const fellBack = await startWith({ environment: facts() }, ["webgl2"]);
+    nth(fellBack.stubs.built, 0).frame();
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs);
+
+    expect(withoutRates(fellBack.log)).toEqual([
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "webgpu-init-fallback" },
+      ready(2),
+    ]);
+
+    // A WebGPU runtime that cannot be built: only the WebGL2 one after it.
+    const rejected = await startWith({ environment: facts() }, ["reject"]);
+    expect(rejected.log).toEqual([
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "webgpu-init-fallback" },
+    ]);
+  });
+
+  test("REQ-LOAD-01 REQ-ENG-08 a device lost on tier 1 sends rendererStarted again for the WebGL2 rebuild, and nothing for the still after it", async () => {
+    const { log, stubs, runtime } = await startTier1();
+    runtime.frame();
+    log.length = 0;
+
+    runtime.lose();
+    await settle();
+    const rebuilt = nth(stubs.built, 1);
+    rebuilt.frame();
+
+    expect(withoutRates(log)).toEqual([
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "device-lost" },
+      ready(2),
+    ]);
+
+    rebuilt.lose();
+    await settle();
+
+    expect(withoutRates(log).slice(3)).toEqual(still("device-lost"));
+  });
+
+  test("REQ-LOAD-01 REQ-ENG-08 a device lost during the probe sends rendererStarted for the WebGL2 rebuild and no second probeStarted", async () => {
+    const { log, stubs } = await startWith({ environment: facts() });
+
+    nth(stubs.built, 0).lose();
+    await settle();
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs);
+
+    expect(withoutRates(log)).toEqual([
+      started("webgpu"),
+      PROBING,
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "device-lost" },
+    ]);
+  });
+
+  test("REQ-LOAD-01 REQ-ENG-08 a runtime lost before it is handed over, or never built, sends no rendererStarted", async () => {
+    const stubs = stubRuntimes();
+    const factory: RuntimeFactory = (options) => {
+      const isFirst = stubs.requests.length === 0;
+      const pending = stubs.factory(options);
+      if (isFirst) options.onLost("lost while it was built");
+      return pending;
+    };
+    const lost = mount({
+      environment: facts(),
+      loadRuntime: () => Promise.resolve(factory),
+    });
+    void lost.engine.start();
+    await settle();
+
+    expect(nth(stubs.built, 0).isDisposed).toBe(true);
+    expect(lost.log).toEqual([
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "webgpu-init-fallback" },
+    ]);
+
+    const none = await startWith({ environment: facts() }, [
+      "reject",
+      "reject",
+    ]);
+    expect(none.log).toEqual(still("no-backend"));
+
+    const chunk = mount({
+      environment: facts(NO_WEBGPU),
+      loadRuntime: () => Promise.reject(new Error("chunk failed")),
+    });
+    await chunk.engine.start();
+    expect(chunk.log).toEqual(still("no-backend"));
+  });
+
+  test("REQ-LOAD-01 REQ-TIER-04 REQ-ENG-07 a runtime that resolves after a newer setTier or after dispose sends no rendererStarted", async () => {
+    for (const end of ["setTier", "dispose"] as const) {
+      const stubs = stubRuntimes();
+      const gate = deferred<void>();
+      const slowFactory: RuntimeFactory = async (options) => {
+        await gate.promise;
+        return stubs.factory(options);
+      };
+      const { engine, log } = mount({
+        environment: facts(NO_WEBGPU),
+        loadRuntime: () => Promise.resolve(slowFactory),
+      });
+      void engine.start();
+      await settle();
+
+      if (end === "setTier") engine.setTier(3);
+      else void engine.dispose();
+      await settle();
+      gate.resolve();
+      await settle();
+
+      expect(nth(stubs.built, 0).isDisposed).toBe(true);
+      expect(log).toEqual(end === "setTier" ? still("forced") : []);
+    }
+  });
+
+  test("REQ-LOAD-01 REQ-ENG-03 a listener that throws on a loading signal stops neither the engine nor the listeners after it", async () => {
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const stubs = stubRuntimes();
+    const { engine } = mount({
+      environment: facts(),
+      loadRuntime: stubs.loadRuntime,
+    });
+    engine.on((event) => {
+      if (SIGNALS.has(event.type)) throw new Error("a broken loader");
+    });
+    const heard: EngineEvent[] = [];
+    engine.on((event) => {
+      heard.push(event);
+    });
+
+    void engine.start();
+    await settle();
+    const runtime = nth(stubs.built, 0);
+    await playProbe(runtime, 10);
+    runtime.frame();
+
+    expect(heard).toEqual([
+      started("webgpu"),
+      PROBING,
+      { type: "tierChosen", tier: 1, reason: "probe-pass" },
+      ready(1),
+    ]);
+    expect(errors).toHaveBeenCalledTimes(2);
+    expect(runtime.running).toBe(true);
+    expect(runtime.isDisposed).toBe(false);
+  });
+
+  test("REQ-LOAD-01 REQ-ENG-07 a listener that disposes the engine on a loading signal leaves no runtime, timer or canvas behind", async () => {
+    for (const signal of ["rendererStarted", "probeStarted"] as const) {
+      const stubs = stubRuntimes();
+      const { engine, log, canvas } = mount({
+        environment: facts(),
+        loadRuntime: stubs.loadRuntime,
+      });
+      let disposal: Promise<void> | null = null;
+      engine.on((event) => {
+        if (event.type === signal) disposal ??= engine.dispose();
+      });
+
+      const starting = engine.start();
+      await settle();
+      await disposal;
+      await starting;
+
+      // Counted before any time passes, so a probe timer set after the
+      // dispose would still be waiting here.
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(PROBE.durationMs * 2);
+      expect(stubs.built).toHaveLength(1);
+      expect(nth(stubs.built, 0).isDisposed).toBe(true);
+      expect(nth(stubs.built, 0).running).toBe(false);
+      expect(canvas()).toBeNull();
+      expect(log).toEqual(
+        signal === "rendererStarted"
+          ? [started("webgpu")]
+          : [started("webgpu"), PROBING],
+      );
+    }
+  });
+
+  test("REQ-LOAD-01 REQ-TIER-04 a tier forced from a probeStarted listener ends the probe, and the forced runtime sends its own rendererStarted", async () => {
+    const stubs = stubRuntimes();
+    const { engine, log } = mount({
+      environment: facts(),
+      loadRuntime: stubs.loadRuntime,
+    });
+    engine.on((event) => {
+      if (event.type === "probeStarted") engine.setTier(2);
+    });
+
+    void engine.start();
+    await settle();
+    nth(stubs.built, 1).frame();
+    await vi.advanceTimersByTimeAsync(PROBE.durationMs * 2);
+
+    expect(nth(stubs.built, 0).isDisposed).toBe(true);
+    expect(stubs.requests.map((request) => request.backend)).toEqual([
+      "webgpu",
+      "webgl2",
+    ]);
+    expect(withoutRates(log)).toEqual([
+      started("webgpu"),
+      PROBING,
+      started("webgl2"),
+      { type: "tierChosen", tier: 2, reason: "forced" },
+      ready(2),
+    ]);
   });
 });

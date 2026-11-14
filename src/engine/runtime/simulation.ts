@@ -1,5 +1,7 @@
 import {
   Fn,
+  If,
+  Loop,
   abs,
   cos,
   float,
@@ -19,6 +21,7 @@ import {
   uniform,
   vec2,
   vec3,
+  vec4,
 } from "three/tsl";
 import { Vector2, Vector3, type DataTexture, type Node } from "three/webgpu";
 
@@ -38,10 +41,12 @@ import {
   ORBIT_HEIGHT,
   ORBIT_WIDTH,
   ORBIT_WIDTH_NARROW,
-  RINGS,
-  RINGS_SPEED,
-  RING_THICKNESS,
   SHEET_FIT,
+  SKY_DIM,
+  SKY_FORMED_SHARE,
+  SKY_LINE_TRIES,
+  SKY_STAR_SHARE,
+  SKY_STAR_TRIES,
   STRANDS,
   STRANDS_CENTRE,
   STRANDS_REACH,
@@ -52,6 +57,7 @@ import {
   shareStarts,
   type StoryTargets,
 } from "./story";
+import { SKY_PICKS, SKY_TEXTURE_WIDTH, type SkyField } from "./sky-field";
 
 // The ambient field: every particle has a home inside the camera's view and
 // wanders around it on a slow noise flow. Most particles (story.ts,
@@ -244,8 +250,15 @@ function lookup(values: readonly number[], index: Node<"float">) {
 
 const LINE_STARTS = shareStarts(FLOW_LINES.map((line) => line.share));
 const STRAND_STARTS = shareStarts(STRANDS.map((strand) => strand.share));
-const RING_STARTS = shareStarts(RINGS.map((ring) => ring.share));
 const TAU = 2 * Math.PI;
+// A particle's seeded picks of a star or a line step by the golden ratio
+// from its own start, so its picks are spread and the same on every frame.
+const GOLDEN = 0.6180339887;
+// A line particle keeps off the stars at its ends by this share of the line.
+const SKY_LINE_GAP = 0.08;
+// A star's particles spread over this many CSS pixels, more for a bright one.
+const STAR_SPREAD_PX = 0.8;
+const STAR_SPREAD_LIGHT_PX = 0.9;
 
 /** A line's number from the table, read at the particle's line. */
 function lineValue(
@@ -270,7 +283,19 @@ function traitsFor(seed: Node<"vec3">) {
     isFlow: float(1).sub(step(FLOW_SHARE, pick)),
     line: chosen(LINE_STARTS, pick.div(FLOW_SHARE)),
     strand: chosen(STRAND_STARTS, pick),
-    ring: chosen(RING_STARTS, pick),
+    // The contact sky (story.ts, SKY_STAR_SHARE): a star, a line or dust.
+    skyBase: traitOf(TRAITS.skyTry, seed),
+    isStar: float(1).sub(step(SKY_STAR_SHARE, traitOf(TRAITS.sky, seed))),
+    isSkyLine: step(SKY_STAR_SHARE, traitOf(TRAITS.sky, seed)).mul(
+      float(1).sub(step(SKY_FORMED_SHARE, traitOf(TRAITS.sky, seed))),
+    ),
+    // Two peaked numbers from -1 to 1 for a star's spread.
+    spreadX: traitOf([5.11, 83.3, 27.9], seed)
+      .add(traitOf([71.9, 9.7, 44.1], seed))
+      .sub(1),
+    spreadY: traitOf([33.7, 51.3, 2.9], seed)
+      .add(traitOf([12.1, 39.7, 88.3], seed))
+      .sub(1),
   };
 }
 
@@ -278,6 +303,7 @@ export function createSimulation(
   count: number,
   view: View,
   atlas: DataTexture,
+  sky: SkyField,
 ) {
   const seedData = particleSeeds(count);
 
@@ -309,7 +335,11 @@ export function createSimulation(
   const shapeWeight = uniform(0);
   const sheetWeight = uniform(0);
   const strandsWeight = uniform(0);
-  const ringsWeight = uniform(0);
+  const skyWeight = uniform(0);
+  // How many constellation lines the sky texture holds, and world units in
+  // a CSS pixel at the focus plane, for a star's spread.
+  const skySegments = uniform(sky.segmentCount);
+  const skyPixel = uniform(0.002);
   const keep = uniform(0);
   const noiseLevel = uniform(1);
   // The flow clock (story.ts, flowClockStep) and how far it ran in the last
@@ -331,11 +361,87 @@ export function createSimulation(
   const rankScale = uniform(Math.SQRT1_2);
   const shapeCentre = uniform(new Vector2());
 
+  const texelAt = (texture: DataTexture, index: Node<"int">) =>
+    textureLoad(
+      texture,
+      ivec2(
+        index.mod(int(SKY_TEXTURE_WIDTH)),
+        index.div(int(SKY_TEXTURE_WIDTH)),
+      ),
+    );
+
+  /**
+   * A star particle's star: seeded picks from the pick table, the first in
+   * view kept (story.ts, SKY_STAR_TRIES). x and y its place at the focus
+   * plane, z its light (0 when none was in view), w its boost. It runs only
+   * while the sky shows and only for a star particle, so the loop costs
+   * nothing elsewhere.
+   */
+  const starFor = (traits: ReturnType<typeof traitsFor>) =>
+    Fn(() => {
+      const found = vec4(0, 0, 0, 0).toVar();
+      If(skyWeight.greaterThan(0).and(traits.isStar.greaterThan(0)), () => {
+        Loop(SKY_STAR_TRIES, ({ i }) => {
+          If(found.z.equal(0), () => {
+            const pick = fract(traits.skyBase.add(float(i).mul(GOLDEN)));
+            // pick is under 1, so the entry is under SKY_PICKS.
+            const entry = int(pick.mul(SKY_PICKS));
+            const star = int(texelAt(sky.picks, entry).x);
+            const texel = texelAt(sky.stars, star);
+            If(texel.z.greaterThan(0), () => {
+              found.assign(texel);
+            });
+          });
+        });
+      });
+      return found;
+    })();
+
+  /**
+   * A line particle's place on a constellation line in view (SKY_LINE_TRIES
+   * picks), and its light: the line's light where along is inside the share
+   * of the line that shows. w is 1 when a line was in view.
+   */
+  const lineFor = (traits: ReturnType<typeof traitsFor>) =>
+    Fn(() => {
+      const chosenLine = float(-1).toVar();
+      const info = vec4(0, 0, 0, 0).toVar();
+      If(skyWeight.greaterThan(0).and(traits.isSkyLine.greaterThan(0)), () => {
+        Loop(SKY_LINE_TRIES, ({ i }) => {
+          If(chosenLine.lessThan(0), () => {
+            const pick = fract(traits.skyBase.add(float(i).mul(GOLDEN)));
+            const segment = int(pick.mul(skySegments));
+            const texel = texelAt(sky.segments, segment.mul(2).add(1));
+            If(texel.x.greaterThan(0), () => {
+              chosenLine.assign(float(segment));
+              info.assign(texel);
+            });
+          });
+        });
+      });
+      const ends = texelAt(sky.segments, int(chosenLine.max(0)).mul(2));
+      const along = traits.along.mul(1 - 2 * SKY_LINE_GAP).add(SKY_LINE_GAP);
+      const place = mix(ends.xy, ends.zw, along);
+      const light = info.y.mul(step(traits.along, info.z));
+      return vec4(place, light, step(0, chosenLine));
+    })();
+
+  /** Whether a particle's star or line is in view, from its two picks. */
+  const skyFoundFor = (
+    traits: ReturnType<typeof traitsFor>,
+    star: Node<"vec4">,
+    line: Node<"vec4">,
+  ) => traits.isStar.mul(step(1e-6, star.z)).add(traits.isSkyLine.mul(line.w));
+
   /**
    * How much of each formation a particle takes, and whether its line
    * keeps it out of them: a kept particle streams on through a formation.
+   * skyFound is 1 for a star or line particle with its star or line in view.
    */
-  const formsFor = (traits: ReturnType<typeof traitsFor>) => {
+  const formsFor = (
+    traits: ReturnType<typeof traitsFor>,
+    skyFound: Node<"float">,
+  ) => {
     const kept = traits.isFlow
       .mul(lineValue((line) => line.keeps, traits.line))
       .mul(float(1).sub(step(keep, traits.keepPick)));
@@ -343,13 +449,13 @@ export function createSimulation(
     const shape = shapeWeight.mul(free);
     const sheet = sheetWeight.mul(free);
     const strands = strandsWeight.mul(free);
-    const rings = ringsWeight.mul(free);
+    const skyForm = skyWeight.mul(free).mul(skyFound);
     return {
       shape,
       sheet,
       strands,
-      rings,
-      form: shape.add(sheet).add(strands).add(rings).min(1),
+      sky: skyForm,
+      form: shape.add(sheet).add(strands).add(skyForm).min(1),
     };
   };
 
@@ -435,8 +541,9 @@ export function createSimulation(
     const velocity = velocities.element(instanceIndex);
     const seed = seeds.element(instanceIndex);
     const traits = traitsFor(seed);
-    const forms = formsFor(traits);
-    const short = frame.x.min(frame.y);
+    const star = starFor(traits);
+    const skyLine = lineFor(traits);
+    const forms = formsFor(traits, skyFoundFor(traits, star, skyLine));
 
     // The ambient home: the noise home, or for a flow particle its place on
     // its line once the release is complete.
@@ -517,27 +624,25 @@ export function createSimulation(
       focusZ.add(seed.z.mul(LINE_DEPTH)),
     );
 
-    // The contact rings, round the formation's stage, turning slowly.
-    const ringAngle = traits.along
-      .mul(TAU)
-      .add(elapsedSeconds.mul(RINGS_SPEED));
-    const ringRadius = lookup(
-      RINGS.map((entry) => entry.radius),
-      traits.ring,
-    )
-      .add(traits.across.mul(RING_THICKNESS))
-      .mul(short);
-    const rings = vec3(
-      vec2(cos(ringAngle), sin(ringAngle)).mul(ringRadius).add(shapeCentre),
-      focusZ.add(seed.z.mul(LINE_DEPTH)),
+    // The contact sky (D-146): a star particle on its star, spread a little
+    // more for a bright one; a line particle on its line.
+    const spread = skyPixel.mul(
+      star.z.min(2.5).mul(STAR_SPREAD_LIGHT_PX).add(STAR_SPREAD_PX),
     );
+    const starPlace = star.xy.add(
+      vec2(traits.spreadX, traits.spreadY).mul(spread),
+    );
+    // On the focus plane itself, with no depth: a star spread in depth
+    // would smear sideways under the perspective, most at the screen's
+    // edges, and read as a block of dots, not a point (D-146).
+    const skyPlace = vec3(mix(skyLine.xy, starPlace, traits.isStar), focusZ);
 
     const formed = home
       .mul(forms.form.oneMinus())
       .add(shape.mul(forms.shape))
       .add(sheet.mul(forms.sheet))
       .add(strands.mul(forms.strands))
-      .add(rings.mul(forms.rings));
+      .add(skyPlace.mul(forms.sky));
 
     // An area-even disc, so the dot is lit evenly and never burns.
     const dotAngle = seed.x.mul(Math.PI);
@@ -590,12 +695,19 @@ export function createSimulation(
       position
         .mul(NOISE_FREQUENCY)
         .add(vec3(0, 0, elapsedSeconds.mul(NOISE_SPEED))),
-    ).mul(noiseShare.mul(noiseLevel).mul(released).mul(NOISE_FORCE));
+    )
+      .mul(noiseShare.mul(noiseLevel).mul(released).mul(NOISE_FORCE))
+      // The sky's stars and lines hold still; only its dust drifts (D-146).
+      .mul(forms.sky.oneMinus());
     const away = position.sub(pointer);
     // Falls off with the cube of the distance, so the cursor stirs the
     // particles near it and leaves the rest of the field alone.
     const reach = away.dot(away).add(POINTER_SOFTENING);
-    const push = away.mul(pointerStrength.div(reach.mul(reach)));
+    // The sky does not run from the pointer, which turns the head and draws
+    // a constellation's lines there instead [T7SEN, 14 Nov 2026] (D-146).
+    const push = away.mul(
+      pointerStrength.mul(skyWeight.oneMinus()).div(reach.mul(reach)),
+    );
 
     velocity.addAssign(drift.add(offset.mul(pull)).add(push).mul(stepSeconds));
     velocity.mulAssign(stepSeconds.mul(drag).oneMinus());
@@ -626,7 +738,8 @@ export function createSimulation(
     shapeWeight,
     sheetWeight,
     strandsWeight,
-    ringsWeight,
+    skyWeight,
+    skyPixel,
     keep,
     noiseLevel,
     flowClock,
@@ -657,7 +770,7 @@ export function createSimulation(
       shapeWeight.value = targets.shape;
       sheetWeight.value = targets.sheet;
       strandsWeight.value = targets.strands;
-      ringsWeight.value = targets.rings;
+      skyWeight.value = targets.sky;
       keep.value = targets.keep;
       noiseLevel.value = targets.noise;
     },
@@ -685,16 +798,21 @@ export function createSimulation(
      * today). rim: 0 to 1, how near the particle sits to its formation's
      * outline. layer: 0 to 1, how far forward its layer sits, 1 for the
      * front layer, the logo, the wordmark, the sheet, the bright strand,
-     * the inner ring and every particle not in a formation. line: 0 to 1,
+     * the sky and every particle not in a formation. line: 0 to 1,
      * the light of the flow line the particle is streaming on, times flowIn
      * and the share not in a formation; 0 for the backdrop. form: how much
      * of a formation the particle takes, 0 to 1. isFlow: 1 for a flow
      * particle, 0 for the backdrop. flowIn: how far the lines have taken
      * over from the noise homes, 0 until the bloom's release nears its end.
+     * gain: what the particle's light is multiplied by, 1 outside the sky; in
+     * the contact sky a star's light by its magnitude, a line's shown light,
+     * and the faint dust between (story.ts, SKY_DIM).
      */
     look(seed: Node<"vec3">) {
       const traits = traitsFor(seed);
-      const forms = formsFor(traits);
+      const star = starFor(traits);
+      const skyLine = lineFor(traits);
+      const forms = formsFor(traits, skyFoundFor(traits, star, skyLine));
       const texelFrom = shapeTexel(atlas, shapeFrom);
       const texelTo = shapeTexel(atlas, shapeTo);
       const shapeRim = mix(texelFrom.z, texelTo.z, shapeMix);
@@ -708,10 +826,6 @@ export function createSimulation(
         STRANDS.map((entry) => entry.light),
         traits.strand,
       );
-      const ringLight = lookup(
-        RINGS.map((entry) => entry.light),
-        traits.ring,
-      );
       const rim = shapeRim
         .mul(forms.shape)
         .add(sheetRim.mul(forms.sheet))
@@ -720,12 +834,19 @@ export function createSimulation(
         .mul(forms.shape)
         .add(forms.sheet)
         .add(strandLight.mul(forms.strands))
-        .add(ringLight.mul(forms.rings))
+        .add(forms.sky)
         .add(forms.form.oneMinus());
       const line = traits.isFlow
         .mul(flowIn)
         .mul(forms.form.oneMinus())
         .mul(lineValue((entry) => entry.light, traits.line));
+      // In the sky a star's light by its magnitude and boost, a line's shown
+      // light; outside it the dust dims while the sky holds.
+      const skyGain = mix(skyLine.z, sqrt(star.z).mul(star.w), traits.isStar);
+      const outside = float(1).sub(skyWeight.mul(SKY_DIM));
+      // With the particle's own sky form, so the sky's light grows with
+      // its weight from its first frame instead of jumping (D-146).
+      const gain = mix(outside, skyGain, forms.sky);
       return {
         rim,
         layer,
@@ -733,6 +854,7 @@ export function createSimulation(
         form: forms.form,
         isFlow: traits.isFlow,
         flowIn,
+        gain,
       };
     },
   };

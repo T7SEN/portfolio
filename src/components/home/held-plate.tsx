@@ -17,7 +17,8 @@ type HeldPlateProps = {
  * over the formed wordmark (REQ-A11Y-06). Its parent must make a stacking
  * context (isolate), so the plate sits over the field and under the words.
  * A plate behind an empty line (the readout and the note before the tier is
- * ready) is not drawn.
+ * ready) is not drawn. On tier 3 the wordmark still makes the plate the void
+ * at VEIL_TEXT on its own, having no open veil under it (field-still.tsx).
  */
 export function HeldPlate({ children, className }: HeldPlateProps) {
   return (

@@ -52,7 +52,8 @@ const fakes = vi.hoisted(() => {
       shapeWeight: { value: 0 },
       sheetWeight: { value: 0 },
       strandsWeight: { value: 0 },
-      ringsWeight: { value: 0 },
+      skyWeight: { value: 0 },
+      skyPixel: { value: 0 },
       keep: { value: 0 },
       noiseLevel: { value: 1 },
       pulse: { value: 0 },
@@ -101,6 +102,12 @@ const fakes = vi.hoisted(() => {
     }>,
     /** Every atlas texture made, and the texture each simulation was given. */
     textures: [] as Array<Record<string, unknown>>,
+    /** Every sky update: the view, the frame and the world place of 0, 0. */
+    skyUpdates: [] as Array<{
+      view: unknown;
+      frame: { width: number; height: number; horizon: number };
+      origin: { x: number; y: number };
+    }>,
     simulationAtlas: [] as unknown[],
     packs: 0,
     /** What the fake Timer hands out as the time since the last frame. */
@@ -370,6 +377,26 @@ vi.mock("./atlas", async () => {
   };
 });
 
+vi.mock("./sky-field", () => ({
+  createSkyField: () => ({
+    stars: "sky stars",
+    segments: "sky segments",
+    picks: "sky picks",
+    segmentCount: 657,
+    update(
+      view: unknown,
+      frame: { width: number; height: number; horizon: number },
+      toWorld: (x: number, y: number) => { x: number; y: number },
+    ) {
+      fakes.state.skyUpdates.push({ view, frame, origin: toWorld(0, 0) });
+    },
+    dispose() {
+      if (fakes.state.throwingPart === "sky") throw new Error("sky is stuck");
+      fakes.state.log.push("sky dispose");
+    },
+  }),
+}));
+
 vi.mock("./simulation", () => ({
   FIELD_MARGIN: 1.1,
   FORM_PULL: 9,
@@ -397,7 +424,7 @@ vi.mock("./simulation", () => ({
           shape: number;
           sheet: number;
           strands: number;
-          rings: number;
+          sky: number;
           keep: number;
           noise: number;
         },
@@ -410,7 +437,7 @@ vi.mock("./simulation", () => ({
         uniforms.shapeWeight.value = targets.shape;
         uniforms.sheetWeight.value = targets.sheet;
         uniforms.strandsWeight.value = targets.strands;
-        uniforms.ringsWeight.value = targets.rings;
+        uniforms.skyWeight.value = targets.sky;
         uniforms.keep.value = targets.keep;
         uniforms.noiseLevel.value = targets.noise;
       },
@@ -475,7 +502,7 @@ vi.mock("./field", () => ({
   },
 }));
 
-const { createRuntime } = await import("./index");
+const { createRuntime, loadSkyCatalogue } = await import("./index");
 
 const { state, PUSH } = fakes;
 const { story } = state;
@@ -588,6 +615,7 @@ afterEach(() => {
   state.focus.length = 0;
   state.light.value = 1;
   state.textures.length = 0;
+  state.skyUpdates.length = 0;
   state.simulationAtlas.length = 0;
   state.packs = 0;
   state.delta = 1 / 60;
@@ -738,7 +766,7 @@ describe("the story", () => {
 
     runtime.setStory("contact", 0.5);
     expect(story.strandsWeight.value).toBe(0);
-    expect(story.ringsWeight.value).toBe(1);
+    expect(story.skyWeight.value).toBe(1);
     expect(story.noiseLevel.value).toBeLessThan(1);
   });
 
@@ -1146,6 +1174,7 @@ describe("teardown", () => {
       "velocities dispose",
       "seeds dispose",
       "atlas dispose",
+      "sky dispose",
       "timer dispose",
       "observer disconnect",
       "renderer dispose",
@@ -1161,7 +1190,14 @@ describe("teardown", () => {
     expect(state.log).not.toContain("passes render");
   });
 
-  test.each(["material", "velocity draw", "halftone", "passes", "atlas"])(
+  test.each([
+    "material",
+    "velocity draw",
+    "halftone",
+    "passes",
+    "atlas",
+    "sky",
+  ])(
     "REQ-ENG-07 a part that cannot be freed (%s) does not keep the rest or the renderer alive",
     async (stuck) => {
       const { options } = mount();
@@ -1182,6 +1218,7 @@ describe("teardown", () => {
           "velocities dispose",
           "seeds dispose",
           "atlas dispose",
+          "sky dispose",
           "timer dispose",
           "observer disconnect",
           "renderer dispose",
@@ -1728,7 +1765,7 @@ describe("the hero dot and the work frame in the halftone", () => {
     expect(record?.frame?.light).toBeLessThan(0.01);
   });
 
-  test("REQ-A11Y-06 only a formed shape, a study's or the making-of's mark, turns its densest cells white; the about strands and the contact rings never do", async () => {
+  test("REQ-A11Y-06 D-146 a formed shape, a study's or the making-of's mark, and the contact sky's brightest stars turn their densest cells white; the about strands never do", async () => {
     const { options } = mount("webgpu", 1000, 500);
     const runtime = await createRuntime(options);
     const record = state.halftones[0];
@@ -1749,7 +1786,7 @@ describe("the hero dot and the work frame in the halftone", () => {
     expect(settleFor("work", 0.5)).toBeGreaterThan(0.99);
     expect(settleFor("making-of", 0.5)).toBeGreaterThan(0.99);
     expect(settleFor("about", 0.5)).toBeLessThan(0.01);
-    expect(settleFor("contact", 0.9)).toBeLessThan(0.01);
+    expect(settleFor("contact", 0.9)).toBeGreaterThan(0.99);
   });
 });
 
@@ -1898,17 +1935,85 @@ describe("the stage follow", () => {
     expect(moved).toBeLessThan(0.5);
   });
 
-  test("REQ-SCR-05 the contact rings centre on the contact stage", async () => {
+  test("D-146 D-147 the contact sky is placed each step for the page's view, on the sky band", async () => {
     const { options } = mount("webgpu", 1000, 500);
     const runtime = await createRuntime(options);
-    runtime.setStage({
-      contact: { x: 0.5, y: 0.2, halfWidth: 0.3, halfHeight: 0.4 },
+    const view = {
+      at: Date.parse("2026-01-15T16:00:00Z"),
+      turn: 2,
+      tilt: -1,
+      horizon: null,
+      reveal: [0, 1],
+      trace: { constellation: 59, done: 2, partial: 0.5, flash: 0 },
+    };
+    runtime.setSky(view);
+    runtime.setStory("contact", 0.5);
+    state.skyUpdates.length = 0;
+    runtime.run();
+    state.loop?.(16);
+    state.loop?.(32);
+
+    expect(story.skyWeight.value).toBe(1);
+    const last = state.skyUpdates.at(-1);
+    expect(last?.view).toEqual(view);
+    expect(last?.frame.width).toBe(1000);
+    expect(last?.frame.height).toBe(500);
+    // The band: 0.6 of 500 px, under 80 degrees at 1000 / 220 px a degree.
+    expect(last?.frame.horizon).toBeCloseTo(300);
+    // The screen's top left is the frame's top left at the focus plane.
+    expect(last?.origin.x).toBeCloseTo(-2);
+    expect(last?.origin.y).toBeCloseTo(1);
+    // A copy, not the page's own object.
+    expect(last?.view).not.toBe(view);
+  });
+
+  test("D-146 rule A11: a sky catalogue that fails to load gives an empty sky, never a lost field", async () => {
+    await expect(
+      loadSkyCatalogue(() => Promise.reject(new Error("chunk failed"))),
+    ).resolves.toEqual({ stars: [], segments: [], constellations: [] });
+    const real = await loadSkyCatalogue();
+    expect(real.constellations).toHaveLength(88);
+    expect(real.stars.length).toBeGreaterThan(0);
+  });
+
+  test("D-146 a horizon the page sends wins over the band's", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setSky({
+      at: Date.parse("2026-01-15T16:00:00Z"),
+      turn: 0,
+      tilt: 0,
+      horizon: 321,
+      reveal: [],
+      trace: null,
     });
     runtime.setStory("contact", 0.5);
+    runtime.run();
+    state.loop?.(16);
+    state.loop?.(32);
+    expect(state.skyUpdates.at(-1)?.frame.horizon).toBe(321);
+  });
 
-    expect(story.shapeCentre.value.x).toBeCloseTo(1);
-    expect(story.shapeCentre.value.y).toBeCloseTo(0.2);
-    expect(story.ringsWeight.value).toBe(1);
+  test("D-146 no sky is placed outside the contact chapter, and with no view from the page the sky is the moment, unturned", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    runtime.setStory("about", 0.5);
+    state.skyUpdates.length = 0;
+    runtime.run();
+    state.loop?.(16);
+    state.loop?.(32);
+    expect(state.skyUpdates).toHaveLength(0);
+
+    runtime.setStory("contact", 0.5);
+    state.loop?.(48);
+    const last = state.skyUpdates.at(-1);
+    expect(last?.view).toMatchObject({
+      turn: 0,
+      tilt: 0,
+      reveal: [],
+      trace: null,
+    });
+    expect(last?.frame.horizon).toBeCloseTo(300);
   });
 });
 

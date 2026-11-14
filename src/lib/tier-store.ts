@@ -56,23 +56,41 @@ export function createTierStore(): TierStore {
     },
 
     apply(event) {
-      if (event.type === "tierChosen") {
-        // A tier is not ready until its own ready event arrives, so a change
-        // of tier takes the field out of view until the new one has drawn.
-        set({
-          tier: event.tier,
-          reason: event.reason,
-          ready: false,
-          particles: null,
-          look: null,
-        });
-      } else if (event.type === "ready" && !snapshot.ready) {
-        set({
-          ...snapshot,
-          ready: true,
-          particles: event.particles,
-          look: event.look ?? null,
-        });
+      switch (event.type) {
+        case "tierChosen":
+          // A tier is not ready until its own ready event arrives, so a
+          // change of tier takes the field out of view until the new one has
+          // drawn.
+          set({
+            tier: event.tier,
+            reason: event.reason,
+            ready: false,
+            particles: null,
+            look: null,
+          });
+          return;
+        case "ready":
+          if (snapshot.ready) return;
+          set({
+            ...snapshot,
+            ready: true,
+            particles: event.particles,
+            look: event.look ?? null,
+          });
+          return;
+        // The frame rate and the two loading signals (REQ-LOAD-01) say
+        // nothing about the tier, so they make no new snapshot and wake no
+        // listener.
+        case "frameRate":
+        case "rendererStarted":
+        case "probeStarted":
+          return;
+        default: {
+          // A new event type fails to compile here until it is sorted into
+          // one of the cases above.
+          const unsorted: never = event;
+          return unsorted;
+        }
       }
     },
 

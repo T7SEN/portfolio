@@ -441,8 +441,8 @@ export function createHalftone(particleCount: number) {
       frameLight.value = frame.light;
     },
     /**
-     * How far a shape or the sheet has formed, 0 to 1: only their densest
-     * cells turn white (the strands and the rings never do).
+     * How far a shape, the sheet or the contact sky has formed, 0 to 1: only
+     * their densest cells turn white (the strands never do).
      */
     setFormed(value: number) {
       formed.value = value;

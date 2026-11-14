@@ -1,7 +1,8 @@
 // The engine's contract. React sends the commands on Engine and hears back
-// only the three events (REQ-ENG-03). This file imports only types, which
-// compile away, so app code can read it without pulling three.js into the
-// first load.
+// only the events below (REQ-ENG-03): ready, tier chosen and frame rate, and
+// from P4.5 the two loading signals the home page's loader moves on. This
+// file imports only types, which compile away, so app code can read it
+// without pulling three.js into the first load.
 
 import type { PassId } from "./story";
 
@@ -50,7 +51,16 @@ export type EngineEvent =
   // for the tier 3 still; the making-of's live passes need the halftone.
   | { type: "ready"; tier: Tier; particles: number; look?: FieldLook }
   | { type: "tierChosen"; tier: Tier; reason: TierReason }
-  | { type: "frameRate"; fps: number };
+  | { type: "frameRate"; fps: number }
+  // A renderer has started on its own canvas and can draw: sent once for
+  // each runtime the engine builds, with the backend that is live, so twice
+  // when a slow tier 1 probe hands over to WebGL2. Never sent on tier 3.
+  | { type: "rendererStarted"; backend: Backend }
+  // The tier 1 probe has opened its window, which closes after durationMs
+  // of visible time: the only loading step with a known length. Sent again
+  // when a hidden tab restarts the window from nothing. Never sent where no
+  // probe runs (tier 2 by the decision table, tier 3, a forced tier).
+  | { type: "probeStarted"; durationMs: number };
 
 export type EngineListener = (event: EngineEvent) => void;
 
@@ -77,9 +87,9 @@ export interface Stage {
  * sent again on every scroll frame while the row slides; the T7 mark forms
  * inside it, and that card shows its pass of the mark. Absent when no card
  * is in the middle (the viewer away, calm mode's still grid, tier 3), and
- * then the making-of chapter is the ambient flow. contact: the panel the
- * contact rings centre on. Any other chapter with no stage uses the whole
- * screen.
+ * then the making-of chapter is the ambient flow. Any other chapter uses
+ * the whole screen; the contact sky places its stars on its own band
+ * (D-146, SkyView).
  */
 export type Stages = Partial<Record<ChapterId, Stage>>;
 
@@ -114,6 +124,37 @@ export interface PassCard {
   radius?: number;
 }
 
+/**
+ * The contact chapter's sky as the page sees it (D-146, D-147), worked out
+ * on the page from src/engine/sky/sky.ts and sent on every frame while the
+ * chapter is near. The engine places the stars from it; nothing comes back.
+ */
+export interface SkyView {
+  /** The moment the sky shows, in ms since 1970: frozen while calm. */
+  at: number;
+  /** The head turn in degrees: right and up are positive (sky.ts headTurn). */
+  turn: number;
+  tilt: number;
+  /**
+   * The horizon's height from the screen's top in CSS pixels on this frame;
+   * null for the sky band's own (sky.ts skyFrame).
+   */
+  horizon: number | null;
+  /** How far each constellation's lines show, 0 to 1, by catalogue index. */
+  reveal: readonly number[];
+  /**
+   * The constellation the message traces, by catalogue index, how many of
+   * its lines are done, how much of the next shows (0 to 1) and the flash
+   * after Send (0 to 1); null while nothing is written.
+   */
+  trace: {
+    constellation: number;
+    done: number;
+    partial: number;
+    flash: number;
+  } | null;
+}
+
 export interface Engine {
   /**
    * Picks the tier and starts the field inside the host. Resolves once
@@ -126,9 +167,9 @@ export interface Engine {
   /** Scroll position: the chapter in view and how far through it, 0 to 1. */
   setStory(chapter: ChapterId, progress: number): void;
   /**
-   * Where the hero's dot sits, where the work chapter's shapes form, where
-   * the making-of's T7 mark forms (the middle pass card's face) and where
-   * the contact rings centre, from the page's layout. Sent again when the
+   * Where the hero's dot sits, where the work chapter's shapes form and
+   * where the making-of's T7 mark forms (the middle pass card's face), from
+   * the page's layout. Sent again when the
    * layout changes and on every scroll frame while the work row or the
    * making-of row moves; each call replaces the last. A stage that moves a
    * little between frames is taken at once, so a shape stays inside its
@@ -146,11 +187,17 @@ export interface Engine {
    * rest; the page shows a still of each pass the engine does not draw.
    */
   setPasses(cards: readonly PassCard[] | null): void;
+  /**
+   * The contact sky (D-147): the page's view of it, sent on every frame while
+   * the contact chapter is near, null when it is away; each call replaces
+   * the last. The engine draws the stars and lines it says.
+   */
+  setSky(view: SkyView | null): void;
   /** Pointer in normalised device coordinates: -1 to 1 on both axes, y up. */
   setPointer(x: number, y: number, active: boolean): void;
   /** Calm mode and reduced motion: the field freezes to one still frame. */
   setCalm(on: boolean): void;
-  /** Subscribes to the three events. Returns the unsubscribe function. */
+  /** Subscribes to the events. Returns the unsubscribe function. */
   on(listener: EngineListener): () => void;
   /** Teardown, not a feature command. Awaits the renderer's own dispose. */
   dispose(): Promise<void>;
@@ -236,6 +283,7 @@ export interface Runtime {
   setStory(chapter: ChapterId, progress: number): void;
   setStage(stages: Stages): void;
   setPasses(cards: readonly PassCard[] | null): void;
+  setSky(view: SkyView | null): void;
   dispose(): Promise<void>;
 }
 

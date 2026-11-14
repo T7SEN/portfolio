@@ -15,6 +15,7 @@ import {
   ENGINE_MARKER,
   FIRST_LOAD_LIMIT_BYTES,
   MOTION_LIBRARIES,
+  SKY_CATALOGUE,
   chunkFiles,
   engineChunkBytes,
   findDeferredLibraries,
@@ -192,15 +193,45 @@ describe("engine entry", () => {
     ).toEqual({
       three: { count: 2, bytes: 500 },
       entry: { count: 1, bytes: 7 },
+      sky: { count: 0, bytes: 0 },
       shared: 0,
+      skyShared: 0,
     });
     expect(
       engineChunkBytes([{ bytes: 300, libraries: ["three.js", ENGINE_ENTRY] }]),
     ).toEqual({
       three: { count: 1, bytes: 300 },
       entry: { count: 0, bytes: 0 },
+      sky: { count: 0, bytes: 0 },
       shared: 1,
+      skyShared: 0,
     });
+  });
+
+  it("REQ-PERF-05 D-146 finds the sky catalogue by its data alone, counts its chunk for every tier and flags one that holds three.js", () => {
+    expect(
+      findDeferredLibraries(
+        'e.s(["SKY_CONSTELLATIONS",0,["And","Ant","Aps","Aql","Aqr"]])',
+      ),
+    ).toEqual([SKY_CATALOGUE]);
+    // App code that reads the list by name is not the data.
+    expect(findDeferredLibraries("t.SKY_CONSTELLATIONS[e]")).toEqual([]);
+    expect(
+      engineChunkBytes([
+        { bytes: 20, libraries: [SKY_CATALOGUE] },
+        { bytes: 7, libraries: [ENGINE_ENTRY] },
+      ]),
+    ).toEqual({
+      three: { count: 0, bytes: 0 },
+      entry: { count: 1, bytes: 7 },
+      sky: { count: 1, bytes: 20 },
+      shared: 0,
+      skyShared: 0,
+    });
+    expect(
+      engineChunkBytes([{ bytes: 300, libraries: ["three.js", SKY_CATALOGUE] }])
+        .skyShared,
+    ).toBe(1);
   });
 });
 
@@ -334,6 +365,28 @@ describe("3D payload", () => {
       engineJs + entryJs,
       engineJs + entryJs,
       2 * 1024 * 1024 + entryJs,
+    ]);
+  });
+
+  it("REQ-PERF-05 D-146 adds the sky catalogue's chunks to every tier", () => {
+    const engineJs = 500 * 1024;
+    const entryJs = 3 * 1024;
+    const skyJs = 20 * 1024;
+    const result = payloadFailures(
+      {
+        payloads: [
+          { tier: 1, device: "desktop", files: [] },
+          { tier: 3, device: "phone", files: [] },
+        ],
+      },
+      sizeOf,
+      engineJs,
+      entryJs,
+      skyJs,
+    );
+    expect(result.totals.map((total) => total.bytes)).toEqual([
+      engineJs + entryJs + skyJs,
+      entryJs + skyJs,
     ]);
   });
 });

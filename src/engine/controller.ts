@@ -15,6 +15,7 @@ import type {
   ProbeVerdict,
   Runtime,
   RuntimeFactory,
+  SkyView,
   Stages,
   Tier,
   TierReason,
@@ -75,6 +76,7 @@ export function createEngine(
   let pointer: readonly [number, number, boolean] | null = null;
   let stages: Stages | null = null;
   let passes: readonly PassCard[] | null = null;
+  let sky: SkyView | null = null;
   let facts: Promise<Environment> | null = null;
 
   let canvas: HTMLCanvasElement | null = null;
@@ -173,6 +175,9 @@ export function createEngine(
       state.timer = null;
       state.end(classifyProbe(state.samples));
     }, PROBE.durationMs);
+    // Sent once the timer is set, so a listener that disposes the engine or
+    // forces a tier here ends this window and clears its timer.
+    emit({ type: "probeStarted", durationMs: PROBE.durationMs });
   }
 
   /** Runs one runtime call. False when the field is no longer the live one. */
@@ -315,12 +320,14 @@ export function createEngine(
     // chapter the page is on (REQ-TIER-01). A first story is seated at the
     // runtime's next step, before its canvas is shown. The stage goes first,
     // so that seat already puts the dot and the shapes where the page wants
-    // them. The pass cards come last: they change only what is drawn.
+    // them. The pass cards and the sky come last: they change only what is
+    // drawn and where the contact chapter's stars sit.
     const heard = attempt(target, (live) => {
       if (stages !== null) live.setStage(stages);
       if (story !== null) live.setStory(...story);
       if (pointer !== null) live.setPointer(...pointer);
       if (passes !== null) live.setPasses(passes);
+      if (sky !== null) live.setSky(sky);
     });
     if (!heard) return;
 
@@ -385,6 +392,10 @@ export function createEngine(
 
     target = { runtime, canvas: surface, drawn: false };
     field = target;
+    // The backend that came up, which can be WebGL2 where WebGPU was asked
+    // for. A listener may force a tier or dispose the engine here; the
+    // callers find their generation stale and stop.
+    emit({ type: "rendererStarted", backend: runtime.backend });
     return target;
   }
 
@@ -586,6 +597,15 @@ export function createEngine(
       const target = listening();
       if (target !== null) {
         attempt(target, (runtime) => runtime.setPasses(cards));
+      }
+    },
+
+    setSky(view) {
+      if (disposed) return;
+      sky = view;
+      const target = listening();
+      if (target !== null) {
+        attempt(target, (runtime) => runtime.setSky(view));
       }
     },
 

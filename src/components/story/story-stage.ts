@@ -23,9 +23,9 @@ const DOT_LIMIT = 0.9;
 export type PageLayout = {
   /**
    * The stages that keep one place on the screen: the hero's dot where the
-   * screen shows it at the top of the page, and the contact panel where it
-   * shows it at the page's end. The work stage moves with the scroll
-   * (stagesAt).
+   * screen shows it at the top of the page. The work stage moves with the
+   * scroll (stagesAt). The contact sky has its own band and no stage
+   * (D-146).
    */
   stages: Stages;
   /**
@@ -124,27 +124,6 @@ function measureDot(
   return stage && { ...stage, y: clamp(stage.y, DOT_LIMIT) };
 }
 
-/**
- * The contact panel the rings centre on, marked data-stage="contact", as
- * the screen shows it at the page's end: the chapter is the last, so that
- * is where the panel comes to rest, and the rings wait for it there.
- */
-function measureContact(
-  root: ParentNode,
-  view: LayoutView,
-  width: number,
-): Stage | undefined {
-  const element = root.querySelector('[data-stage="contact"]');
-  if (element === null) return undefined;
-  const box = pageRect(element, view);
-  if (!hasArea(box)) return undefined;
-  const end = Math.max(
-    view.document.documentElement.scrollHeight - view.innerHeight,
-    0,
-  );
-  return screenStage(box, end, width, view.innerHeight);
-}
-
 /** Each study row's frame, data-stage="frame" inside its data-work-step. */
 function measureFrames(
   root: ParentNode,
@@ -220,6 +199,10 @@ function measureLines(view: LayoutView): PageRect[] {
     // (home/held-plate.tsx): a plate laid in page coordinates could not
     // follow it.
     if (parent.closest('[data-plate="own"]') !== null) continue;
+    // Text that is not the page's own takes no plate: the loader's cover,
+    // gone once it lifts, and the sky's name, which moves with the pointer
+    // and keeps its own halo (D-146).
+    if (parent.closest('[data-plate="none"]') !== null) continue;
     const holder = holderOf(node, body);
     if (holder !== null) {
       if (held.has(holder)) continue;
@@ -269,8 +252,6 @@ function measureBoxes(
   const stages: Stages = {};
   const dot = measureDot(root, view, width);
   if (dot !== undefined) stages.hero = dot;
-  const contact = measureContact(root, view, width);
-  if (contact !== undefined) stages.contact = contact;
   return { stages, frames: measureFrames(root, view), width };
 }
 

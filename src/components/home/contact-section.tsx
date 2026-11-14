@@ -6,14 +6,15 @@ import { pages } from "@/content/pages";
 import { story } from "@/content/story";
 
 import { ChapterHeading } from "./chapter-heading";
+import { ContactSky } from "./contact-sky";
 import { HomeSection } from "./home-section";
 import { ServicesSection } from "./services-section";
 import { StoryScene } from "./story-scene";
 
 // The last chapter is as tall as its words, with no room above them. The
-// services sit at the start; at the end, the framed panel the field's rings
-// centre on (data-stage="contact"), measured where the panel comes to rest
-// at the page's end, so the rings draw behind it. The form fills that panel
+// services sit at the start; at the end, the framed panel, which stands in
+// front of the field's sky (data-stage="contact": the sky names nothing
+// behind it, D-146). The form fills that panel
 // at P6; until then it leads to /contact, and a dashed box holds the form's
 // place, with no fields that do nothing.
 export function ContactSection() {
@@ -28,6 +29,7 @@ export function ContactSection() {
           title={contact.title}
         />
         <StoryScene chapter="contact" />
+        <ContactSky />
         <div className="mt-10 grid items-start gap-12 lg:mt-14 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:gap-16">
           <ServicesSection />
           <div data-stage="contact">

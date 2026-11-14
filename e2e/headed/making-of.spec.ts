@@ -16,8 +16,16 @@ import {
   type FrameSummary,
 } from "../gpu/frame-times";
 import { pixelStats, type Box } from "../gpu/pixels";
+import { withoutLoader } from "../support/loader";
 import { scrollToPlace, waitForStory } from "../support/story";
-import { FIELD, HOST } from "../support/tiers";
+import { FIELD, HOST, setFieldVeil } from "../support/tiers";
+
+// Every tab opens the home page with no loader cover: withoutLoader
+// serves each page with its inline script emptied, as a blocked script
+// leaves it. e2e/headed/loader.spec.ts covers the cover (REQ-LOAD-01).
+test.beforeEach(async ({ context }) => {
+  await withoutLoader(context);
+});
 
 // The making-of chapter on the production home page, headed, on this
 // machine's GPU (REQ-PERF-06, REQ-TIER-05, REQ-ENG-09). Once the page's
@@ -339,11 +347,7 @@ for (const setup of TIERS) {
     await page.setViewportSize({ width: 1280, height: 800 });
     await openHome(page, setup);
     await page.addStyleTag({ content: HIDE_TEXT });
-    await page
-      .locator(FIELD)
-      .evaluate((wrapper) =>
-        (wrapper as HTMLElement).style.setProperty("--field-veil", "0"),
-      );
+    await setFieldVeil(page, 0);
 
     const results: Array<{
       pass: PassId;

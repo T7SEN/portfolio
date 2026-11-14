@@ -2,6 +2,7 @@ import { expect, type Page } from "@playwright/test";
 
 import { chapterOrder } from "../../src/content/story";
 import type { ChapterId } from "../../src/engine/types";
+import { COVER } from "./loader";
 import { FIELD } from "./tiers";
 
 // Helpers for the home page's scroll story (REQ-SCR-01 to 07), shared by the
@@ -682,22 +683,28 @@ export function hiddenTitleParts(page: Page): Promise<string[]> {
 
 /**
  * Every element positioned fixed or sticky, named by tag, its marks and its
- * position, such as `div[data-part="pass-screen"] sticky`.
+ * position, such as `div[data-part="pass-screen"] sticky`. The loader's
+ * cover is left out: it is fixed by design and comes and goes with each
+ * load (REQ-LOAD-01, D-144), whatever the story does.
  */
 export function fixedElements(page: Page): Promise<string[]> {
-  return page.evaluate(() =>
-    [...document.querySelectorAll<HTMLElement>("body *")]
-      .filter((element) =>
-        ["fixed", "sticky"].includes(getComputedStyle(element).position),
-      )
-      .map((element) => {
-        const marks = ["id", "data-testid", "data-part", "href"]
-          .map((name) => [name, element.getAttribute(name)] as const)
-          .filter(([, value]) => value !== null)
-          .map(([name, value]) => `[${name}="${value}"]`)
-          .join("");
-        const { position } = getComputedStyle(element);
-        return `${element.tagName.toLowerCase()}${marks} ${position}`;
-      }),
+  return page.evaluate(
+    (cover) =>
+      [...document.querySelectorAll<HTMLElement>("body *")]
+        .filter(
+          (element) =>
+            element.closest(cover) === null &&
+            ["fixed", "sticky"].includes(getComputedStyle(element).position),
+        )
+        .map((element) => {
+          const marks = ["id", "data-testid", "data-part", "href"]
+            .map((name) => [name, element.getAttribute(name)] as const)
+            .filter(([, value]) => value !== null)
+            .map(([name, value]) => `[${name}="${value}"]`)
+            .join("");
+          const { position } = getComputedStyle(element);
+          return `${element.tagName.toLowerCase()}${marks} ${position}`;
+        }),
+    COVER,
   );
 }

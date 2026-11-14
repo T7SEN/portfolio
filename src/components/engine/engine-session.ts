@@ -1,5 +1,6 @@
 import type { ChapterId, Engine, EngineEvent } from "@/engine/types";
 import { calmStore, type CalmStore } from "@/lib/calm-store";
+import { loaderStore, type LoaderStore } from "@/lib/loader-store";
 import {
   storyBridge,
   type StoryBridge,
@@ -25,6 +26,8 @@ export type EngineSessionOptions = {
   calm?: Pick<CalmStore, "getSnapshot" | "subscribe">;
   /** Where the page's story and pointer arrive. Replaced in unit tests. */
   bridge?: Pick<StoryBridge, "connect">;
+  /** The home page's loader, fed the loading steps. Replaced in unit tests. */
+  loader?: Pick<LoaderStore, "engineLoaded" | "apply" | "reset">;
 };
 
 function logFailure(code: string, error: unknown) {
@@ -37,12 +40,18 @@ function logFailure(code: string, error: unknown) {
  * One engine for the life of the root layout. Every event goes to the tier
  * store and is mirrored on the wrapper as data attributes, written straight
  * to the element so a frame rate report never renders React. The chapter the
- * page sends is mirrored too, as data-chapter, on every tier.
+ * page sends is mirrored too, as data-chapter, on every tier. The loader
+ * hears the engine module load and every event but the frame rate; the
+ * engine loads when it did before the loader, whether or not a cover shows.
  */
 export function createEngineSession(
   wrapper: HTMLElement,
   host: HTMLElement,
-  { calm = calmStore, bridge = storyBridge }: EngineSessionOptions = {},
+  {
+    calm = calmStore,
+    bridge = storyBridge,
+    loader = loaderStore,
+  }: EngineSessionOptions = {},
 ): EngineSession {
   let engine: Engine | null = null;
   let hasBegun = false;
@@ -80,6 +89,7 @@ export function createEngineSession(
       return;
     }
 
+    loader.apply(event);
     tierStore.apply(event);
     if (event.type === "tierChosen") {
       wrapper.dataset.tier = String(event.tier);
@@ -107,11 +117,12 @@ export function createEngineSession(
     setStory: (chapter) => mirrorChapter(chapter),
     setStage: () => undefined,
     setPasses: () => undefined,
+    setSky: () => undefined,
     setPointer: () => undefined,
     setVeil,
   };
 
-  // The engine keeps the latest story, stage, passes and pointer itself,
+  // The engine keeps the latest story, stage, passes, sky and pointer itself,
   // tier 3 included, and hands them to a GPU tier that a later setTier
   // brings back.
   function forwardTo(live: Engine): StoryTarget {
@@ -122,6 +133,7 @@ export function createEngineSession(
       },
       setStage: (stages) => live.setStage(stages),
       setPasses: (cards) => live.setPasses(cards),
+      setSky: (view) => live.setSky(view),
       setPointer: (x, y, active) => live.setPointer(x, y, active),
       setVeil,
     };
@@ -150,6 +162,7 @@ export function createEngineSession(
     try {
       const { createEngine } = await loadEngine();
       if (isDisposed) return;
+      loader.engineLoaded();
 
       // Subscribed before the read, so a change of the OS setting made while
       // nobody listened is already counted.
@@ -178,6 +191,7 @@ export function createEngineSession(
     // The bridge keeps its values: the page owns them, not the session.
     disconnectBridge();
     tierStore.reset();
+    loader.reset();
     delete wrapper.dataset.tier;
     delete wrapper.dataset.tierReason;
     delete wrapper.dataset.ready;

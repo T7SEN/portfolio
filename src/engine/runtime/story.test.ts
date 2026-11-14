@@ -22,9 +22,11 @@ import {
   NARROW_BLOOM_STAGE,
   ORBIT_WIDTH,
   ORBIT_WIDTH_NARROW,
-  RINGS,
-  RINGS_FAINT,
-  RING_THICKNESS,
+  SKY_AREA,
+  SKY_DIM,
+  SKY_FORMED_SHARE,
+  SKY_NOISE,
+  SKY_STAR_SHARE,
   SHAPE_FIT,
   STRANDS,
   STRANDS_LIT,
@@ -54,7 +56,6 @@ import {
   orbitAxes,
   orbitPoint,
   releaseRankScale,
-  ringRadii,
   shortHalf,
   stagedFrame,
   stagedTargets,
@@ -90,7 +91,7 @@ const KEYS = [
   "shape",
   "sheet",
   "strands",
-  "rings",
+  "sky",
   "keep",
   "noise",
   "push",
@@ -156,7 +157,7 @@ describe("every chapter", () => {
           targets.shape,
           targets.sheet,
           targets.strands,
-          targets.rings,
+          targets.sky,
         ];
         expect(
           formations.filter((weight) => weight > 0).length,
@@ -176,7 +177,7 @@ describe("every chapter", () => {
           "release",
           "sheet",
           "strands",
-          "rings",
+          "sky",
           "keep",
           "push",
         ] as const) {
@@ -340,7 +341,7 @@ describe("hero and bloom", () => {
       const targets = chapterTargets("bloom", progress);
       expect(targets.push).toBe(0);
       expect(targets.noise).toBe(1);
-      expect(targets.sheet + targets.strands + targets.rings).toBe(0);
+      expect(targets.sheet + targets.strands + targets.sky).toBe(0);
     }
   });
 });
@@ -436,12 +437,14 @@ describe("making-of, about and contact", () => {
     }
   });
 
-  test("REQ-SCR-01 contact gathers its rings over the first quarter and keeps them to the end of the page, with a gentler drift", () => {
-    expect(chapterTargets("contact", 0).rings).toBe(0);
-    expect(chapterTargets("contact", 0.1).rings).toBeGreaterThan(0);
+  test("D-146 REQ-SCR-01 contact gathers its sky over the first quarter and holds it to the end of the page, its stars nearly still", () => {
+    expect(chapterTargets("contact", 0).sky).toBe(0);
+    expect(chapterTargets("contact", 0.1).sky).toBeGreaterThan(0);
     for (const progress of [0.25, 0.5, 0.9, 1]) {
       const targets = chapterTargets("contact", progress);
-      expect(targets.rings).toBe(1);
+      expect(targets.sky).toBe(1);
+      expect(targets.noise).toBe(SKY_NOISE);
+      expect(targets.keep).toBe(0);
       expect(targets.shape + targets.sheet + targets.strands).toBe(0);
       expect(targets.release).toBe(1);
       expect(targets.noise).toBeGreaterThan(0);
@@ -479,7 +482,7 @@ describe("calm", () => {
     }
   });
 
-  test("REQ-A11Y-03 each other calm still is its chapter at its fullest: the dot, each study whole, the mark, the strands, the rings", () => {
+  test("REQ-A11Y-03 each other calm still is its chapter at its fullest: the dot, each study whole, the mark, the strands, the sky", () => {
     const calm = (chapter: ChapterId, progress: number) =>
       chapterTargets(chapter, calmProgress(chapter, progress));
 
@@ -495,7 +498,7 @@ describe("calm", () => {
     expect(calm("making-of", 0.99).shape).toBe(1);
     expect(shapeShares(calm("making-of", 0.99)).logo).toBe(1);
     expect(calm("about", 0).strands).toBe(1);
-    expect(calm("contact", 0).rings).toBe(1);
+    expect(calm("contact", 0).sky).toBe(1);
     expect(calm("contact", 1)).toEqual(chapterTargets("contact", 0.5));
   });
 });
@@ -541,9 +544,9 @@ describe("fit and light", () => {
       9,
     );
 
-    // The thin strands pack tighter than the sheet, so their particles give
-    // less, and the rings are fainter still. No chapter forms the sheet now,
-    // but the simulation keeps it, so its light rule is kept tested.
+    // The thin strands and the sky's points pack tighter than the sheet, so
+    // their particles give less. No chapter forms the sheet now, but the
+    // simulation keeps it, so its light rule is kept tested.
     const sheet = formedLight({ ...AMBIENT, sheet: 1 }, extents, portrait);
     const strands = formedLight(
       chapterTargets("about", 0.5),
@@ -552,14 +555,10 @@ describe("fit and light", () => {
     );
     expect(strands).toBeLessThan(sheet);
     expect(sheet).toBeLessThanOrEqual(1);
-    const rings = formedLight(
-      chapterTargets("contact", 0.5),
-      extents,
-      landscape,
-    );
-    expect(rings).toBeLessThan(1);
-    expect(rings).toBeLessThanOrEqual(
-      formedLight(chapterTargets("about", 0.5), extents, landscape),
+    const sky = formedLight(chapterTargets("contact", 0.5), extents, landscape);
+    expect(sky).toBeLessThan(1);
+    expect(sky).toBeLessThan(
+      formedLight({ ...AMBIENT, sheet: 1 }, extents, landscape),
     );
   });
 
@@ -650,7 +649,13 @@ describe("stages", () => {
       frame,
     });
     const stages = { work: FULL_STAGE, contact: FULL_STAGE };
-    for (const chapter of ["hero", "making-of", "about", null] as const) {
+    for (const chapter of [
+      "hero",
+      "making-of",
+      "about",
+      "contact",
+      null,
+    ] as const) {
       expect(formationStage(chapter, stages, 1.6)).toBeUndefined();
     }
   });
@@ -682,15 +687,11 @@ describe("stages", () => {
     expect(isNarrow({ halfWidth: 768, halfHeight: 1024 })).toBe(false);
   });
 
-  test("REQ-SCR-01 the work chapter forms in the study row's frame and the contact rings centre on the contact panel", () => {
+  test("REQ-SCR-01 the work chapter forms in the study row's frame", () => {
     const row = { x: -0.3, y: 0.1, halfWidth: 0.35, halfHeight: 0.4 };
-    const panel = { x: 0.4, y: -0.2, halfWidth: 0.3, halfHeight: 0.5 };
-    const stages = { work: row, contact: panel };
-    expect(formationStage("work", stages, 1.6)).toBe(row);
-    expect(formationStage("contact", stages, 0.5)).toBe(panel);
+    expect(formationStage("work", { work: row }, 1.6)).toBe(row);
     // Without a measure, the whole screen.
     expect(formationStage("work", {}, 1.6)).toBeUndefined();
-    expect(formationStage("contact", {}, 1.6)).toBeUndefined();
   });
 
   test("REQ-ENG-09 REQ-SCR-01 the making-of's mark forms inside the middle pass card's face, its stage, and no other", () => {
@@ -1045,7 +1046,7 @@ describe("flow lines", () => {
   );
 });
 
-describe("about strands and contact rings", () => {
+describe("about strands and the contact sky", () => {
   test("REQ-SCR-01 about is three thin dotted strands across the full width, one bright and two faint, offset in phase", () => {
     expect(STRANDS).toHaveLength(3);
     expect(STRANDS.reduce((sum, strand) => sum + strand.share, 0)).toBeCloseTo(
@@ -1113,36 +1114,22 @@ describe("about strands and contact rings", () => {
     expect(ORBIT_WIDTH_NARROW).toBeGreaterThan(ORBIT_WIDTH);
   });
 
-  test("REQ-SCR-01 the strands and the rings are thinner than a halftone cell, so each reads as one thin dotted line", () => {
+  test("REQ-SCR-01 the strands are thinner than a halftone cell, so each reads as one thin dotted line", () => {
     // In CSS pixels at 1280 by 800: a strand's half thickness is a share of
-    // the half height (400), a ring's of the shorter half (400).
+    // the half height (400).
     expect(2 * STRAND_THICKNESS * 400).toBeLessThan(8);
-    expect(2 * RING_THICKNESS * 400).toBeLessThan(8);
-    // The rings stay fainter than any formation: their area counts at less
-    // than half, and their light per cell follows it times their thickness.
-    expect(RINGS_FAINT).toBeLessThan(0.4);
-    expect(RINGS_FAINT * RING_THICKNESS).toBeLessThan(0.4 * 0.01);
     expect(STRANDS_LIT).toBeGreaterThan(1);
   });
 
-  test("REQ-SCR-01 contact is three faint concentric rings round the stage, fainter outward", () => {
-    expect(RINGS).toHaveLength(3);
-    expect(RINGS.reduce((sum, ring) => sum + ring.share, 0)).toBeCloseTo(1, 9);
-    for (let index = 1; index < RINGS.length; index += 1) {
-      expect(RINGS[index]?.radius).toBeGreaterThan(
-        RINGS[index - 1]?.radius ?? 0,
-      );
-      expect(RINGS[index]?.light).toBeLessThan(RINGS[index - 1]?.light ?? 1);
-    }
-    // Sized by the frame's shorter half, so a phone keeps them round its panel.
-    const radii = ringRadii(portrait);
-    expect(radii[0]).toBeCloseTo(
-      (RINGS[0]?.radius ?? 0) * portrait.halfWidth,
-      9,
-    );
-    expect(ringRadii(landscape)[0]).toBeCloseTo(
-      (RINGS[0]?.radius ?? 0) * landscape.halfHeight,
-      9,
-    );
+  test("D-146 the sky's particles are stars, constellation lines and a faint dust, and its light counts a small share of the frame", () => {
+    expect(SKY_STAR_SHARE).toBeGreaterThan(0.5);
+    expect(SKY_FORMED_SHARE).toBeGreaterThan(SKY_STAR_SHARE);
+    expect(SKY_FORMED_SHARE).toBeLessThan(1);
+    expect(SKY_AREA).toBeGreaterThan(0);
+    expect(SKY_AREA).toBeLessThan(0.2);
+    // The dust between the stars stays, faint, so the field never goes out.
+    expect(SKY_DIM).toBeGreaterThan(0.5);
+    expect(SKY_DIM).toBeLessThan(1);
+    expect(SKY_NOISE).toBeLessThan(AMBIENT.noise);
   });
 });

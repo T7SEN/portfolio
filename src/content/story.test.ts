@@ -130,7 +130,7 @@ describe("scene descriptions", () => {
     expect(story.scenes["making-of"]).toContain("the T7 mark");
     expect(story.scenes["making-of"]).not.toContain("sheet");
     expect(story.scenes.about).toContain("three thin strands");
-    expect(story.scenes.contact).toContain("rings behind the contact panel");
+    expect(story.scenes.contact).toContain("stars over AlUla");
   });
 });
 

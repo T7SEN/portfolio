@@ -10,9 +10,10 @@ import { pages } from "../src/content/pages";
 import { services } from "../src/content/services";
 import { site } from "../src/content/site";
 import { story } from "../src/content/story";
-import { RINGS } from "../src/engine/runtime/story";
-import { pixelStats, ringShare } from "./gpu/pixels";
+import { skyFrame } from "../src/engine/sky/sky";
+import { pixelStats } from "./gpu/pixels";
 import { expectNoAxeViolations } from "./support/axe";
+import { withoutLoader } from "./support/loader";
 import { goToChapter, waitForStory } from "./support/story";
 import {
   afterTwoFrames,
@@ -20,12 +21,14 @@ import {
   asTier3,
   CANVAS,
   collectScripts,
+  ENGINE_CANVASES,
   FIELD,
   frameRateEvents,
   HOST,
   nextFrameRateEvent,
   scriptsHolding,
   STILL,
+  TIER_SKY,
   waitForField,
   withoutAnyGpu,
 } from "./support/tiers";
@@ -34,6 +37,13 @@ import {
 // workers share one GPU here, so nothing in this file asserts a frame rate;
 // those are measured headed, alone (e2e/headed).
 test.describe.configure({ timeout: 120_000 });
+
+// Every tab opens the home page with no loader cover: withoutLoader
+// serves each page with its inline script emptied, as a blocked script
+// leaves it. e2e/loader.spec.ts covers the cover (REQ-LOAD-01).
+test.beforeEach(async ({ context }) => {
+  await withoutLoader(context);
+});
 
 const HERO = heroCopy(STATIC_TIER);
 
@@ -442,7 +452,8 @@ test("REQ-TIER-03 REQ-CNT-10 with Save-Data the page is tier 3: the still, no th
   await page.goto("/");
 
   expect(await waitForField(page)).toEqual({ tier: 3, reason: "save-data" });
-  await expect(page.locator("canvas")).toHaveCount(0);
+  await expect(page.locator(ENGINE_CANVASES)).toHaveCount(0);
+  await expect(page.locator(TIER_SKY)).toHaveCount(1);
 
   const viewport = page.viewportSize();
   if (!viewport) throw new Error("the project sets no viewport");
@@ -485,7 +496,8 @@ test("REQ-ENG-08 with no usable GPU the page falls to tier 3 and the hero is nev
   await page.goto("/");
 
   expect(await waitForField(page)).toEqual({ tier: 3, reason: "no-backend" });
-  await expect(page.locator("canvas")).toHaveCount(0);
+  await expect(page.locator(ENGINE_CANVASES)).toHaveCount(0);
+  await expect(page.locator(TIER_SKY)).toHaveCount(1);
 
   await expect(page.locator(STILL)).toHaveCSS("opacity", "1");
   await expect(page.locator(FIELD)).toHaveCSS("opacity", "1");
@@ -646,16 +658,15 @@ test("REQ-ENG-07 the field stops reporting frames while the document is hidden a
   await expect(page.locator(FIELD)).toHaveAttribute("data-tier", "2");
 });
 
-// The contact rings are very faint thin lines by design, as the preview
-// draws them: their calm still lit 0.0014 of the frame at 1280 by 800 and
-// 0.0006 at 375 by 812 (12 Nov 2026, the rings thinned and made fainter;
-// 0.0042 and 0.0033 before), all of it on the rings, where the ambient field
-// of P3 lit over 0.2. Half the smaller figure.
-const CONTACT_LIT_SHARE = 0.0003;
-// A ring is 1 per cent of the shorter half thick each side; its dots snap
-// to the 8 px halftone lattice and sit at slightly different depths.
-const RING_BAND_PX = 16;
-const RINGS_SHARE = 0.9;
+// The contact sky (D-146): stars of a cell or two over the horizon, with
+// the dust between dimmed to a trace. Its calm still lights a small share of
+// the frame, nearly all of it above the sky band's horizon (sky.ts
+// skyFrame). Measured at the gate; these are floors.
+const CONTACT_LIT_SHARE = 0.0005;
+const SKY_ABOVE_SHARE = 0.9;
+// A dot's antialiasing and the lattice's snap may put a little light just
+// under the horizon.
+const HORIZON_MARGIN_PX = 12;
 
 // The halo's dots are antialiased, so a little light can fall just past the
 // dot box's edge.
@@ -683,7 +694,7 @@ async function stillScreenshot(page: Page) {
   return { frame, pairs, identical };
 }
 
-test("REQ-A11Y-03 with reduced motion the field draws the hero's dot and the contact field as stills and reports no frames", async ({
+test("REQ-A11Y-03 with reduced motion the field draws the hero's dot and the contact sky as stills and reports no frames", async ({
   page,
 }, testInfo) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -768,46 +779,41 @@ test("REQ-A11Y-03 with reduced motion the field draws the hero's dot and the con
   ).toBeGreaterThan(0.9);
 
   // A new chapter while calm: the field settles into that chapter's still
-  // and draws it once. In contact the field rests in three faint dotted
-  // rings centred on the contact panel as it shows at the page's end, the
-  // contact stage (story-stage.ts), with radii of 0.667, 0.978 and 1.289 of
-  // the frame's shorter half (runtime/story.ts RINGS).
+  // and draws it once. In contact the field is the sky over AlUla (D-146),
+  // its horizon on the sky band at every scroll (sky.ts skyFrame).
   await goToChapter(page, "contact");
   const contact = await stillScreenshot(page);
   await writeFile(testInfo.outputPath("calm-still.png"), contact.frame);
   const stats = await pixelStats(page, contact.frame);
-  const panel = await page.evaluate(() => {
-    const element = document.querySelector('[data-stage="contact"]');
-    if (element === null) throw new Error("No contact stage");
-    const box = element.getBoundingClientRect();
-    const end = document.documentElement.scrollHeight - window.innerHeight;
-    return {
-      x: box.left + box.width / 2,
-      y: box.top + window.scrollY - end + box.height / 2,
-      short: Math.min(window.innerWidth, window.innerHeight) / 2,
-    };
-  });
-  const rings = await ringShare(page, contact.frame, {
-    x: panel.x * scale,
-    y: panel.y * scale,
-    radii: RINGS.map((ring) => ring.radius * panel.short * scale),
-    band: RING_BAND_PX * scale,
-  });
+  const { width, height } = await page.evaluate(() => ({
+    width: window.innerWidth,
+    height: window.innerHeight,
+  }));
+  const { horizon } = skyFrame(width, height);
+  const above = await pixelStats(page, contact.frame, [
+    {
+      x: 0,
+      y: 0,
+      width: width * scale,
+      height: Math.max(0, horizon + HORIZON_MARGIN_PX) * scale,
+    },
+  ]);
+  const lit = stats.litShare * stats.pixels;
+  const skyShare = lit === 0 ? 0 : (above.litShare * above.pixels) / lit;
   const line =
     `calm-still ${testInfo.project.name}: lit share ${stats.litShare.toFixed(4)}, ` +
-    `${rings.share.toFixed(4)} of ${rings.lit} lit pixels on the rings round (${Math.round(panel.x)}, ${Math.round(panel.y)}), ` +
+    `${skyShare.toFixed(4)} of ${Math.round(lit)} lit pixels above the horizon at ${Math.round(horizon)} px, ` +
     `brightest ${stats.brightest}, two identical screenshots after ${contact.pairs} pairs: ${contact.identical}`;
   console.log(line);
   testInfo.annotations.push({ type: "calm-still", description: line });
 
   expect(contact.identical, "nothing moves between two screenshots").toBe(true);
-  expect(stats.litShare, "the still frame shows the rings").toBeGreaterThan(
+  expect(stats.litShare, "the still frame shows the sky").toBeGreaterThan(
     CONTACT_LIT_SHARE,
   );
-  expect(
-    rings.share,
-    "the light lies on the rings round the panel",
-  ).toBeGreaterThan(RINGS_SHARE);
+  expect(skyShare, "the light is the sky above the horizon").toBeGreaterThan(
+    SKY_ABOVE_SHARE,
+  );
   expect(await frameRateEvents(page, QUIET_MS)).toBe(0);
 });
 

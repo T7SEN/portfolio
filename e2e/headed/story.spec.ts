@@ -30,6 +30,7 @@ import {
   type FrameSummary,
 } from "../gpu/frame-times";
 import { cellStats, pixelStats, type Box } from "../gpu/pixels";
+import { withoutLoader } from "../support/loader";
 import {
   calmToggle,
   goToChapter,
@@ -38,7 +39,14 @@ import {
   waitForStory,
   type StoryPlace,
 } from "../support/story";
-import { FIELD, HOST } from "../support/tiers";
+import { FIELD, HOST, setFieldVeil } from "../support/tiers";
+
+// Every tab opens the home page with no loader cover: withoutLoader
+// serves each page with its inline script emptied, as a blocked script
+// leaves it. e2e/headed/loader.spec.ts covers the cover (REQ-LOAD-01).
+test.beforeEach(async ({ context }) => {
+  await withoutLoader(context);
+});
 
 // The scroll story on the production home page, headed, on this machine's
 // GPU (pnpm e2e:gpu, after pnpm build): the frame rate in every chapter, the
@@ -99,15 +107,10 @@ async function openHome(page: Page, setup: TierSetup) {
 /** Hides the page's text and the veil; returns the undo. */
 async function showFieldAlone(page: Page): Promise<() => Promise<void>> {
   const style = await page.addStyleTag({ content: HIDE_TEXT });
-  const field = page.locator(FIELD);
-  await field.evaluate((wrapper) =>
-    (wrapper as HTMLElement).style.setProperty("--field-veil", "0"),
-  );
+  await setFieldVeil(page, 0);
   return async () => {
     await style.evaluate((element) => element.parentNode?.removeChild(element));
-    await field.evaluate((wrapper) =>
-      (wrapper as HTMLElement).style.removeProperty("--field-veil"),
-    );
+    await setFieldVeil(page, null);
   };
 }
 
@@ -354,7 +357,7 @@ const CHAPTER_STATES: ReadonlyArray<{
     chapter: "about",
   },
   {
-    name: "contact 0.5, the rings",
+    name: "contact 0.5, the sky",
     place: { chapter: "contact", progress: 0.5 },
     chapter: "contact",
   },
@@ -763,8 +766,8 @@ for (const setup of TIERS) {
 // it, so a hole the pointer opens shows against the fill around it. The
 // chapter's screen is held there and the mark sits in the middle of the
 // window (BLOOM_STAGE), so it stays put while a finger scrolls the page a
-// little. Since P3.5 the contact chapter is three faint rings, too sparse to
-// measure a hole in, and the making-of no longer forms its sheet: its mark
+// little. The contact chapter is the sky over AlUla (D-146), points of light
+// too sparse to measure a hole in, and the making-of no longer forms its sheet: its mark
 // sits in the middle card, where the card's live pass covers it.
 const STIR_PLACE = { chapter: "bloom", progress: BLOOM_MARK_AT } as const;
 
@@ -1022,6 +1025,7 @@ test("REQ-SCR-06 REQ-SCR-02 on a touch screen a finger stirs the field while the
     viewport: { width: 375, height: 812 },
   });
   const page = await context.newPage();
+  await withoutLoader(page);
   try {
     const { errors } = watchErrors(page);
     await page.goto("/");

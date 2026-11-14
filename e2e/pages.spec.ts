@@ -6,7 +6,19 @@ import { fullStudies, studies, studyHref } from "../src/content";
 import { about } from "../src/content/about";
 import { heroCopy, STATIC_TIER } from "../src/content/hero";
 import { pages } from "../src/content/pages";
+import {
+  LOADER_ATTRIBUTE,
+  LOADER_OFF_ATTRIBUTE,
+} from "../src/components/loader/loader-config";
 import { expectNoAxeViolations } from "./support/axe";
+import {
+  COVER,
+  holdEngine,
+  LIFT_TIMEOUT_MS,
+  reachOf,
+  waitForLift,
+  withoutLoader,
+} from "./support/loader";
 import { ROUTES, SHORT_STUDIES } from "./support/routes";
 import { ENGINE_TIMEOUT_MS, waitForFieldShown } from "./support/tiers";
 
@@ -20,6 +32,16 @@ async function boxOf(locator: Locator) {
   if (!box) throw new Error(`${locator} has no layout box`);
   return box;
 }
+
+// Every load of the home page shows the loader's cover, which holds the
+// hero's links back until it lifts (REQ-LOAD-01, D-144). Every test here
+// opens its pages with the loader's inline script emptied (withoutLoader),
+// as a blocked script leaves them, so the home page shows no cover, as with
+// calm mode or reduced motion; a test that opens a tab of its own gets the
+// cover.
+test.beforeEach(async ({ page }) => {
+  await withoutLoader(page);
+});
 
 test.describe("without JavaScript", () => {
   test.use({ javaScriptEnabled: false });
@@ -75,7 +97,94 @@ test("REQ-CNT-02 /work loads no three.js and no engine code", async ({
   }
 });
 
-test("REQ-NAV-01 See the work is in view from the first frame and reaches /work in one click", async ({
+test("REQ-NAV-01 REQ-LOAD-01 on every load of the home page, See the work and Skip intro are reachable once the cover lifts, and nothing on the cover reaches them sooner", async ({
+  context,
+}) => {
+  test.setTimeout(LIFT_TIMEOUT_MS + 30_000);
+  // A tab of its own, whose pages keep the loader's script.
+  const tab = await context.newPage();
+  // The engine is held until the cover has been tried, so it is still up.
+  const engine = await holdEngine(tab, "hold");
+  try {
+    await tab.goto("/", { waitUntil: "domcontentloaded" });
+    const links = [HERO.primaryAction, HERO.cornerControl].map((name) =>
+      tab.getByRole("link", { name, exact: true }),
+    );
+    await expect(tab.locator(COVER)).toHaveAttribute("data-loader-owned", "");
+    for (const link of links) {
+      expect(await reachOf(link)).toEqual({
+        inert: true,
+        underCover: true,
+        hit: false,
+      });
+      const box = await boxOf(link);
+      await tab.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    }
+    for (const key of ["Tab", "Enter", "Tab", "Enter"]) {
+      await tab.keyboard.press(key);
+    }
+    await expect(tab).toHaveURL(/\/$/);
+    await expect(tab.locator("html")).toHaveAttribute(LOADER_ATTRIBUTE, "up");
+
+    engine.release();
+    await waitForLift(tab);
+    for (const link of links) {
+      await expect(link).toBeInViewport({
+        ratio: 1,
+        timeout: FIRST_FRAME_MS,
+      });
+      expect(await reachOf(link)).toEqual({
+        inert: false,
+        underCover: false,
+        hit: true,
+      });
+    }
+    await links[0]?.click();
+    await expect(tab).toHaveURL(/\/work$/);
+    await expect(tab.getByRole("heading", { level: 1 })).toHaveText(
+      pages.work.title,
+    );
+  } finally {
+    engine.release();
+    await tab.close();
+  }
+});
+
+for (const route of ROUTES.filter(({ path }) => path !== "/")) {
+  test(`REQ-NAV-01 REQ-LOAD-01 a load of ${route.path} shows no cover, and the bar's links are reachable from the first frame`, async ({
+    context,
+  }) => {
+    const tab = await context.newPage();
+    try {
+      await tab.goto(route.path, { waitUntil: "domcontentloaded" });
+      await expect(tab.locator(COVER)).toHaveCount(0);
+      await expect(tab.locator("html")).toHaveAttribute(
+        LOADER_OFF_ATTRIBUTE,
+        "route",
+      );
+      for (const link of [
+        tab.getByRole("link", { name: "T7SEN, home", exact: true }),
+        tab
+          .getByRole("navigation", { name: "Site controls" })
+          .getByRole("link", { name: "Work", exact: true }),
+      ]) {
+        await expect(link).toBeInViewport({
+          ratio: 1,
+          timeout: FIRST_FRAME_MS,
+        });
+        expect(await reachOf(link)).toEqual({
+          inert: false,
+          underCover: false,
+          hit: true,
+        });
+      }
+    } finally {
+      await tab.close();
+    }
+  });
+}
+
+test("REQ-NAV-01 on the home page with no cover (the loader's script emptied, as a blocked script leaves it), See the work is in view from the first frame and reaches /work in one click", async ({
   page,
 }) => {
   // As soon as the HTML is parsed, before load or idle; the short timeout
@@ -102,7 +211,7 @@ test.describe("on a short phone screen", () => {
   // A 375 by 667 phone with its browser bars showing leaves about 548 px.
   test.use({ viewport: { width: 375, height: 548 } });
 
-  test("REQ-NAV-01 See the work and Skip intro are both in view from the first frame", async ({
+  test("REQ-NAV-01 on the home page with no cover (the loader's script emptied), See the work and Skip intro are both in view from the first frame", async ({
     page,
   }) => {
     await page.goto("/", { waitUntil: "domcontentloaded" });
@@ -114,7 +223,7 @@ test.describe("on a short phone screen", () => {
   });
 });
 
-test("REQ-NAV-01 Skip intro is in view from the first frame and moves to the work section in one click", async ({
+test("REQ-NAV-01 on the home page with no cover (the loader's script emptied), Skip intro is in view from the first frame and moves to the work section in one click", async ({
   page,
 }) => {
   await page.goto("/", { waitUntil: "domcontentloaded" });

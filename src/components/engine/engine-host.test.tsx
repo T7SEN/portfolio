@@ -10,6 +10,7 @@ import type {
   EngineOptions,
 } from "@/engine/types";
 import { calmStore, createCalmStore } from "@/lib/calm-store";
+import { loaderStore } from "@/lib/loader-store";
 import { createStoryBridge, storyBridge } from "@/lib/story-bridge";
 import { tierStore } from "@/lib/tier-store";
 
@@ -97,6 +98,7 @@ function createFakeEngine(host: HTMLElement, options?: EngineOptions) {
     setStory: vi.fn(),
     setStage: vi.fn(),
     setPasses: vi.fn(),
+    setSky: vi.fn(),
     setPointer: vi.fn(),
     setCalm: vi.fn(),
     on: (listener) => {
@@ -172,6 +174,7 @@ beforeEach(() => {
 
 afterEach(() => {
   tierStore.reset();
+  loaderStore.reset();
   storyBridge.reset();
   mocks.setSystemCalm(false);
   calmStore.setChosen(false);
@@ -346,6 +349,7 @@ describe("engine session", () => {
       setStory: vi.fn(),
       setStage: vi.fn(),
       setPasses: vi.fn(),
+      setSky: vi.fn(),
       setPointer: vi.fn(),
       setVeil: vi.fn(),
     };
@@ -512,6 +516,119 @@ describe("engine session", () => {
     expect(names).toEqual(["data-fps", "data-fps"]);
     expect(wrapper.dataset.fps).toBe("60");
     expect(storeListener).not.toHaveBeenCalled();
+  });
+
+  describe("the loader's steps", () => {
+    function fakeLoader() {
+      const calls: string[] = [];
+      return {
+        calls,
+        engineLoaded: vi.fn(() => {
+          calls.push("engineLoaded");
+        }),
+        apply: vi.fn((event: EngineEvent) => {
+          calls.push(event.type);
+        }),
+        reset: vi.fn(() => {
+          calls.push("reset");
+        }),
+      };
+    }
+
+    function setUpWith(loader: ReturnType<typeof fakeLoader>) {
+      const wrapper = document.createElement("div");
+      const host = document.createElement("div");
+      const session = createEngineSession(wrapper, host, {
+        calm: fakeCalm().store,
+        bridge: createStoryBridge(),
+        loader,
+      });
+      return { session };
+    }
+
+    it("REQ-LOAD-01 REQ-PERF-04 hears nothing before first content: the engine loads when it did before the loader", async () => {
+      const loader = fakeLoader();
+      let enginesAtLoad = -1;
+      loader.engineLoaded.mockImplementation(() => {
+        enginesAtLoad = engines.length;
+      });
+      const { session } = setUpWith(loader);
+      session.request();
+      expect(loader.calls).toEqual([]);
+      expect(mocks.loadEngine).not.toHaveBeenCalled();
+
+      await passFirstContent();
+      expect(mocks.loadEngine).toHaveBeenCalledTimes(1);
+      // Step 1 ends once the module has loaded, before the engine exists.
+      expect(loader.engineLoaded).toHaveBeenCalledTimes(1);
+      expect(enginesAtLoad).toBe(0);
+      expect(engines).toHaveLength(1);
+    });
+
+    it("REQ-LOAD-01 passes every engine event but the frame rate", async () => {
+      const loader = fakeLoader();
+      const { session } = setUpWith(loader);
+      session.request();
+      await passFirstContent();
+
+      const events: EngineEvent[] = [
+        { type: "rendererStarted", backend: "webgpu" },
+        { type: "probeStarted", durationMs: 2000 },
+        { type: "frameRate", fps: 60 },
+        { type: "tierChosen", tier: 1, reason: "probe-pass" },
+        { type: "ready", tier: 1, particles: 1_000_000, look: "halftone" },
+      ];
+      for (const event of events) engines[0]?.emit(event);
+
+      expect(loader.apply.mock.calls.map(([event]) => event)).toEqual(
+        events.filter((event) => event.type !== "frameRate"),
+      );
+    });
+
+    it("REQ-LOAD-01 REQ-ENG-08 an engine module that fails to load reaches the loader as tier 3, with no step 1", async () => {
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      mocks.loadEngine.mockRejectedValue(new Error("chunk failed"));
+      const loader = fakeLoader();
+      const { session } = setUpWith(loader);
+      session.request();
+      await passFirstContent();
+
+      expect(loader.engineLoaded).not.toHaveBeenCalled();
+      expect(loader.apply.mock.calls.map(([event]) => event)).toEqual([
+        { type: "tierChosen", tier: 3, reason: "no-backend" },
+        { type: "ready", tier: 3, particles: 0 },
+      ]);
+    });
+
+    it("REQ-LOAD-01 REQ-ENG-07 dispose resets the loader and passes it nothing more", async () => {
+      const loader = fakeLoader();
+      const { session } = setUpWith(loader);
+      session.request();
+      await passFirstContent();
+      const engine = engines[0];
+      await session.dispose();
+      expect(loader.reset).toHaveBeenCalledTimes(1);
+
+      engine?.emit({ type: "tierChosen", tier: 2, reason: "phone" });
+      expect(loader.apply).not.toHaveBeenCalled();
+    });
+
+    it("REQ-LOAD-01 the real loader store follows a session's events", async () => {
+      const { session } = setUp();
+      session.request();
+      await passFirstContent();
+      expect(loaderStore.getSnapshot()).toMatchObject({ done: 1, step: 2 });
+
+      engines[0]?.emit({ type: "rendererStarted", backend: "webgl2" });
+      engines[0]?.emit({ type: "tierChosen", tier: 2, reason: "phone" });
+      engines[0]?.emit({ type: "ready", tier: 2, particles: 100_000 });
+      expect(loaderStore.getSnapshot()).toMatchObject({
+        done: 4,
+        test: "skipped",
+        outcome: "field",
+        particles: 100_000,
+      });
+    });
   });
 
   it("REQ-ENG-08 a failed import becomes tier 3 with the reason no-backend, and ready", async () => {

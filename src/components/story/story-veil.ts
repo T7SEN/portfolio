@@ -1,3 +1,4 @@
+import type { ChapterId } from "@/engine/types";
 import { colors } from "@/tokens/colors";
 
 // The veil over the field is two layers. The wrapper's veil, a void layer
@@ -27,6 +28,37 @@ export const VEIL_OPEN = 0.35;
  * layers let through (1 - a)(1 - b) of the field.
  */
 export const PLATE_ALPHA = 1 - (1 - VEIL_TEXT) / (1 - VEIL_OPEN);
+/**
+ * The veil over the contact chapter's sky (D-146): open, so the real stars
+ * show at their own light where no text is [T7SEN, 14 Nov 2026]. The plates
+ * darken to match, so text keeps VEIL_TEXT_SKY.
+ */
+export const VEIL_SKY = 0;
+/**
+ * What text keeps behind it over the sky. More than VEIL_TEXT: the sky's
+ * brightest stars are white points, brighter than any formation's cells,
+ * and one under muted text read 4.47 to 1 through 0.8 at gate run 1.
+ */
+export const VEIL_TEXT_SKY = 0.85;
+/** A plate's own opacity while the sky's veil is open: over it, VEIL_TEXT_SKY. */
+export const PLATE_ALPHA_SKY = 1 - (1 - VEIL_TEXT_SKY) / (1 - VEIL_SKY);
+/**
+ * How long the field's veil takes to fade to a new strength, ms
+ * (engine-host.tsx). Plates that lighten wait for it, so text never sits on
+ * less than VEIL_TEXT while the veil closes.
+ */
+export const VEIL_FADE_MS = 700;
+
+/** The open veil and the plates' own opacity for the chapter in view. */
+export function veilFor(chapter: ChapterId | null): {
+  veil: number;
+  plate: number;
+} {
+  return chapter === "contact"
+    ? { veil: VEIL_SKY, plate: PLATE_ALPHA_SKY }
+    : { veil: VEIL_OPEN, plate: PLATE_ALPHA };
+}
+
 /**
  * The veil behind the hero's eyebrow: violet capitals at 13 px, the faintest
  * text on the page (5.08 to 1 on the void), which the hero's dot glides past
@@ -189,9 +221,12 @@ export function plates(
   return blocks;
 }
 
-/** The plate colour: the void token at PLATE_ALPHA. */
+/**
+ * The plate colour: the void token at the plate layer's --plate-alpha, which
+ * the story sets for the chapter in view (veilFor), PLATE_ALPHA without it.
+ */
 export function plateColour(): string {
   const hex = colors.void.slice(1);
   const channel = (index: number) => parseInt(hex.slice(index, index + 2), 16);
-  return `rgb(${channel(0)} ${channel(2)} ${channel(4)} / ${PLATE_ALPHA.toFixed(4)})`;
+  return `rgb(${channel(0)} ${channel(2)} ${channel(4)} / var(--plate-alpha, ${PLATE_ALPHA.toFixed(4)}))`;
 }

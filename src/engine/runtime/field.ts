@@ -199,7 +199,7 @@ export function createField(
     .oneMinus();
 
   // The particle's own values from the simulation: rim, layer, line, form,
-  // whether it streams on a flow line and how far the lines have taken over
+  // the sky's gain, whether it streams on a flow line and how far the lines have taken over
   // (simulation.ts look). They read the atlas by the instance index, so
   // they are worked out in the vertex stage and carried to the fragments.
   const traits = simulation.look(seed);
@@ -221,10 +221,13 @@ export function createField(
     .oneMinus()
     .mul(backdrop)
     .add(isFlow.mul(flowIn.oneMinus()));
+  // The contact sky's gain (simulation.ts look): a star's light by its
+  // magnitude, a line's shown light, the dust dimmed between; 1 elsewhere.
   const share = traits.form
     .mul(light)
     .add(traits.form.oneMinus().mul(free))
-    .add(traits.line.mul(LINE_GAIN));
+    .add(traits.line.mul(LINE_GAIN))
+    .mul(traits.gain);
   const weight = share.mul(released).mul(arrived).mul(flight);
 
   // The drawn place: formed particles carried by the stage follow's offset,

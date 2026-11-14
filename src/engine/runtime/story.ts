@@ -1,10 +1,12 @@
 // The chapters' choreography as numbers: which targets the field is pulled
 // to, how strongly, and where the camera sits, for a chapter and how far
-// through it the page is; and the ambient flow lines, the about strands and
-// the contact rings the simulation draws. No three.js here, so it is unit
+// through it the page is; and the ambient flow lines and the about strands
+// the simulation draws, and the contact sky's shares (its stars come from
+// ../sky, D-146). No three.js here, so it is unit
 // tested in Node; the runtime turns these numbers into uniforms, and
 // simulation.ts mirrors the per-particle rules below in TSL.
 
+import { skyGather } from "../sky/sky";
 import { STEP_EDGE, WORK_SHAPES, workStep, type ShapeId } from "../story";
 import type { ChapterId, Stage, Stages } from "../types";
 
@@ -23,7 +25,7 @@ export interface StoryTargets {
   shapeMix: number;
   /**
    * Weights of the four formations: a sampled shape, the making-of sheet,
-   * the about strands and the contact rings. What they leave goes to the
+   * the about strands and the contact sky (D-146). What they leave goes to the
    * ambient field, and at most one of them is above 0. No chapter forms the
    * sheet since the making-of forms the T7 mark in its middle pass card;
    * the simulation keeps it.
@@ -31,7 +33,7 @@ export interface StoryTargets {
   shape: number;
   sheet: number;
   strands: number;
-  rings: number;
+  sky: number;
   /**
    * The share of the flow lines' particles that keep streaming while a
    * formation holds, so the lines still run round it. Only lines that may
@@ -60,7 +62,7 @@ export const AMBIENT: StoryTargets = {
   shape: 0,
   sheet: 0,
   strands: 0,
-  rings: 0,
+  sky: 0,
   keep: 0,
   noise: 1,
   push: 0,
@@ -103,8 +105,8 @@ const WORDMARK_GONE = BLOOM_AT.gone;
 /** While the wordmark forms, this share of the lines keeps running round it. */
 export const BLOOM_KEEP = 0.5;
 // About: the strands take the first quarter to gather and let go from 0.85,
-// so the next chapter starts from the flow. Contact gathers its rings the
-// same way and keeps them to the end of the page. The about chapter is as
+// so the next chapter starts from the flow. The contact sky gathers the
+// same way and holds to the end of the page. The about chapter is as
 // tall as its content, about a screen or a little more, so the strands are
 // whole just as the room above its heading reaches the top of the screen,
 // where they draw.
@@ -115,8 +117,8 @@ const FORM_OUT = 0.85;
 // formation while one shape morphs into the next, so the move reads as one
 // shape turning into another.
 const STEP_DIP = 0.55;
-// The contact field rests: its drift is gentler than the ambient flow's.
-const CONTACT_NOISE = 0.6;
+// The contact sky holds still: its stars drift far less than the flow does.
+export const SKY_NOISE = 0.15;
 
 /**
  * The middle of the mark's hold, as progress through the field chapter: the
@@ -271,8 +273,8 @@ export function chapterTargets(
     case "contact":
       return {
         ...AMBIENT,
-        rings: smoothstep(0, FORM_IN, at),
-        noise: CONTACT_NOISE,
+        sky: skyGather(at),
+        noise: SKY_NOISE,
       };
   }
 }
@@ -283,7 +285,7 @@ export function chapterTargets(
  * wherever the scroll happened to be when it began: the dot, the whole
  * wordmark, each study's shape whole, the mark in the middle pass card (the
  * ambient flow when calm shows no card in the middle, stagedTargets), the
- * strands, the rings.
+ * strands, the sky.
  */
 export function calmProgress(chapter: ChapterId, progress: number): number {
   switch (chapter) {
@@ -355,7 +357,7 @@ export function fitScale(extent: ShapeExtent, frame: Frame): number {
   );
 }
 
-/** The shorter half of a frame: lines, strands and rings scale with it. */
+/** The shorter half of a frame: lines and strands scale with it. */
 export function shortHalf(frame: Frame): number {
   return Math.min(frame.halfWidth, frame.halfHeight);
 }
@@ -537,9 +539,9 @@ export function orbitAxes(frame: Frame): { a: number; b: number } {
  * place. simulation.ts uses the same mixes.
  */
 export const TRAITS = {
-  /** Flow line or backdrop, and which line, strand or ring. */
+  /** Flow line or backdrop, and which line or strand. */
   pick: [37.31, 91.17, 13.73],
-  /** Where along its line, strand or ring. */
+  /** Where along its line or strand. */
   along: [53.93, 11.07, 17.29],
   /** Two halves of the offset across a line, added for a peaked spread. */
   acrossA: [3.17, 71.37, 29.11],
@@ -548,6 +550,10 @@ export const TRAITS = {
   keep: [7.93, 23.31, 61.71],
   /** When it leaves a pass card in the making-of's stream (streamShare). */
   leave: [41.27, 5.39, 97.13],
+  /** Star, constellation line or dust in the contact sky (SKY_STAR_SHARE). */
+  sky: [29.37, 67.19, 83.41],
+  /** The start of its seeded picks of a star or a line (SKY_STAR_TRIES). */
+  skyTry: [61.13, 17.57, 47.83],
 } as const;
 
 export function trait(
@@ -753,40 +759,30 @@ export function strandsBand(frame: Frame): {
   };
 }
 
-// The contact rings (phase P3.5): thin dotted circles round the contact
-// stage, very faint, fainter outward. The home preview draws them 600, 880
-// and 1,160 px across on a 900 px screen, at 40, 24 and 12 per cent of the
-// accent; measured in the frame's shorter half, so a phone keeps them round
-// its panel instead of past the screen.
+// The contact sky (D-146): the real sky over AlUla, its stars' places
+// worked out on the CPU each frame (../sky/sky.ts) and read by the
+// simulation from a texture. Each particle's share of it comes from its own
+// seed (TRAITS.sky): a star, a constellation line, or the faint dust between.
 
-export interface ContactRing {
-  share: number;
-  light: number;
-  /** As a share of the frame's shorter half. */
-  radius: number;
-}
-
-export const RINGS: readonly ContactRing[] = [
-  { share: 0.42, light: 1, radius: 0.667 },
-  { share: 0.34, light: 0.6, radius: 0.978 },
-  { share: 0.24, light: 0.3, radius: 1.289 },
-];
-/** Half a ring's thickness, as a share of the frame's shorter half. */
-export const RING_THICKNESS = 0.005;
-/** How fast the rings turn, in radians per second. */
-export const RINGS_SPEED = 0.03;
+/** Particles with a sky pick below this are stars. */
+export const SKY_STAR_SHARE = 0.6;
+/** Below this and at or past SKY_STAR_SHARE, constellation lines. */
+export const SKY_FORMED_SHARE = 0.86;
 /**
- * The rings count at this share of their area when the light is set, so
- * they read as very faint thin lines, as the preview draws them at 40, 24
- * and 12 per cent of the accent. A ring's light per cell follows this times
- * its thickness: at 0.4 and 0.01 they were bright dotted circles.
+ * Seeded picks a particle tries before it keeps the first star or line in
+ * view; each pick is the same on every frame, so a particle stays with its
+ * star as the sky turns and none jump when a star rises or sets.
  */
-export const RINGS_FAINT = 0.3;
-
-/** Each ring's radius in world units. */
-export function ringRadii(frame: Frame): number[] {
-  return RINGS.map((ring) => ring.radius * shortHalf(frame));
-}
+export const SKY_STAR_TRIES = 8;
+export const SKY_LINE_TRIES = 12;
+/**
+ * The share of the frame the sky's light counts as covering when the light
+ * is set: its stars are points of a cell or two, so the fill lands bright on
+ * them instead of spread over the frame.
+ */
+export const SKY_AREA = 0.12;
+/** How much the particles outside the sky dim while it holds: a faint dust. */
+export const SKY_DIM = 0.85;
 
 /**
  * A formation packs its particles into part of the frame, so each one must
@@ -814,14 +810,6 @@ function strandsArea(frame: Frame): number {
   return area;
 }
 
-function ringsArea(frame: Frame): number {
-  const thickness = 2 * RING_THICKNESS * shortHalf(frame);
-  return ringRadii(frame).reduce(
-    (sum, radius) => sum + 2 * Math.PI * radius * thickness,
-    0,
-  );
-}
-
 /**
  * The share of the frame a formation covers for the particles that form
  * it. shapeFrame is the part of the frame the shapes are fitted to: the
@@ -842,13 +830,13 @@ export function formedArea(
     targets.shapeMix * lightArea(to) * fitScale(to, shapeFrame) ** 2;
   const sheetArea = SHEET_FIT * SHEET_FIT * frameArea;
 
-  const form = targets.shape + targets.sheet + targets.strands + targets.rings;
+  const form = targets.shape + targets.sheet + targets.strands + targets.sky;
   if (form <= 0) return 1;
   const area =
     (targets.shape * shapeArea +
       targets.sheet * sheetArea +
       targets.strands * strandsArea(frame) * STRANDS_LIT +
-      targets.rings * ringsArea(frame) * RINGS_FAINT) /
+      targets.sky * SKY_AREA * frameArea) /
     form;
   const formedShare = 1 - KEPT_SHARE * unit(targets.keep);
   return Math.min(area / (formedShare * frameArea), 1);
@@ -862,7 +850,7 @@ export function formedLight(
   shapeFrame: Frame = frame,
 ): number {
   const form = Math.min(
-    targets.shape + targets.sheet + targets.strands + targets.rings,
+    targets.shape + targets.sheet + targets.strands + targets.sky,
     1,
   );
   const packed = Math.min(
@@ -982,8 +970,8 @@ export function glideStage(
  * forms in its bloom stage for the frame's width over height;
  * study shapes form inside the work stage, the frame of the row in view;
  * the making-of's mark forms inside its stage, the middle pass card's face;
- * the contact rings centre on the contact stage; everything else uses the
- * whole screen.
+ * everything else uses the whole screen, the contact sky too, which places
+ * its stars on its own band (D-146).
  */
 export function formationStage(
   chapter: ChapterId | null,
@@ -997,8 +985,6 @@ export function formationStage(
       return stages.work;
     case "making-of":
       return stages["making-of"];
-    case "contact":
-      return stages.contact;
     default:
       return undefined;
   }

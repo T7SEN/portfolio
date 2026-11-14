@@ -58,7 +58,7 @@ export const story = {
     about:
       "Where your device draws the field live, three thin strands of light, one bright and two faint, wave slowly across the full width of the screen.",
     contact:
-      "Where your device draws the field live, the light settles into faint concentric rings behind the contact panel.",
+      "Where your device draws the field live, the light becomes the stars over AlUla as they stand now, real stars behind the contact panel.",
   },
   labels: {
     bloom: { number: "01", name: "Field" },

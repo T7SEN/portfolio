@@ -188,27 +188,20 @@ describe("the stages that keep one place", () => {
     expect(measureLayout(root, view()).stages.hero?.y).toBe(-0.9);
   });
 
-  it("REQ-SCR-01 the contact panel is where the screen shows it at the page's end, where the rings wait for it", () => {
+  it("REQ-SCR-01 D-146 the contact panel sends no stage: the sky has its own band", () => {
     const { stages } = measureLayout(root, view(1200));
-    // The page ends at 5,000 px: scrolled to 4,200 the panel shows from 500
-    // to 750 px down the screen.
-    expect(stages.contact?.x).toBeCloseTo((600 + 1192) / WIDTH - 1, 9);
-    expect(stages.contact?.y).toBeCloseTo(1 - (500 + 750) / HEIGHT, 9);
-    expect(stages.contact?.halfWidth).toBeCloseTo(592 / WIDTH, 9);
-    expect(stages.contact?.halfHeight).toBeCloseTo(250 / HEIGHT, 9);
+    expect(stages).not.toHaveProperty("contact");
   });
 
-  it("REQ-SCR-01 a page without the dot or the panel, or one not laid out, sends no stage for them", () => {
+  it("REQ-SCR-01 a page without the dot, or one not laid out, sends no stage for it", () => {
     place(root.querySelector('[data-stage="dot"]')!, {
       top: 0,
       bottom: 0,
       left: 0,
       right: 0,
     });
-    root.querySelector('[data-stage="contact"]')?.remove();
     const { stages } = measureLayout(root, view());
     expect(stages).not.toHaveProperty("hero");
-    expect(stages).not.toHaveProperty("contact");
   });
 
   it("REQ-SCR-01 REQ-I18N-01 a layout read right to left gives mirrored stages, with nothing to swap", () => {
@@ -217,7 +210,6 @@ describe("the stages that keep one place", () => {
     const rtl = measureLayout(root, view()).stages;
     expect(rtl.hero?.x).toBeCloseTo(-(ltr.hero?.x ?? 0), 9);
     expect(rtl.hero?.y).toBeCloseTo(ltr.hero?.y ?? 0, 9);
-    expect(rtl.contact?.x).toBeCloseTo(-(ltr.contact?.x ?? 0), 9);
     const at = { position: 2500, height: HEIGHT, row: 0, calm: false };
     layOut(false);
     const left = workStage(measureLayout(root, view()), at);
@@ -342,6 +334,26 @@ describe("the page's text, for the plates", () => {
         <p id="free">Free words</p>
       </section>`;
     for (const id of ["label", "note", "free"]) {
+      place(root.querySelector(`#${id}`)!, {
+        top: 10,
+        bottom: 30,
+        left: 0,
+        right: 200,
+      });
+    }
+
+    const { lines } = measureLayout(root, view(0));
+    expect(lines).toEqual([{ top: 10, bottom: 30, left: 0, right: 200 }]);
+  });
+
+  it("REQ-A11Y-06 D-146 text that is not the page's own, the loader's label and the sky's name, adds no line", () => {
+    root.innerHTML = `
+      <div data-plate="none"><p id="cover">Field ready</p></div>
+      <section data-chapter="contact">
+        <div data-plate="none"><span id="name">Orion</span></div>
+        <p id="free">Free words</p>
+      </section>`;
+    for (const id of ["cover", "name", "free"]) {
       place(root.querySelector(`#${id}`)!, {
         top: 10,
         bottom: 30,

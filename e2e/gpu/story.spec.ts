@@ -12,20 +12,19 @@ import {
 } from "../../src/engine/runtime/halftone-rules";
 import {
   BLOOM_MARK_AT,
-  RINGS,
   bloomStage,
   calmProgress,
   fitScale,
   stagedFrame,
   strandsBand,
 } from "../../src/engine/runtime/story";
+import { skyFrame } from "../../src/engine/sky/sky";
 import { median, percentile } from "../../src/engine/tier/probe";
 import type { ChapterId, Stage } from "../../src/engine/types";
 import { PASS_MEDIAN_MS, readSurface, watchErrors } from "./frame-times";
 import {
   cellStats,
   pixelStats,
-  ringShare,
   type Box,
   type CellStats,
   type Lattice,
@@ -121,8 +120,6 @@ interface Case {
   share?: number;
   /** A box the solid hero dot fills. */
   core?: Box;
-  /** The contact rings, round the frame's centre. */
-  rings?: boolean;
   /** A formation that must stay clear of the frame's side edges. */
   inFrame: boolean;
 }
@@ -238,11 +235,19 @@ function casesFor(width: number, height: number): Case[] {
       inFrame: false,
     },
     {
-      name: "contact 0.5: the rings round the centre",
+      // The sky over AlUla (D-146), its horizon on the sky band (sky.ts
+      // skyFrame); a dot's antialiasing may reach just under it.
+      name: "contact 0.5: the sky above the horizon",
       chapter: "contact",
       progress: 0.5,
-      rings: true,
-      // The outer ring passes the top and bottom of a landscape frame.
+      inside: {
+        x: 0,
+        y: 0,
+        width,
+        height: skyFrame(width, height).horizon + 12,
+      },
+      share: 0.9,
+      // The sky runs across the whole width by design.
       inFrame: false,
     },
   ];
@@ -251,10 +256,6 @@ function casesFor(width: number, height: number): Case[] {
 // A formation inside the frame leaves the outer columns dark.
 const EDGE_PX = 6;
 const EDGE_LIT = 0.002;
-// A ring is 1 per cent of the shorter half thick each side; its dots snap
-// to the lattice and sit at slightly different depths.
-const RING_BAND_PX = 16;
-const RINGS_SHARE = 0.9;
 
 /** Captures the host and measures where its light is. */
 async function frameOf(
@@ -279,24 +280,13 @@ async function frameOf(
     { x: 0, y: 0, width: EDGE_PX, height },
     { x: width - EDGE_PX, y: 0, width: EDGE_PX, height },
   ]);
-  const rings =
-    entry.rings === true
-      ? await ringShare(page, png, {
-          x: width / 2,
-          y: height / 2,
-          radii: RINGS.map(
-            (ring) => (ring.radius * Math.min(width, height)) / 2,
-          ),
-          band: RING_BAND_PX,
-        })
-      : null;
   const cells = await cellStats(page, png, latticeOf(width, height));
   const litWhole = whole.litShare * whole.pixels;
   const share =
     inside === null || litWhole === 0
       ? 0
       : (inside.litShare * inside.pixels) / litWhole;
-  return { whole, inside, core, sides, rings, cells, litWhole, share };
+  return { whole, inside, core, sides, cells, litWhole, share };
 }
 
 type Measured = Awaited<ReturnType<typeof frameOf>>;
@@ -314,8 +304,7 @@ function cellText(cells: CellStats): string {
 }
 
 function measuredText(entry: Case, measured: Measured): string {
-  const { whole, inside, core, sides, rings, cells, litWhole, share } =
-    measured;
+  const { whole, inside, core, sides, cells, litWhole, share } = measured;
   return (
     `${entry.name}: lit pixels ${Math.round(litWhole)}` +
     (inside === null || entry.inside === undefined
@@ -324,9 +313,6 @@ function measuredText(entry: Case, measured: Measured): string {
         `${Math.round(entry.inside.width)} x ${Math.round(entry.inside.height)}, ` +
         `lit share inside ${inside.litShare.toFixed(4)}`) +
     (core === null ? "" : `, core lit share ${core.litShare.toFixed(4)}`) +
-    (rings === null
-      ? ""
-      : `, ${(rings.share * 100).toFixed(1)}% of the light on the rings`) +
     `, at the side edges ${sides.litShare.toFixed(4)}, brightest pixel ${whole.brightest} ` +
     `(${whole.maxLuminance.toFixed(4)}); ${cellText(cells)}`
   );
@@ -349,7 +335,7 @@ function expectNoBurn(name: string, cells: CellStats) {
 }
 
 function expectFrame(entry: Case, measured: Measured) {
-  const { inside, core, sides, rings, cells, litWhole, share } = measured;
+  const { inside, core, sides, cells, litWhole, share } = measured;
   expect(litWhole, `${entry.name}: something is drawn`).toBeGreaterThan(50);
   if (inside !== null && entry.share !== undefined) {
     expect(
@@ -367,12 +353,6 @@ function expectFrame(entry: Case, measured: Measured) {
       core.litShare,
       `${entry.name}: the solid dot is at the centre`,
     ).toBeGreaterThan(0.9);
-  }
-  if (rings !== null) {
-    expect(
-      rings.share,
-      `${entry.name}: the light lies on the three rings`,
-    ).toBeGreaterThan(RINGS_SHARE);
   }
   if (entry.inFrame) {
     expect(

@@ -77,7 +77,9 @@
      the veil's plate exactly (story-veil.ts), the void at PLATE_ALPHA, so
      over the open veil of 0.35 the field behind the words is at 0.8, with
      the plates' 80 px soft edge. A unit test holds these numbers to
-     VEIL_TEXT, VEIL_OPEN and PLATE_SOFT. */
+     VEIL_TEXT, VEIL_OPEN and PLATE_SOFT. On tier 3 the wordmark still sets
+     it to VEIL_TEXT on its own, having no open veil under it
+     (field-still.tsx, D-143). */
   [data-part="own-plate"] {
     --plate: color-mix(
       in srgb,
@@ -101,6 +103,61 @@
     background: var(--plate);
     border-radius: 8px;
     box-shadow: 0 0 16px 8px var(--plate);
+  }
+
+  /* The home page's loader cover (components/loader/loader-cover.tsx). It
+     shows only while the html element is marked "up": by the inline script
+     in the root layout on a full load, or by the island for a cover after a
+     move inside the site. So with scripts off, or a script that never ran,
+     no cover shows (REQ-CNT-01, REQ-LOAD-01). Until the island takes it
+     over (data-loader-owned), OS reduced motion hides it too, and a
+     failsafe hides it once the time limit and its margin have passed since
+     the rule first applied, on the first paint or when the island inserts
+     a cover: LIFT_LIMIT_MS and FAILSAFE_MARGIN_MS, 11 s in all (a unit test
+     holds the figure to them). */
+  [data-loader-cover] {
+    display: none;
+  }
+
+  html[data-loader="up"] [data-loader-cover] {
+    display: block;
+    animation: loader-failsafe 0.3s ease-out 11s forwards;
+  }
+
+  html[data-loader="up"] [data-loader-cover][data-loader-owned] {
+    animation: none;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html[data-loader="up"] [data-loader-cover]:not([data-loader-owned]) {
+      display: none;
+    }
+  }
+
+  /* The label fades in over the entrance's last 0.3 s (ENTRANCE_MS). */
+  [data-loader-cover] [data-part="loader-label"] {
+    animation: loader-label-in 0.3s ease-out 0.7s backwards;
+  }
+
+  /* Calm mode and reduced motion: a 0.3 s fade replaces the exit
+     (CALM_FADE_MS). It stays a fade under the reduced motion rule below,
+     which would otherwise end it at once. */
+  [data-loader-cover][data-loader-state="leaving"][data-loader-exit="fade"] {
+    opacity: 0;
+    transition: opacity 0.3s ease-out !important;
+  }
+
+  @keyframes loader-failsafe {
+    to {
+      opacity: 0;
+      visibility: hidden;
+    }
+  }
+
+  @keyframes loader-label-in {
+    from {
+      opacity: 0;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {

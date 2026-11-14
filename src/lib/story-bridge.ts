@@ -3,17 +3,18 @@ import type {
   Engine,
   PassCard,
   Point,
+  SkyView,
   Stages,
 } from "@/engine/types";
 
 /**
- * What the page drives: the engine's story, stage, passes and pointer
+ * What the page drives: the engine's story, stage, passes, sky and pointer
  * commands, and the veil, which the engine session lays over the field (it
  * never reaches the engine). A veil of null is the session's own default.
  */
 export type StoryTarget = Pick<
   Engine,
-  "setStory" | "setStage" | "setPasses" | "setPointer"
+  "setStory" | "setStage" | "setPasses" | "setSky" | "setPointer"
 > & {
   setVeil(veil: number | null): void;
 };
@@ -31,6 +32,11 @@ export type StoryBridge = {
    * none. A card with a corner that is not a finite number is left out.
    */
   setPasses(cards: readonly PassCard[] | null): void;
+  /**
+   * The contact sky as the page sees it (D-147), null when the chapter is
+   * away. A view whose moment or turn is not a finite number is dropped.
+   */
+  setSky(view: SkyView | null): void;
   /** Normalised device coordinates, -1 to 1 on both axes, y up. */
   setPointer(x: number, y: number, active: boolean): void;
   /** The veil's strength over the field, 0 to 1; null for the default. */
@@ -73,11 +79,44 @@ function cleanCards(
 // different times and never import each other. This plain object sits
 // between them and keeps only the latest values, the way the engine itself
 // keeps them (engine-webgpu-tsl.md section 7).
+// A sky view with a moment, turn and tilt that are numbers, its reveals
+// clamped to 0 to 1; null for anything else.
+function cleanTrace(trace: SkyView["trace"]): SkyView["trace"] {
+  if (trace === null) return null;
+  const { constellation, done, partial, flash } = trace;
+  if (!Number.isInteger(constellation) || constellation < 0) return null;
+  if (!Number.isFinite(done) || !Number.isFinite(flash)) return null;
+  return {
+    constellation,
+    done: Math.max(0, Math.floor(done)),
+    partial: unit(partial),
+    flash: Math.max(0, flash),
+  };
+}
+
+function cleanSky(view: SkyView | null): SkyView | null {
+  if (view === null) return null;
+  if (![view.at, view.turn, view.tilt].every(Number.isFinite)) return null;
+  return {
+    at: view.at,
+    turn: view.turn,
+    tilt: view.tilt,
+    horizon:
+      view.horizon !== null && Number.isFinite(view.horizon)
+        ? view.horizon
+        : null,
+    reveal: view.reveal.map(unit),
+    trace: cleanTrace(view.trace),
+  };
+}
+
 export function createStoryBridge(): StoryBridge {
   let story: StoryState | null = null;
   let stages: Stages | null = null;
   // Undefined until the page sends cards; null once it says there are none.
   let passes: readonly PassCard[] | null | undefined;
+  // Undefined until the page sends a sky; null once it says it is away.
+  let sky: SkyView | null | undefined;
   let pointer: PointerState | null = null;
   // Undefined until the page sends one; null is a sent default.
   let veil: number | null | undefined;
@@ -99,6 +138,11 @@ export function createStoryBridge(): StoryBridge {
       target?.setPasses(passes);
     },
 
+    setSky(next) {
+      sky = cleanSky(next);
+      target?.setSky(sky);
+    },
+
     setPointer(x, y, active) {
       pointer = { x: signedUnit(x), y: signedUnit(y), active };
       target?.setPointer(pointer.x, pointer.y, pointer.active);
@@ -116,6 +160,7 @@ export function createStoryBridge(): StoryBridge {
       // The stage first, so the first story already seats the field in it.
       if (stages !== null) next.setStage(stages);
       if (passes !== undefined) next.setPasses(passes);
+      if (sky !== undefined) next.setSky(sky);
       if (story !== null) next.setStory(story.chapter, story.progress);
       if (pointer !== null)
         next.setPointer(pointer.x, pointer.y, pointer.active);
@@ -129,6 +174,7 @@ export function createStoryBridge(): StoryBridge {
       story = null;
       stages = null;
       passes = undefined;
+      sky = undefined;
       pointer = null;
       veil = undefined;
       target = null;

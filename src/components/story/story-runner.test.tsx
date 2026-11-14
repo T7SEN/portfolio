@@ -17,6 +17,7 @@ import type { CalmSnapshot } from "@/lib/calm-store";
 import { REVEAL_START } from "./motion-timing";
 import { startStory, type StoryMotion } from "./story-runner";
 import { screenStage, type PageLayout } from "./story-stage";
+import { VEIL_FADE_MS, veilFor } from "./story-veil";
 
 type Span = { start: number; end: number };
 
@@ -785,6 +786,65 @@ describe("the field's layout", () => {
     expect(bridge.setVeil).toHaveBeenLastCalledWith(null);
     expect(layer()).toBeNull();
     expect(tier.listeners.size).toBe(0);
+  });
+
+  it("REQ-A11Y-06 D-146 the contact chapter opens the veil over the sky with darker plates first; leaving it, the veil closes before the plates lighten", () => {
+    vi.useFakeTimers();
+    try {
+      const fake = createFakeMotion(page);
+      const lines = [{ top: 100, bottom: 140, left: 88, right: 400 }];
+      const order: string[] = [];
+      bridge.setVeil.mockImplementation((veil) => {
+        order.push(
+          `veil ${veil} plates ${layer()?.style.getPropertyValue("--plate-alpha")}`,
+        );
+      });
+      const stop = startStory(fake.motion, {
+        root,
+        bridge,
+        calm: createCalm(false).store,
+        view: VIEW,
+        fonts: null,
+        tier: fakeTier(1).store,
+        measure: () => ({ stages: { hero }, frames: [], width: 1280, lines }),
+      });
+      const scrollTo = (position: number) => {
+        page.position = position;
+        fake.triggers[0]?.vars.onUpdate?.();
+      };
+      const open = veilFor(null);
+      const sky = veilFor("contact");
+      expect(order).toEqual([`veil ${open.veil} plates ${open.plate}`]);
+
+      // Into the contact chapter: the plates darken in the same task as
+      // the veil opens, so text never sits on less than the text veil.
+      scrollTo(5050);
+      expect(bridge.setStory).toHaveBeenLastCalledWith("contact", 0.25);
+      expect(order.at(-1)).toBe(`veil ${sky.veil} plates ${sky.plate}`);
+      // Scrolling inside it sends nothing more.
+      scrollTo(5200);
+      expect(order).toHaveLength(2);
+
+      // Out again: the veil closes at once, the plates wait for its fade.
+      scrollTo(4600);
+      expect(order.at(-1)).toBe(`veil ${open.veil} plates ${sky.plate}`);
+      vi.advanceTimersByTime(VEIL_FADE_MS - 1);
+      expect(layer()?.style.getPropertyValue("--plate-alpha")).toBe(
+        String(sky.plate),
+      );
+      vi.advanceTimersByTime(1);
+      expect(layer()?.style.getPropertyValue("--plate-alpha")).toBe(
+        String(open.plate),
+      );
+
+      // A plate change still waiting is dropped with the story.
+      scrollTo(5050);
+      scrollTo(4600);
+      stop();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("REQ-A11Y-06 REQ-SCR-04 text that arrives once the field is ready, or comes and goes with calm, gets its plate on the next task, and teardown cancels one still waiting", () => {

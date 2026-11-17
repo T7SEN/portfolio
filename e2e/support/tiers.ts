@@ -50,6 +50,15 @@ export const ENGINE_CANVASES = 'canvas:not([data-part="tier-sky"])';
 // (test.setTimeout(ENGINE_TIMEOUT_MS + 30_000)), or the bound is never reached.
 export const ENGINE_TIMEOUT_MS = 60_000;
 
+// For the page to show a change the field makes: its fade in, and the
+// chapter it reports after a jump. Under the gate's parallel workers,
+// headless Chromium's software WebGL has painted nothing for about 5 s at a
+// time, the field at 0 fps (story.spec.ts in the runs of 16 Nov 2026), above
+// all on a first jump into a chapter, so the default 5 s wait failed with
+// nothing wrong. What is checked stays the same; only the patience grows, as
+// DIALOG_CODE_MS does for the overlays' code (D-173).
+export const FIELD_FOLLOW_MS = 15_000;
+
 export type TierReport = { tier: number; reason: string | null };
 
 /**
@@ -124,11 +133,14 @@ export async function waitForField(page: Page): Promise<TierReport> {
 /**
  * Waits until the field, or the tier 3 still's wrapper, has faded in, so a
  * screenshot shows the page as a visitor ends up seeing it. It can wait up to
- * ENGINE_TIMEOUT_MS, so the calling test needs a timeout above that.
+ * ENGINE_TIMEOUT_MS and then FIELD_FOLLOW_MS, so the calling test needs a
+ * timeout above that.
  */
 export async function waitForFieldShown(page: Page): Promise<TierReport> {
   const report = await waitForField(page);
-  await expect(page.locator(FIELD)).toHaveCSS("opacity", "1");
+  await expect(page.locator(FIELD)).toHaveCSS("opacity", "1", {
+    timeout: FIELD_FOLLOW_MS,
+  });
   return report;
 }
 

@@ -283,14 +283,17 @@ for (const { name, viewport, tier, setup } of CASES) {
 // the wordmark in the field chapter, a shape per study inside its frame, the
 // mark in the making-of's middle pass card, the strands and the sky. They
 // pack the particles far more densely than the ambient field, so the text in
-// view at each one is measured too (accessibility.md section 7).
+// view at each one is measured too (REQ-A11Y-06).
 
 type ColouredBox = Box & { colour: string };
 
 /**
  * Every piece of text in view that sits straight on the field, with the
  * colour it is drawn in. Text on a card or a chip has its own surface, so the
- * field is not behind it; visually hidden scene lines are not drawn at all.
+ * field is not behind it; visually hidden scene lines, hidden or invisible
+ * elements and text faded to nothing are not drawn at all. Text hidden from
+ * assistive technology is still drawn and still read by the eye, so it is
+ * measured: the making-of's hint under its ticks (D-175, D-180).
  */
 async function textOnField(
   page: Page,
@@ -319,9 +322,8 @@ async function textOnField(
       "header :is(a, button), main :is(h1, h2, h3, p, a, li, span)",
     );
     for (const element of elements) {
-      if (element.closest(".sr-only, [hidden], [aria-hidden='true']")) {
-        continue;
-      }
+      if (element.closest(".sr-only, [hidden]")) continue;
+      if (getComputedStyle(element).visibility === "hidden") continue;
       // A study row holds its frame, where the field forms the study's
       // shape on purpose; its words are measured by their own elements.
       if (element.querySelector('[data-stage="frame"]') !== null) continue;
@@ -336,6 +338,17 @@ async function textOnField(
         box.bottom > 0 &&
         box.top < window.innerHeight;
       if (!inView || (element.textContent ?? "").trim() === "") continue;
+      // Text faded out is not drawn: the making-of's line under its title
+      // on a held screen below 1024 px (D-172).
+      let shown = 1;
+      for (
+        let node: Element | null = element;
+        node !== null && node !== document.body;
+        node = node.parentElement
+      ) {
+        shown *= Number(getComputedStyle(node).opacity);
+      }
+      if (shown === 0) continue;
       if (filled(element)) {
         own += 1;
         continue;
@@ -404,8 +417,10 @@ const CHAPTER_CASES = [
 // The making-of's title and intro sit at the top of its section, over the
 // flow: the field gathers into the middle card only once that card's face
 // is wholly on the screen (story-passes.ts, measureMiddleStage). In the
-// sliding row each card's words sit on the card's own panel, so nothing
-// there is on the field.
+// sliding row each card's words sit on the card's own panel, and from
+// 16 Nov 2026 the chapter's heading holds at the top of the screen with its
+// own plates (D-172): the label, the title and, from 1024 px, the line under
+// it, so a card at rest is a text state too.
 const FORMED_STATES = [
   {
     name: "hero 0.1, the dot leaving its place",
@@ -466,10 +481,10 @@ const FORMED_STATES = [
     text: true,
   },
   {
-    name: "making-of, density at rest in the middle, the cards' words on their own panels",
+    name: "making-of, density at rest in the middle under the held heading, the cards' words on their own panels",
     chapter: "making-of",
     rest: PASSES.indexOf("density"),
-    text: false,
+    text: true,
     own: true,
   },
   {

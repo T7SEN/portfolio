@@ -43,6 +43,12 @@ import { pixelStats } from "./pixels";
 const VIEW = '[data-testid="engine-view"]';
 const HOST = `${VIEW} [data-part="host"]`;
 const OUT_DIR = process.env.STILLS_DIR ?? "public/still";
+
+/** Writes one still into OUT_DIR, called only after its checks pass. */
+function writeStill(file: string, bytes: Uint8Array) {
+  mkdirSync(OUT_DIR, { recursive: true });
+  writeFileSync(join(OUT_DIR, file), bytes);
+}
 // The first quality that fits the target is kept; the last one is kept
 // whatever its size, and the size is printed. 1 is lossless.
 const QUALITIES = [1, 0.9, 0.85, 0.8, 0.72, 0.64, 0.56, 0.48];
@@ -222,8 +228,6 @@ for (const { file, width, height } of STILLS) {
     const webp = await encodeWebp(page, frame, FIELD_TARGET_BYTES);
     expectWebp(webp.bytes);
 
-    mkdirSync(OUT_DIR, { recursive: true });
-    writeFileSync(join(OUT_DIR, file), webp.bytes);
     console.log(
       `still ${join(OUT_DIR, file)} ${width} x ${height} ${webp.bytes.length} bytes webp quality ${webp.quality} ` +
         `(PSNR ${webp.psnr.toFixed(2)} dB, png ${frame.length} bytes), lit share per quarter ${quarters.join(", ")}, ` +
@@ -231,6 +235,9 @@ for (const { file, width, height } of STILLS) {
     );
     expect(webp.bytes.length).toBeLessThanOrEqual(FIELD_TARGET_BYTES);
     expect(errors).toEqual([]);
+    // Written only once every check has passed, so a failed capture never
+    // replaces a shipped still.
+    writeStill(file, webp.bytes);
   });
 }
 
@@ -315,8 +322,6 @@ for (const { file, width, height } of WORDMARK_STILLS) {
       "image/jpeg",
     );
     expectJpeg(webp.bytes);
-    mkdirSync(OUT_DIR, { recursive: true });
-    writeFileSync(join(OUT_DIR, name), webp.bytes);
     console.log(
       `still ${join(OUT_DIR, name)} ${width} x ${height} ${webp.bytes.length} bytes jpeg quality ${webp.quality} ` +
         `(PSNR ${webp.psnr.toFixed(2)} dB, png ${png.length} bytes), ${Math.round(lit)} lit pixels, ` +
@@ -329,6 +334,7 @@ for (const { file, width, height } of WORDMARK_STILLS) {
     );
     expect(webp.bytes.length).toBeLessThanOrEqual(WORDMARK_TARGET_BYTES);
     expect(errors).toEqual([]);
+    writeStill(name, webp.bytes);
   });
 }
 
@@ -398,8 +404,6 @@ test.describe("the study stills", () => {
       const webp = await encodeWebp(page, frame, STUDY_TARGET_BYTES);
       expectWebp(webp.bytes);
 
-      mkdirSync(OUT_DIR, { recursive: true });
-      writeFileSync(join(OUT_DIR, file), webp.bytes);
       console.log(
         `still ${join(OUT_DIR, file)} ${FRAME.width * FRAME.scale} x ${FRAME.height * FRAME.scale} ` +
           `${webp.bytes.length} bytes webp quality ${webp.quality} (PSNR ${webp.psnr.toFixed(2)} dB), ` +
@@ -413,6 +417,7 @@ test.describe("the study stills", () => {
       ).toBeGreaterThan(STUDY_SHARE);
       expect(webp.bytes.length).toBeLessThanOrEqual(STUDY_TARGET_BYTES);
       expect(errors).toEqual([]);
+      writeStill(file, webp.bytes);
     });
   }
 });
@@ -465,6 +470,8 @@ test.describe("the pass stills", () => {
     const host = page.locator(HOST);
     const state =
       "tier=1&count=1000000&calm=1&bare=1&chapter=making-of&progress=0.5";
+    // Every pass is checked before any still is written.
+    const checked: [string, Uint8Array][] = [];
 
     for (const pass of PASSES) {
       await page.goto(`/engine?${state}&pass=${pass}`);
@@ -532,8 +539,6 @@ test.describe("the pass stills", () => {
       const jpeg = await encodeWebp(page, png, 0, "image/jpeg", [webp.quality]);
 
       const file = PASS_STILLS[pass].replace("/still/", "");
-      mkdirSync(OUT_DIR, { recursive: true });
-      writeFileSync(join(OUT_DIR, file), webp.bytes);
       console.log(
         `still ${join(OUT_DIR, file)} ${PASS_FACE.width * PASS_SCALE} x ${PASS_FACE.height * PASS_SCALE} ${webp.bytes.length} bytes ` +
           `webp quality ${webp.quality} (PSNR ${webp.psnr.toFixed(2)} dB, png ${png.length} bytes; ` +
@@ -554,7 +559,9 @@ test.describe("the pass stills", () => {
         );
       }
       expect(webp.bytes.length).toBeLessThanOrEqual(PASS_TARGET_BYTES);
+      checked.push([file, webp.bytes]);
     }
     expect(errors).toEqual([]);
+    for (const [file, bytes] of checked) writeStill(file, bytes);
   });
 });

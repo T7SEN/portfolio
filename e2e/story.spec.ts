@@ -14,6 +14,13 @@ import { story } from "../src/content/story";
 import { BLOOM_ROOMS } from "../src/engine/runtime/story";
 import { PASSES } from "../src/engine/story";
 import { expectNoAxeViolations } from "./support/axe";
+import {
+  goThroughMenu,
+  MENU_WORK,
+  menuButton,
+  paletteButton,
+  soundToggle,
+} from "./support/interface";
 import { withoutLoader } from "./support/loader";
 import {
   calmToggle,
@@ -22,6 +29,7 @@ import {
   chapterRooms,
   fixedElements,
   focusedView,
+  GLIDE_PLACES,
   goToChapter,
   hasLenis,
   heldScreenAt,
@@ -33,6 +41,7 @@ import {
   recordChapterWrites,
   recordLenisClasses,
   scrollAtRest,
+  scrollDuring,
   scrollPositionsFor,
   scrollToPlace,
   SLIDE_SCREEN,
@@ -48,6 +57,7 @@ import {
   asTier3,
   ENGINE_TIMEOUT_MS,
   FIELD,
+  FIELD_FOLLOW_MS,
   frameRateEvents,
   nextFrameRateEvent,
   STILL,
@@ -556,13 +566,6 @@ test("REQ-A11Y-03 with reduced motion the field reports no frames, Lenis never s
   await asTier2(page);
   await page.goto("/");
 
-  // The toggle shows the OS setting and says why it stays on.
-  const toggle = calmToggle(page);
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-  await expect(toggle).toHaveAccessibleDescription(/reduced motion/);
-  await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", "true");
-
   expect((await waitForField(page)).tier).toBe(2);
   expect(await waitForStory(page), "titles fade, never split").toBe("fade");
   expect(await frameRateEvents(page, QUIET_MS)).toBe(0);
@@ -586,20 +589,33 @@ test("REQ-A11Y-03 with reduced motion the field reports no frames, Lenis never s
   }
   await expectTitlesShown(page);
 
+  // The toggle shows the OS setting and says why it stays on. Checked last:
+  // below 640 px the only Calm switch is the footer's, and a click there
+  // before the story starts leaves the page at its end, where the story
+  // marks no title to reveal (the full run of 14 Nov 2026).
+  const toggle = calmToggle(page);
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  await expect(toggle).toHaveAccessibleDescription(/reduced motion/);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+
   // Changing chapter in calm draws one still, never a running field.
   expect(await frameRateEvents(page, QUIET_MS)).toBe(0);
   expect(await hasLenis(page)).toBe(false);
   expect(await lenisWasMade(page), "no Lenis was ever made").toBe(false);
 });
 
-test("REQ-A11Y-04 the calm toggle sits in the bar with a 44 px target, stops the field and is remembered after a reload", async ({
+test("REQ-A11Y-04 the calm toggle has a 44 px target, stops the field and is remembered after a reload", async ({
   page,
 }) => {
   test.setTimeout(2 * ENGINE_TIMEOUT_MS + 60_000);
   await asTier2(page);
   await page.goto("/");
 
+  // The hero's corner pill from 640 px, in the first screen; the footer's
+  // below it, where the hero has none (calmToggle).
   const toggle = calmToggle(page);
+  await toggle.scrollIntoViewIfNeeded();
   await expect(toggle).toBeInViewport({ ratio: 1 });
   await expect(toggle).toHaveAttribute("aria-checked", "false");
   const box = await toggle.boundingBox();
@@ -689,13 +705,24 @@ test("REQ-NAV-01 with the story running, Skip intro reaches the work chapter and
   await expect(seeTheWork).toBeInViewport({ ratio: 1 });
   await expect(skipIntro).toBeInViewport({ ratio: 1 });
 
-  await skipIntro.click();
+  // A scroll, not a jump (D-176): the page passes places on its way, and
+  // focus goes with it.
+  const glide = await scrollDuring(page, () => skipIntro.click());
+  expect(
+    glide.between,
+    `Skip intro scrolled from ${glide.from} to ${glide.to} px through ${glide.between} places`,
+  ).toBeGreaterThanOrEqual(GLIDE_PLACES);
   await expect(page).toHaveURL(/#work$/);
   await expect(page.locator("#work")).toBeInViewport();
-  await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", "work");
+  await expect(page.locator("#work")).toBeFocused();
+  await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", "work", {
+    timeout: FIELD_FOLLOW_MS,
+  });
 
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
-  await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", "hero");
+  await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", "hero", {
+    timeout: FIELD_FOLLOW_MS,
+  });
   await expect(seeTheWork).toBeInViewport({ ratio: 1 });
   await seeTheWork.click();
   await expect(page).toHaveURL(/\/work$/);
@@ -704,7 +731,32 @@ test("REQ-NAV-01 with the story running, Skip intro reaches the work chapter and
   );
 });
 
-test("REQ-NAV-01 at 320 by 568, where the bar wraps to two rows, See the work and Skip intro show whole on the first screen", async ({
+test("REQ-NAV-01 REQ-A11Y-04 with calm mode on, Skip intro still reaches the work chapter, in one jump: calm asks for no smooth scroll", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await waitForStory(page);
+  const toggle = calmToggle(page);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", "true");
+  // Below 640 px the switch is the footer's, and the click scrolled to it.
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  const skipIntro = page.getByRole("link", {
+    name: HERO.cornerControl,
+    exact: true,
+  });
+  await expect(skipIntro).toBeInViewport({ ratio: 1 });
+  const jump = await scrollDuring(page, () => skipIntro.click());
+  expect(
+    jump.between,
+    `Skip intro in calm went from ${jump.from} to ${jump.to} px through ${jump.between} places`,
+  ).toBe(0);
+  expect(jump.to).toBeGreaterThan(jump.from);
+  await expect(page.locator("#work")).toBeInViewport();
+  await expect(page.locator("#work")).toBeFocused();
+});
+
+test("REQ-NAV-01 REQ-NAV-02 at 320 by 568, with the bar on one row, See the work and Skip intro show whole on the first screen", async ({
   page,
   isMobile,
 }, testInfo) => {
@@ -739,9 +791,11 @@ test("REQ-NAV-01 at 320 by 568, where the bar wraps to two rows, See the work an
   testInfo.annotations.push({ type: "first-screen", description: line });
 
   expect(await page.evaluate(() => window.scrollY), line).toBe(0);
-  // The case this test exists for: two rows of 44 px inside py-3 (D-063).
+  // Until P5 the bar wrapped to two rows here (D-063). From P5 Sound and the
+  // palette are 44 px squares and the bar keeps one row of 44 px inside
+  // py-3, 68 px in all (site-header.tsx).
   const bar = await page.getByRole("banner").boundingBox();
-  expect(bar?.height ?? 0, `${line}: the bar wraps`).toBeGreaterThan(100);
+  expect(bar?.height ?? 0, `${line}: the bar keeps one row`).toBeLessThan(80);
   await expect(seeTheWork, line).toBeInViewport({ ratio: 1 });
   await expect(skipIntro, line).toBeInViewport({ ratio: 1 });
 });
@@ -752,6 +806,10 @@ const NOTCH_PX = 100;
 // of 6 a second (lerp 0.1) and stops within half a pixel, so 300 px take
 // about 1.1 s (lenis 1.3.27, dist/lenis.mjs lines 37 to 39 and 85 to 89).
 const AFTER_GLIDE_MS = 1_500;
+// Skip intro glides past the hero and the field chapter, about 2,300 px at
+// 1280 by 800, which Lenis takes about 1.4 s to cover, longer on a busy
+// machine: the page is waited for until it is there (D-180).
+const SKIP_GLIDE_LIMIT_MS = 10_000;
 
 /** Whether Lenis animates a scroll now (lenis-smooth on html), and where. */
 function glideState(page: Page) {
@@ -798,15 +856,25 @@ test("REQ-NAV-01 REQ-SCR-02 Skip intro clicked and End pressed while a wheel gli
     return state;
   });
   const clickMs = Date.now() - started;
-  await page.waitForTimeout(AFTER_GLIDE_MS);
   const work = page.locator('main section[data-chapter="work"]');
-  const landed = await work.evaluate((section) => ({
-    scrollY: Math.round(window.scrollY),
-    top: Math.round(section.getBoundingClientRect().top + window.scrollY),
-  }));
+  const landedAt = () =>
+    work.evaluate((section) => ({
+      scrollY: Math.round(window.scrollY),
+      top: Math.round(section.getBoundingClientRect().top + window.scrollY),
+    }));
+  await expect
+    .poll(
+      async () => {
+        const { scrollY, top } = await landedAt();
+        return Math.abs(scrollY - top);
+      },
+      { timeout: SKIP_GLIDE_LIMIT_MS },
+    )
+    .toBeLessThanOrEqual(2);
+  const landed = await landedAt();
   const skipLine =
     `Skip intro clicked ${clickMs} ms after the first notch at ${atClick.scrollY} px, ` +
-    `${atClick.gliding ? "mid glide" : "with no glide running"}; ${AFTER_GLIDE_MS} ms later ` +
+    `${atClick.gliding ? "mid glide" : "with no glide running"}; at rest ` +
     `scrollY ${landed.scrollY} px, the work chapter's top at ${landed.top} px`;
   lines.push(skipLine);
   expect(atClick.gliding, skipLine).toBe(true);
@@ -849,7 +917,7 @@ const PAGE_STEP = { least: 0.8, most: 1 } as const;
 // archive link.
 const MOST_TABS_TO_PASSES = 12;
 
-test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 REQ-ENG-09 with Lenis running, keys work the Calm toggle, page natively through the chapters and Tab to every study and every pass card, each in view and whole", async ({
+test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 REQ-NAV-02 REQ-ENG-09 with Lenis running, Tab runs through the bar in order, keys work the Calm toggle, page natively through the chapters and Tab to every study and every pass card, each in view and whole", async ({
   page,
   isMobile,
 }, testInfo) => {
@@ -867,19 +935,22 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 REQ-ENG-09 with Lenis runnin
   const field = page.locator(FIELD);
   const lines: string[] = [`field tier ${report.tier}, ${report.reason}`];
 
-  // The bar in Tab order, from the skip link to the Calm switch, the last
-  // stop in the nav named Site controls (accessibility.md section 3).
+  // The bar in Tab order, from the skip link to Menu, the last stop in the
+  // nav named Site controls (REQ-NAV-02), then
+  // on through the hero's links to its own Calm switch, which since P5 is
+  // the first one on the page.
   const banner = page.getByRole("banner");
-  const primary = banner.getByRole("navigation", {
-    name: site.names.siteControls,
-  });
-  const toggle = calmToggle(page);
+  const hero = page.locator('main section[data-chapter="hero"]');
+  const toggle = hero.getByRole("switch", { name: "Calm mode", exact: true });
   for (const stop of [
     page.getByRole("link", { name: "Skip to content", exact: true }),
     banner.getByRole("link", { name: "T7SEN, home", exact: true }),
-    primary.getByRole("link", { name: "Work", exact: true }),
-    primary.getByRole("link", { name: "About", exact: true }),
-    primary.getByRole("link", { name: "Contact", exact: true }),
+    soundToggle(page),
+    paletteButton(page),
+    menuButton(page),
+    hero.getByRole("link", { name: HERO.primaryAction, exact: true }),
+    hero.getByRole("link", { name: HERO.secondaryAction, exact: true }),
+    hero.getByRole("link", { name: HERO.cornerControl, exact: true }),
     toggle,
   ]) {
     await page.keyboard.press("Tab");
@@ -916,7 +987,9 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 REQ-ENG-09 with Lenis runnin
     lines.push(line);
     expect(after - before, line).toBeGreaterThanOrEqual(PAGE_STEP.least * view);
     expect(after - before, line).toBeLessThanOrEqual(PAGE_STEP.most * view);
-    await expect(field, line).toHaveAttribute("data-chapter", chapter);
+    await expect(field, line).toHaveAttribute("data-chapter", chapter, {
+      timeout: FIELD_FOLLOW_MS,
+    });
     if (chapter !== visited.at(-1)) visited.push(chapter);
   }
   expect(visited).toEqual(
@@ -934,7 +1007,9 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 REQ-ENG-09 with Lenis runnin
   const endLine = `End: ${beforeEnd} to ${end} px, the foot of the page at ${foot} px`;
   lines.push(endLine);
   expect(Math.abs(end - foot), endLine).toBeLessThanOrEqual(1);
-  await expect(field).toHaveAttribute("data-chapter", "contact");
+  await expect(field).toHaveAttribute("data-chapter", "contact", {
+    timeout: FIELD_FOLLOW_MS,
+  });
 
   // Lenis lived through every key and took each key's scroll as a native one
   // (lenis-scrolling); it never animated one itself (lenis-smooth).
@@ -946,25 +1021,13 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 REQ-ENG-09 with Lenis runnin
   expect(classes).toContain("lenis-scrolling");
   expect(classes).not.toContain("lenis-smooth");
 
-  // From the switch, Tab goes on into the page: the hero's links and its
-  // own Calm switch, the work chapter's boxed index link, then each full
-  // study's row in order: its case study link, then its second link where
-  // the row has a live one. Each stop is scrolled into view as it takes focus
-  // and shows whole, and the field's wrapper follows the scroll.
-  const hero = page.locator('main section[data-chapter="hero"]');
+  // From the switch, Tab goes on into the page: the work chapter's boxed
+  // index link, then each full study's row in order: its case study link,
+  // then its second link where the row has a live one. Each stop is scrolled
+  // into view as it takes focus and shows whole, and the field's wrapper
+  // follows the scroll.
   const work = page.locator('main section[data-chapter="work"]');
-  const heroStop = (name: string) => ({
-    name,
-    link: hero.getByRole("link", { name, exact: true }),
-  });
   const stops = [
-    heroStop(HERO.primaryAction),
-    heroStop(HERO.secondaryAction),
-    heroStop(HERO.cornerControl),
-    {
-      name: "the hero's Calm switch",
-      link: hero.getByRole("switch", { name: "Calm mode", exact: true }),
-    },
     {
       name: pages.home.work.index.label,
       link: work.getByRole("link", {
@@ -1011,7 +1074,9 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 REQ-ENG-09 with Lenis runnin
     expect(focus.left, line).toBeGreaterThanOrEqual(0);
     expect(focus.right, line).toBeLessThanOrEqual(focus.viewWidth);
     expect(focus.hiddenParts, line).toEqual([]);
-    await expect(field, line).toHaveAttribute("data-chapter", chapter);
+    await expect(field, line).toHaveAttribute("data-chapter", chapter, {
+      timeout: FIELD_FOLLOW_MS,
+    });
   }
 
   // The work title the keys passed on the way is whole too.
@@ -1078,7 +1143,9 @@ test("REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-04 REQ-NAV-01 REQ-ENG-09 with Lenis runnin
       `at scroll ${focus.scrollY}, chapter ${chapter}`;
     lines.push(line);
     expect(chapter, line).toBe("making-of");
-    await expect(field, line).toHaveAttribute("data-chapter", "making-of");
+    await expect(field, line).toHaveAttribute("data-chapter", "making-of", {
+      timeout: FIELD_FOLLOW_MS,
+    });
   }
 
   console.log(`keyboard ${testInfo.project.name}:\n${lines.join("\n")}`);
@@ -1116,10 +1183,7 @@ test("REQ-SCR-04 after / to /work and back, one story drives the field and nothi
   expect(await runThroughChapters(page)).toEqual(later);
   await goToChapter(page, "hero", 0);
 
-  await page
-    .getByRole("navigation", { name: site.names.siteControls })
-    .getByRole("link", { name: "Work", exact: true })
-    .click();
+  await goThroughMenu(page, MENU_WORK);
   await page.waitForURL("**/work");
   await expect(page.locator(FIELD)).toBeHidden();
 

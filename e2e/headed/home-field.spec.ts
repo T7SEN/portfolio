@@ -12,6 +12,7 @@ import {
   readSurface,
   watchErrors,
 } from "../gpu/frame-times";
+import { goThroughMenu, MENU_WORK } from "../support/interface";
 import { withoutLoader } from "../support/loader";
 import { afterTwoFrames, frameRateEvents } from "../support/tiers";
 
@@ -404,10 +405,8 @@ test("REQ-ENG-01 REQ-ENG-07 leaving home pauses the field and coming back shows 
   const running = await rateEvents(2_500);
   expect(running).toBeGreaterThan(0);
 
-  await page
-    .getByRole("navigation", { name: "Site controls" })
-    .getByRole("link", { name: "Work" })
-    .click();
+  // From P5 the bar's page links are in its menu.
+  await goThroughMenu(page, MENU_WORK);
   await page.waitForURL("**/work");
   await expect(field).toBeHidden();
   // The engine hears of the hidden host one frame late.

@@ -10,9 +10,11 @@ import { pages } from "../src/content/pages";
 import { services } from "../src/content/services";
 import { site } from "../src/content/site";
 import { story } from "../src/content/story";
+import { MIN_PIXEL_RATIO } from "../src/engine/runtime/adaptive";
 import { skyFrame } from "../src/engine/sky/sky";
 import { pixelStats } from "./gpu/pixels";
 import { expectNoAxeViolations } from "./support/axe";
+import { goThroughMenu, MENU_WORK } from "./support/interface";
 import { withoutLoader } from "./support/loader";
 import { goToChapter, waitForStory } from "./support/story";
 import {
@@ -302,12 +304,10 @@ test("REQ-ENG-01 the host and the canvas survive client navigation, and the fiel
       { host: HOST, canvas: CANVAS },
     );
   const kept = { page: "kept", host: "kept", canvas: "kept", canvases: 1 };
-  const primary = page.getByRole("navigation", {
-    name: site.names.siteControls,
-  });
   const field = page.locator(FIELD);
 
-  await primary.getByRole("link", { name: "About", exact: true }).click();
+  // From P5 the bar's page links are in its menu.
+  await goThroughMenu(page, "About");
   await expect(page).toHaveURL(/\/about$/);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     pages.about.heading,
@@ -315,7 +315,7 @@ test("REQ-ENG-01 the host and the canvas survive client navigation, and the fiel
   await expect(field).toBeHidden();
   expect(await marks()).toEqual(kept);
 
-  await primary.getByRole("link", { name: "Work", exact: true }).click();
+  await goThroughMenu(page, MENU_WORK);
   await expect(page).toHaveURL(/\/work$/);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     pages.work.title,
@@ -369,10 +369,7 @@ test("REQ-CNT-02 REQ-ENG-07 coming from the home page, the field is hidden on /w
       .evaluate((canvas: HTMLCanvasElement) => [canvas.width, canvas.height]);
   const shown = await bufferSize();
 
-  await page
-    .getByRole("navigation", { name: site.names.siteControls })
-    .getByRole("link", { name: "Work", exact: true })
-    .click();
+  await goThroughMenu(page, MENU_WORK);
   await expect(page).toHaveURL(/\/work$/);
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     pages.work.title,
@@ -380,9 +377,19 @@ test("REQ-CNT-02 REQ-ENG-07 coming from the home page, the field is hidden on /w
 
   await expect(page.locator(FIELD)).toBeHidden();
   await afterTwoFrames(page);
+  const hidden = await bufferSize();
   expect(await frameRateEvents(page, QUIET_MS)).toBe(0);
-  // A hidden canvas is not a small one: it must not be sized down to nothing.
-  expect(await bufferSize()).toEqual(shown);
+  // A hidden canvas is not a small one: it must not be sized down to
+  // nothing, and it keeps the buffer it was hidden with. The field may
+  // have lowered its pixel ratio a step before it was hidden (on slow
+  // frames, to MIN_PIXEL_RATIO), so the buffer is held to that step of the
+  // one it showed, not to that one itself (D-180).
+  expect(await bufferSize()).toEqual(hidden);
+  for (const [index, side] of hidden.entries()) {
+    expect(side).toBeGreaterThanOrEqual(
+      Math.floor((shown[index] ?? 0) * MIN_PIXEL_RATIO),
+    );
+  }
 });
 
 test("REQ-TIER-02 a phone settles on tier 2 with reason phone", async ({

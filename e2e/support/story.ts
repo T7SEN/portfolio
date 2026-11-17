@@ -3,7 +3,7 @@ import { expect, type Page } from "@playwright/test";
 import { chapterOrder } from "../../src/content/story";
 import type { ChapterId } from "../../src/engine/types";
 import { COVER } from "./loader";
-import { FIELD } from "./tiers";
+import { FIELD, FIELD_FOLLOW_MS } from "./tiers";
 
 // Helpers for the home page's scroll story (REQ-SCR-01 to 07), shared by the
 // gate (e2e/story.spec.ts) and the headed specs (e2e/headed/).
@@ -46,14 +46,16 @@ export async function waitForStory(page: Page): Promise<"split" | "fade"> {
 export const LENIS_CLASS = /(?:^|\s)lenis(?:\s|$)/;
 
 /**
- * The calm-mode switch in the bar (REQ-A11Y-04). The home page holds three
- * switches of that name (the bar's, the hero's corner pill and the
- * footer's), so this one is found inside the banner.
+ * The first calm-mode switch a visitor can reach (REQ-A11Y-04). From P5 the
+ * bar holds none: on the home page from 640 px it is the hero's corner pill,
+ * and below 640 px, where that pill is hidden, the footer's. A click on the
+ * footer's scrolls the page down to it.
  */
 export function calmToggle(page: Page) {
   return page
-    .getByRole("banner")
-    .getByRole("switch", { name: "Calm mode", exact: true });
+    .getByRole("switch", { name: "Calm mode", exact: true })
+    .filter({ visible: true })
+    .first();
 }
 
 /** Whether Lenis drives the page now: it puts its class on html. */
@@ -108,6 +110,93 @@ export async function scrollToPlace(
   return top;
 }
 
+/**
+ * Every place the page's scroll events report while an action runs, until
+ * the page has scrolled and then been still for SCROLL_QUIET_MS, or ms at
+ * most: where it started and ended, and how many distinct places it passed
+ * between them, more than 2 px from either end. A jump passes none; a glide
+ * passes one for each frame the page draws on its way (the skip links
+ * scroll, D-176). A browser sends at most one scroll event a frame, so a
+ * page short of frames under load reports fewer places, never more: a
+ * glide is told from a jump by GLIDE_PLACES. The wait lasts until the
+ * scroll has come and settled.
+ */
+export async function scrollDuring(
+  page: Page,
+  action: () => Promise<void>,
+  ms = 5_000,
+): Promise<{ from: number; to: number; between: number }> {
+  await page.evaluate(() => {
+    const record = window as unknown as {
+      __scrollPlaces?: number[];
+      __scrollListener?: () => void;
+    };
+    if (record.__scrollListener) {
+      window.removeEventListener("scroll", record.__scrollListener);
+    }
+    const places = [window.scrollY];
+    record.__scrollPlaces = places;
+    record.__scrollListener = () => places.push(window.scrollY);
+    window.addEventListener("scroll", record.__scrollListener, {
+      passive: true,
+    });
+  });
+  await action();
+  const ys = await page.evaluate(
+    ({ limit, quiet }) =>
+      new Promise<number[]>((resolve) => {
+        const record = window as unknown as {
+          __scrollPlaces: number[];
+          __scrollListener?: () => void;
+        };
+        const places = record.__scrollPlaces;
+        const start = performance.now();
+        let seen = places.length;
+        let quietSince = start;
+        const check = () => {
+          const now = performance.now();
+          if (places.length !== seen) {
+            seen = places.length;
+            quietSince = now;
+          }
+          const hasScrolled = places.length > 1;
+          if (
+            (hasScrolled && now - quietSince >= quiet) ||
+            now - start > limit
+          ) {
+            if (record.__scrollListener) {
+              window.removeEventListener("scroll", record.__scrollListener);
+            }
+            resolve(places.slice());
+            return;
+          }
+          setTimeout(check, 50);
+        };
+        check();
+      }),
+    { limit: ms, quiet: SCROLL_QUIET_MS },
+  );
+  const from = ys[0] ?? 0;
+  const to = ys.at(-1) ?? 0;
+  const low = Math.min(from, to) + 2;
+  const high = Math.max(from, to) - 2;
+  const between = new Set(
+    ys.filter((y) => y > low && y < high).map((y) => Math.round(y)),
+  ).size;
+  return { from: Math.round(from), to: Math.round(to), between };
+}
+
+/** How long the page must be still for a scroll to count as over, ms. */
+const SCROLL_QUIET_MS = 400;
+
+/**
+ * The fewest places between its ends that make a scroll a glide: one. A
+ * jump passes none, and a glide of a second or more passes one for every
+ * frame drawn on its way; the gate's busiest runs drew 3 frames a second
+ * (D-173), so a higher count failed with nothing wrong (D-180).
+ */
+export const GLIDE_PLACES = 1;
+
 /** Jumps to the middle of a chapter and waits for the field to follow. */
 export async function goToChapter(
   page: Page,
@@ -115,7 +204,9 @@ export async function goToChapter(
   progress = 0.5,
 ): Promise<number> {
   const top = await scrollToPlace(page, { chapter, progress });
-  await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", chapter);
+  await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", chapter, {
+    timeout: FIELD_FOLLOW_MS,
+  });
   return top;
 }
 

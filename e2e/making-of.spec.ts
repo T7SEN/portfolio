@@ -12,15 +12,17 @@ import {
 } from "../src/components/home/pass-slide";
 import { PASS_STILLS } from "../src/components/home/pass-stills";
 import { pages } from "../src/content/pages";
-import { passPosition, passViewer } from "../src/content/passes";
+import { passHint, passPosition, passViewer } from "../src/content/passes";
 import { LIVE_PASSES, PASSES, type PassId } from "../src/engine/story";
 import { expectNoAxeViolations } from "./support/axe";
 import { withoutLoader } from "./support/loader";
 import {
   calmToggle,
   focusedView,
+  GLIDE_PLACES,
   LENIS_CLASS,
   scrollAtRest,
+  scrollDuring,
   scrollPositionsFor,
   scrollToSlide,
   SLIDE_SCREEN,
@@ -35,6 +37,7 @@ import {
   asTier3,
   ENGINE_TIMEOUT_MS,
   FIELD,
+  FIELD_FOLLOW_MS,
   waitForField,
 } from "./support/tiers";
 
@@ -60,6 +63,8 @@ test.beforeEach(async ({ context }) => {
 const VIEWER = "[data-pass-viewer]";
 const SCREEN = `${SLIDE_STRETCH} ${SLIDE_SCREEN}`;
 const RAIL = `${VIEWER} [data-part="pass-rail"]`;
+const NEXT = `${VIEWER} [data-part="pass-next"]`;
+const PREVIOUS = `${VIEWER} [data-part="pass-previous"]`;
 const STILL = 'img[data-part="pass-still"]';
 // Layout rounds to fractions of a pixel, and each measure is rounded again.
 const TOLERANCE_PX = 2;
@@ -134,7 +139,7 @@ function slideState(page: Page): Promise<SlideState> {
         (element) => element.getAttribute(name) ?? "",
       );
     const track = viewer.querySelector<HTMLElement>(
-      '[data-part="pass-screen"] > ol',
+      '[data-part="pass-row"] > ol',
     );
     const rail = viewer.querySelector('[data-part="pass-rail"]');
     return {
@@ -172,6 +177,81 @@ type CardPlace = {
   words: string;
   detail: string;
 };
+
+type HeadingPlace = {
+  /** Shown as it should be, above the card, with the label on the screen. */
+  fits: boolean;
+  detail: string;
+};
+
+/**
+ * The chapter's heading on the held screen [T7SEN, 16 Nov 2026]: the label
+ * on the screen and the card below the title; from 1024 px the line under
+ * the title shows too, the card below it, and below 1024 px that line has
+ * faded, the card in its place.
+ */
+function headingPlace(page: Page, pass: PassId): Promise<HeadingPlace> {
+  return page.locator(SCREEN).evaluate((screen, pass) => {
+    const title = screen.querySelector("#making-of-heading");
+    const label = title?.previousElementSibling ?? null;
+    const intro = screen.querySelector("[data-story-intro]");
+    const card = screen.querySelector(`li[data-pass="${pass}"]`);
+    if (title === null || label === null || intro === null || card === null) {
+      throw new Error("The held screen lacks its heading or the card");
+    }
+    const isWide = window.matchMedia("(min-width: 1024px)").matches;
+    // Below 1024 px the line has faded when the viewer's fade reads 0: its
+    // opacity alone is 0 too before its reveal has run (D-180).
+    const fade = Number(
+      getComputedStyle(screen).getPropertyValue("--pass-fade") || "1",
+    );
+    let shown = 1;
+    for (
+      let element: Element | null = intro;
+      element !== null && element !== screen;
+      element = element.parentElement
+    ) {
+      shown *= Number(getComputedStyle(element).opacity);
+    }
+    const labelTop = label.getBoundingClientRect().top;
+    const above = (isWide ? intro : title).getBoundingClientRect().bottom;
+    const cardTop = card.getBoundingClientRect().top;
+    return {
+      fits:
+        labelTop >= 0 &&
+        cardTop >= above &&
+        (isWide ? shown === 1 : shown === 0 && fade === 0),
+      detail:
+        `the label from ${Math.round(labelTop)} px, the ${isWide ? "line under the title" : "title"} ` +
+        `to ${Math.round(above)} px, the card from ${Math.round(cardTop)} px, ` +
+        `the line's opacity ${shown}, its fade ${fade}`,
+    };
+  }, pass);
+}
+
+/**
+ * Where a card's face sits on the screen, and where its words panel starts
+ * and ends, rounded to the pixel: the same for every card at its rest when
+ * nothing shifts (D-177). Below 1024 px the panel fills the card under the
+ * face; from 1024 px it stands beside the face, centred on it, so its own
+ * height is left out there.
+ */
+function cardFrame(page: Page, pass: PassId): Promise<string> {
+  return cardOf(page, pass).evaluate((card) => {
+    const face = card
+      .querySelector("[data-pass-face]")
+      ?.getBoundingClientRect();
+    const panel = card.lastElementChild?.getBoundingClientRect();
+    if (face === undefined || panel === undefined) {
+      throw new Error("The card lacks its face or its words");
+    }
+    const isWide = window.matchMedia("(min-width: 1024px)").matches;
+    const round = (value: number) => Math.round(value);
+    return isWide
+      ? `face ${round(face.top)} to ${round(face.bottom)}`
+      : `face ${round(face.top)} to ${round(face.bottom)}, words ${round(panel.top)} to ${round(panel.bottom)}`;
+  });
+}
 
 function cardPlace(page: Page, pass: PassId): Promise<CardPlace> {
   return cardOf(page, pass).evaluate((card, tolerance) => {
@@ -317,6 +397,7 @@ async function expectAtRest(
   await expect(page.locator(FIELD)).toHaveAttribute(
     "data-chapter",
     "making-of",
+    { timeout: FIELD_FOLLOW_MS },
   );
 
   // The screen holds at the top of the view, one screen high.
@@ -330,6 +411,27 @@ async function expectAtRest(
     `${where}: the screen fills the view`,
   ).toBeLessThanOrEqual(TOLERANCE_PX);
   expect(await pageOverflow(page), `${where}: no sideways scroll`).toBe(0);
+  // After a jump the story may still be revealing the title and its line;
+  // a failure shows the last place read.
+  await expect
+    .poll(() => headingPlace(page, pass), {
+      message: `${where}: the heading holds`,
+      timeout: SETTLE_MS,
+    })
+    .toMatchObject({ fits: true });
+  // Under the ticks, the card's place and the way on, by the pointer the
+  // page has (D-175); the skip link on the label's row.
+  const isFine = await page.evaluate(
+    () => window.matchMedia("(hover: hover) and (pointer: fine)").matches,
+  );
+  await expect(
+    page.locator(`${VIEWER} [data-part="pass-hint"]`),
+    `${where}: the hint`,
+  ).toHaveText(passHint(index, isFine));
+  await expect(
+    page.locator(`${VIEWER} [data-part="pass-skip"]`),
+    `${where}: the skip link`,
+  ).toBeInViewport();
 
   for (const other of PASSES) {
     const still = faceOf(page, other).locator(STILL);
@@ -435,6 +537,7 @@ async function expectGlideAndSettle(
       quietMs: 500,
       timeoutMs: 10_000,
     });
+    await recordScrollTo(page);
     await touchPage(page, false);
     const settled = await settling;
     const landedAt = settled.at(-1) ?? held;
@@ -447,10 +550,49 @@ async function expectGlideAndSettle(
     expect(Math.abs(landedAt - restAt), settleLine).toBeLessThanOrEqual(
       TOLERANCE_PX,
     );
-    expect(settled.length, `${settleLine}: a glide`).toBeGreaterThan(2);
+    expect(await askedScrolls(page), `${settleLine}: a glide`).toContain(
+      "smooth",
+    );
     lines.push(await expectAtRest(page, to, isLive(to), "after the settle"));
   }
   return lines;
+}
+
+/**
+ * From now on, the behaviour of every window.scrollTo the page asks for:
+ * a glide asks for "smooth", which the browser runs over its frames. A
+ * count of those frames told a glide from a jump until a busy gate drew
+ * too few of them (D-180).
+ */
+async function recordScrollTo(page: Page) {
+  await page.evaluate(() => {
+    const record = window as unknown as {
+      __askedScrolls?: string[];
+      __pageScrollTo?: (...args: unknown[]) => void;
+    };
+    record.__askedScrolls = [];
+    if (record.__pageScrollTo !== undefined) return;
+    const original = window.scrollTo.bind(window) as (
+      ...args: unknown[]
+    ) => void;
+    record.__pageScrollTo = original;
+    window.scrollTo = ((...args: unknown[]) => {
+      const options = args[0];
+      record.__askedScrolls?.push(
+        typeof options === "object" && options !== null
+          ? String((options as ScrollToOptions).behavior ?? "auto")
+          : "auto",
+      );
+      original(...args);
+    }) as typeof window.scrollTo;
+  });
+}
+
+function askedScrolls(page: Page): Promise<string[]> {
+  return page.evaluate(
+    () =>
+      (window as unknown as { __askedScrolls?: string[] }).__askedScrolls ?? [],
+  );
 }
 
 /** The page's scroll position on every frame for a while: [ms, px] pairs. */
@@ -550,9 +692,11 @@ async function expectNotchGlide(page: Page): Promise<string> {
 }
 
 /**
- * A scroll key in the slide is one glide to the next card (D-133): Arrow
- * Down from a card's rest, then Page Up back, each with no stop and no
- * turning back on the way. Returns the lines for the log.
+ * In the slide Arrow Right from a card's rest is one glide to the next card
+ * and Arrow Left one back (D-169), and so are Arrow Down and Arrow Up
+ * (D-174), each with no stop and no turning back on the way; the next and
+ * previous buttons glide a card the same way. Returns the lines for the
+ * log.
  */
 async function expectKeySteps(page: Page): Promise<string[]> {
   await scrollToSlide(page, restProgress(1));
@@ -564,16 +708,21 @@ async function expectKeySteps(page: Page): Promise<string[]> {
   });
   await page.waitForTimeout(STILL_PAGE_MS);
   const lines: string[] = [];
-  for (const [key, to] of [
-    ["ArrowDown", 2],
-    ["PageUp", 1],
-  ] as const) {
+  const steps: [string, number, () => Promise<void>][] = [
+    ["ArrowRight", 2, () => page.keyboard.press("ArrowRight")],
+    ["ArrowLeft", 1, () => page.keyboard.press("ArrowLeft")],
+    ["ArrowDown", 2, () => page.keyboard.press("ArrowDown")],
+    ["ArrowUp", 1, () => page.keyboard.press("ArrowUp")],
+    ["the next button", 2, () => page.locator(NEXT).click()],
+    ["the previous button", 1, () => page.locator(PREVIOUS).click()],
+  ];
+  for (const [what, to, press] of steps) {
     const target = await slideTop(page, restProgress(to));
     const frames = framePositions(page, 2_000);
-    await page.keyboard.press(key);
+    await press();
     const glide = oneGlide(await frames, target);
     const line =
-      `${key} in the slide: longest stop on the way ${glide.longestStop} ms, ` +
+      `${what} in the slide: longest stop on the way ${glide.longestStop} ms, ` +
       `arrived ${glide.arrived} at ${passAt(to)}'s rest, ${target} px`;
     lines.push(line);
     expect(glide.arrived, line).toBe(true);
@@ -582,17 +731,18 @@ async function expectKeySteps(page: Page): Promise<string[]> {
     await expect
       .poll(() => slideState(page))
       .toMatchObject({ current: [passAt(to)] });
+    await page.waitForTimeout(STILL_PAGE_MS);
   }
   return lines;
 }
 
 /**
- * On a touch screen a swipe that starts in the slide is the row's (D-133):
- * the page follows the finger and, when it lifts, glides to the next card
- * its way after a short swipe, slow as it is here, or back to its card
- * after a touch. A jump that ends between two cards settles on one
- * (D-131). No scroll snap is left on the page. Returns the lines for the
- * log.
+ * On a touch screen a swipe that starts on a card is the row's, sideways
+ * (D-169) and up or down the screen (D-174): the row follows the finger
+ * and, when it lifts, glides to the next card its way after a short swipe,
+ * slow as it is here, or back to its card after a touch. A jump that ends
+ * between two cards settles on one (D-131). No scroll snap is left on the
+ * page. Returns the lines for the log.
  */
 async function expectTouchSteps(page: Page): Promise<string[]> {
   const rests = await Promise.all(
@@ -604,8 +754,10 @@ async function expectTouchSteps(page: Page): Promise<string[]> {
     ),
   ).toBe("none");
   const between = await scrollToSlide(page, glideProgress(1, 0.5));
+  // From the jump's own place: a settle that has not begun yet must not
+  // read as the rest.
   const jumped = (
-    await scrollAtRest(page, { quietMs: 500, timeoutMs: 5_000 })
+    await scrollAtRest(page, { from: between, quietMs: 500, timeoutMs: 5_000 })
   ).at(-1);
   const jumpLine = `a jump to ${between} px, between two cards, settled at ${jumped} px`;
   expect(
@@ -617,19 +769,24 @@ async function expectTouchSteps(page: Page): Promise<string[]> {
 
   const cdp = await page.context().newCDPSession(page);
   const view = page.viewportSize() ?? { width: 375, height: 812 };
-  const x = Math.round(view.width / 2);
+  const middleX = Math.round(view.width / 2);
   const middleY = Math.round(view.height * 0.55);
   // A slow swipe: the finger moves in small steps, then stops before it
   // lifts, so nothing about it is quick.
-  const swipe = async (up: number) => {
+  const swipe = async (left: number, up: number) => {
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchStart",
-      touchPoints: [{ x, y: middleY }],
+      touchPoints: [{ x: middleX, y: middleY }],
     });
     for (let step = 1; step <= 6; step += 1) {
       await cdp.send("Input.dispatchTouchEvent", {
         type: "touchMove",
-        touchPoints: [{ x, y: middleY - (step * up) / 6 }],
+        touchPoints: [
+          {
+            x: middleX - (step * left) / 6,
+            y: middleY - (step * up) / 6,
+          },
+        ],
       });
       await page.waitForTimeout(30);
     }
@@ -641,10 +798,12 @@ async function expectTouchSteps(page: Page): Promise<string[]> {
   };
 
   const lines = [jumpLine];
-  for (const [up, from, to, what] of [
-    [24, 2, 3, "a slow 24 px swipe up the screen"],
-    [-24, 3, 2, "a slow 24 px swipe down the screen"],
-    [8, 2, 2, "an 8 px touch"],
+  for (const [left, up, from, to, what] of [
+    [24, 0, 2, 3, "a slow 24 px swipe to the left"],
+    [-24, 0, 3, 2, "a slow 24 px swipe to the right"],
+    [8, 0, 2, 2, "an 8 px touch"],
+    [0, 60, 2, 3, "a slow 60 px swipe up the screen"],
+    [0, -60, 3, 2, "a slow 60 px swipe down the screen"],
   ] as const) {
     await scrollToSlide(page, restProgress(from));
     await expect
@@ -653,7 +812,7 @@ async function expectTouchSteps(page: Page): Promise<string[]> {
     await page.waitForTimeout(STILL_PAGE_MS);
     const target = rests[to] ?? 0;
     const frames = framePositions(page, 2_500);
-    await swipe(up);
+    await swipe(left, up);
     const glide = oneGlide(await frames, target);
     const landed = await page.evaluate(() => window.scrollY);
     const line =
@@ -770,7 +929,7 @@ async function expectStillGrid(page: Page) {
 }
 
 for (const setup of SETUPS) {
-  test(`REQ-ENG-09 REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-01 on ${setup.name} the passes slide through a held screen: each card rests in the middle current and whole, live only there and only for its tier's passes, its still in the middle where its pass is not live and an empty frame everywhere else, reached by a click or by Tab`, async ({
+  test(`REQ-ENG-09 REQ-SCR-01 REQ-SCR-02 REQ-A11Y-02 REQ-A11Y-01 on ${setup.name} the passes slide through a held screen: each card rests in the middle current and whole under the chapter's held heading, live only there and only for its tier's passes, its still in the middle where its pass is not live and an empty frame everywhere else, reached by a click or by Tab`, async ({
     page,
   }, testInfo) => {
     test.skip(
@@ -866,6 +1025,7 @@ for (const setup of SETUPS) {
     // card's rest, that card does.
     await scrollToSlide(page, 0);
     lines.push(await expectAtRest(page, 0, isLive(0), "the stretch's start"));
+    const frames: string[] = [];
     for (const index of PASSES.keys()) {
       await scrollToSlide(page, restProgress(index));
       lines.push(
@@ -876,11 +1036,20 @@ for (const setup of SETUPS) {
           `the ${passAt(index)} card's rest`,
         ),
       );
+      frames.push(await cardFrame(page, passAt(index)));
     }
+    // Every card at rest in the same place, the face never moving as the
+    // row goes from card to card (D-177).
+    lines.push(`each card at rest: ${frames.join("; ")}`);
+    expect(
+      new Set(frames).size,
+      `each card at rest in one place: ${frames.join("; ")}`,
+    ).toBe(1);
 
-    // On a touch screen a swipe in the slide is the row's (D-133), and the
-    // checks of the row mid glide, the wheel and the keys run where a fine
-    // pointer scrolls.
+    // On a touch screen a swipe in the slide, sideways or up and down, is
+    // the row's (D-169, D-174), and the checks of the row mid glide, the
+    // wheel, the keys and the
+    // buttons run where a fine pointer scrolls.
     const isTouch = await page.evaluate(
       () => window.matchMedia("(pointer: coarse)").matches,
     );
@@ -902,6 +1071,7 @@ for (const setup of SETUPS) {
       .toMatchObject({ current: [passAt(0)] });
     const target = await slideTop(page, restProgress(1));
     const from = await page.evaluate(() => window.scrollY);
+    await recordScrollTo(page);
     const glide = scrollAtRest(page, {
       from,
       quietMs: 500,
@@ -919,9 +1089,10 @@ for (const setup of SETUPS) {
     expect(Math.abs(landed - target), clickLine).toBeLessThanOrEqual(
       TOLERANCE_PX,
     );
-    expect(glided.length, `${clickLine}: a glide, not a jump`).toBeGreaterThan(
-      2,
-    );
+    expect(
+      await askedScrolls(page),
+      `${clickLine}: a glide, not a jump`,
+    ).toContain("smooth");
     lines.push(await expectAtRest(page, 1, isLive(1), "after the click"));
 
     // Tab and Shift+Tab move from card to card, and each takes the page at
@@ -1089,6 +1260,9 @@ test("REQ-ENG-09 REQ-A11Y-04 REQ-A11Y-01 with calm mode on, the passes lie still
   await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
   await toggle.click();
   await expect(toggle).toHaveAttribute("aria-checked", "false");
+  // Below 640 px the switch is the footer's, and the click scrolled down to
+  // it; back above the stretch, as on a desktop, where it is the hero's.
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
   await expect(viewer).toHaveAttribute("data-sliding", "");
   await expect(page.locator(SLIDE_STRETCH)).toHaveCount(1);
   await expect
@@ -1096,6 +1270,58 @@ test("REQ-ENG-09 REQ-A11Y-04 REQ-A11Y-01 with calm mode on, the passes lie still
     .toEqual(
       restState(0, look === "halftone" && LIVE_PASSES[2].includes(passAt(0))),
     );
+});
+
+test("REQ-SCR-02 REQ-A11Y-02 REQ-ENG-09 the slide's Skip to About link scrolls the page past the cards to About, never a jump, by a click or from the keyboard, focus going with it, and comes before the cards in the Tab order", async ({
+  page,
+}) => {
+  test.setTimeout(ENGINE_TIMEOUT_MS + 60_000);
+  await page.goto("/");
+  await waitForField(page);
+  await waitForStory(page);
+  await expect(page.locator(VIEWER)).toHaveAttribute("data-sliding", "");
+  const skip = page.locator(`${VIEWER} [data-part="pass-skip"]`);
+  await expect(skip).toHaveAccessibleName(passViewer.skip);
+  await expect(skip).toHaveAttribute("href", "#about");
+
+  // A click from a middle card: past the rest of the cards, onto About.
+  await scrollToSlide(page, restProgress(2));
+  await expect
+    .poll(() => slideState(page))
+    .toMatchObject({ current: [passAt(2)] });
+  // A scroll, not a jump (D-176): the page passes places on its way.
+  const clicked = await scrollDuring(page, () => skip.click());
+  expect(
+    clicked.between,
+    `a click scrolled from ${clicked.from} to ${clicked.to} px through ${clicked.between} places`,
+  ).toBeGreaterThanOrEqual(GLIDE_PLACES);
+  await expect(page).toHaveURL(/#about$/);
+  await expect(page.locator("#about")).toBeInViewport();
+  await expect(page.locator("#about")).toBeFocused();
+  await expect(page.locator(FIELD)).toHaveAttribute("data-chapter", "about", {
+    timeout: FIELD_FOLLOW_MS,
+  });
+
+  // From the keyboard: Tab from the start of the chapter reaches the link
+  // before any card's face, and Enter takes the page to About.
+  await page.evaluate(() => {
+    history.replaceState(null, "", "/");
+    window.scrollTo({ top: 0, behavior: "instant" });
+    document
+      .getElementById("making-of-heading")
+      ?.setAttribute("tabindex", "-1");
+    document.getElementById("making-of-heading")?.focus();
+  });
+  await page.keyboard.press("Tab");
+  await expect(skip).toBeFocused();
+  const pressed = await scrollDuring(page, () => page.keyboard.press("Enter"));
+  expect(
+    pressed.between,
+    `Enter scrolled from ${pressed.from} to ${pressed.to} px through ${pressed.between} places`,
+  ).toBeGreaterThanOrEqual(GLIDE_PLACES);
+  await expect(page).toHaveURL(/#about$/);
+  await expect(page.locator("#about")).toBeInViewport();
+  await expect(page.locator("#about")).toBeFocused();
 });
 
 test("REQ-ENG-09 REQ-A11Y-03 under reduced motion the passes never slide: the still grid stays, with every still", async ({

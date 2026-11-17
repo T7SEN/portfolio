@@ -16,6 +16,13 @@ import {
 } from "../src/lib/loader-store";
 import { expectNoAxeViolations } from "./support/axe";
 import {
+  goThroughMenu,
+  MENU_WORK,
+  menuButton,
+  waitForHandlers,
+  waitForHydration,
+} from "./support/interface";
+import {
   COVER,
   COVER_CANVAS,
   COVER_STATUS,
@@ -299,9 +306,26 @@ test("REQ-LOAD-01 REQ-ENG-08 with no usable GPU the cover lifts onto the tier 3 
   const times = liftTimes(await readLoaderLog(page));
   testInfo.annotations.push({ type: "lift", description: times.line });
 
-  expect(times.outcome, times.line).toBe("still");
-  if (times.tier === null) throw new Error(`No tier: ${times.line}`);
-  expectLiftDue(times, times.tier);
+  // Tier 3 comes once the three.js runtime has loaded and failed to make
+  // a context, which a gate's parallel browsers slowed past the time
+  // limit once (11.7 s): the cover then lifts at the limit, which is the
+  // rule there (REQ-LOAD-01, D-180).
+  if (times.outcome === "limit") {
+    if (times.tier !== null) {
+      expect(times.tier, times.line).toBeGreaterThanOrEqual(
+        LIFT_LIMIT_MS - MARK_LAG_MS,
+      );
+    }
+    expectLiftDue(times, null);
+    testInfo.annotations.push({
+      type: "rule",
+      description: "lifted at the time limit: tier 3 came after it",
+    });
+  } else {
+    expect(times.outcome, times.line).toBe("still");
+    if (times.tier === null) throw new Error(`No tier: ${times.line}`);
+    expectLiftDue(times, times.tier);
+  }
   expectRipple(times);
 
   await expectPageFree(page);
@@ -613,10 +637,32 @@ test("REQ-LOAD-01 a reload and a later home load in the same tab show the cover 
   }
 });
 
-/** A click on the bar's home link: a move to "/" inside the site. */
+/**
+ * A click on the bar's home link: a move to "/" inside the site, once the
+ * link's handler is live. A mark left on the window before the click proves
+ * the page was not loaded again, since a full load of "/" would pass every
+ * check of a move with the inline script's own cover; and data-loader-off,
+ * which only a full load sets, is kept as it was.
+ */
 async function clickHome(page: Page) {
-  await page.getByRole("link", { name: "T7SEN, home", exact: true }).click();
+  const home = page.getByRole("link", { name: "T7SEN, home", exact: true });
+  await waitForHandlers(home);
+  const off = await html(page).getAttribute(LOADER_OFF_ATTRIBUTE);
+  await page.evaluate(() => {
+    (window as unknown as { movedInside?: boolean }).movedInside = true;
+  });
+  await home.click();
   await page.waitForURL((url) => url.pathname === "/");
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { movedInside?: boolean }).movedInside,
+      undefined,
+    ),
+    "the move to / loaded the page again",
+  ).toBe(true);
+  if (off === null)
+    await expect(html(page)).not.toHaveAttribute(LOADER_OFF_ATTRIBUTE);
+  else await expect(html(page)).toHaveAttribute(LOADER_OFF_ATTRIBUTE, off);
 }
 
 test("REQ-LOAD-01 REQ-NAV-01 a move from /work to the home page while the field has not drawn shows the cover over the held page, and it lifts with the ripple once the field has drawn, timed from its own first frame", async ({
@@ -686,10 +732,7 @@ test("REQ-LOAD-01 REQ-NAV-01 once the field has drawn, a move back to the home p
     timeout: ENGINE_TIMEOUT_MS,
   });
 
-  await page
-    .getByRole("navigation", { name: "Site controls" })
-    .getByRole("link", { name: "Work", exact: true })
-    .click();
+  await goThroughMenu(page, MENU_WORK);
   await page.waitForURL((url) => url.pathname === "/work");
   const before = await readLoaderLog(page);
   await clickHome(page);
@@ -722,10 +765,7 @@ test("REQ-LOAD-01 REQ-ENG-07 going back while a cover after a move is up takes i
     await expect(page.locator(COVER)).toHaveCount(0);
     await expect(html(page)).toHaveAttribute(LOADER_ATTRIBUTE, "done");
     await expectPageFree(page, { focusAtTop: false });
-    const work = page
-      .getByRole("navigation", { name: "Site controls" })
-      .getByRole("link", { name: "Work", exact: true });
-    expect(await reachOf(work)).toEqual({
+    expect(await reachOf(menuButton(page))).toEqual({
       inert: false,
       underCover: false,
       hit: true,
@@ -741,6 +781,11 @@ test("REQ-LOAD-01 REQ-NAV-01 a move from inside the site to /#work lands on its 
   await asTier3(page);
   await recordLoader(page);
   await page.goto("/work");
+  // The router exists once the page has hydrated.
+  await waitForHydration(page);
+  await page.evaluate(() => {
+    (window as unknown as { movedInside?: boolean }).movedInside = true;
+  });
   // No link inside the site points at a part of the home page yet, so the
   // router takes the move as a link would.
   await page.evaluate(() => {
@@ -750,6 +795,12 @@ test("REQ-LOAD-01 REQ-NAV-01 a move from inside the site to /#work lands on its 
     router.push("/#work");
   });
   await page.waitForURL((url) => url.pathname === "/" && url.hash === "#work");
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { movedInside?: boolean }).movedInside,
+    ),
+    "the move to /#work loaded the page again",
+  ).toBe(true);
   await expect(page.locator(COVER)).toHaveAttribute("data-loader-owned", "");
   await waitForLift(page);
   const times = liftTimes(await readLoaderLog(page), { from: "move" });
@@ -784,10 +835,7 @@ test("REQ-LOAD-01 REQ-CNT-01 when the inline script never ran, as a policy that 
   await expect(html(page)).not.toHaveAttribute(LOADER_ATTRIBUTE);
   await expect(html(page)).not.toHaveAttribute(LOADER_OFF_ATTRIBUTE);
 
-  await page
-    .getByRole("navigation", { name: "Site controls" })
-    .getByRole("link", { name: "Work", exact: true })
-    .click();
+  await goThroughMenu(page, MENU_WORK);
   await page.waitForURL((url) => url.pathname === "/work");
   await clickHome(page);
   await expectHeroReachable(page);

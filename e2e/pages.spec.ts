@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { ENGINE_ENTRY, findDeferredLibraries } from "../scripts/budget-lib.mjs";
 import { findPhysicalInCss } from "../scripts/class-scan-lib.mjs";
@@ -11,6 +11,7 @@ import {
   LOADER_OFF_ATTRIBUTE,
 } from "../src/components/loader/loader-config";
 import { expectNoAxeViolations } from "./support/axe";
+import { menuButton, waitForHydration } from "./support/interface";
 import {
   COVER,
   holdEngine,
@@ -151,7 +152,7 @@ test("REQ-NAV-01 REQ-LOAD-01 on every load of the home page, See the work and Sk
 });
 
 for (const route of ROUTES.filter(({ path }) => path !== "/")) {
-  test(`REQ-NAV-01 REQ-LOAD-01 a load of ${route.path} shows no cover, and the bar's links are reachable from the first frame`, async ({
+  test(`REQ-NAV-01 REQ-LOAD-01 a load of ${route.path} shows no cover, and the bar's home link and Menu are reachable from the first frame`, async ({
     context,
   }) => {
     const tab = await context.newPage();
@@ -164,9 +165,7 @@ for (const route of ROUTES.filter(({ path }) => path !== "/")) {
       );
       for (const link of [
         tab.getByRole("link", { name: "T7SEN, home", exact: true }),
-        tab
-          .getByRole("navigation", { name: "Site controls" })
-          .getByRole("link", { name: "Work", exact: true }),
+        menuButton(tab),
       ]) {
         await expect(link).toBeInViewport({
           ratio: 1,
@@ -237,6 +236,73 @@ test("REQ-NAV-01 on the home page with no cover (the loader's script emptied), S
 
   await expect(page).toHaveURL(/#work$/);
   await expect(page.locator("#work")).toBeInViewport();
+});
+
+// Puts the top of a home chapter this far below the top of the screen.
+function placeChapter(page: Page, id: string, below: number) {
+  return page.evaluate(
+    ([part, offset]) => {
+      const chapter = document.getElementById(part);
+      if (chapter === null) throw new Error(`no chapter ${part}`);
+      const top = Math.round(
+        chapter.getBoundingClientRect().top + window.scrollY - offset,
+      );
+      window.scrollTo({ top, behavior: "instant" });
+      return top;
+    },
+    [id, below] as const,
+  );
+}
+
+test("REQ-NAV-06 on the home page the address follows the chapter being read, the plain / on the hero, scrolls nothing and adds no step to the history", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await waitForHydration(page);
+  const steps = await page.evaluate(() => history.length);
+
+  for (const id of ["field", "work", "making-of", "about", "contact"]) {
+    await placeChapter(page, id, -1);
+    await expect(page).toHaveURL(new RegExp(`/#${id}$`));
+  }
+  // The address changes and the page stays where it was put.
+  const top = await placeChapter(page, "work", -200);
+  await expect(page).toHaveURL(/\/#work$/);
+  await page.waitForTimeout(300);
+  expect(await page.evaluate(() => window.scrollY)).toBeCloseTo(top, 0);
+
+  await page.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+  await expect(page).toHaveURL(/\/$/);
+  expect(await page.evaluate(() => history.length)).toBe(steps);
+});
+
+test("REQ-NAV-06 REQ-LOAD-01 a load of /#about keeps its address while the cover holds the page at the top, then lands on About with it", async ({
+  context,
+}) => {
+  test.setTimeout(LIFT_TIMEOUT_MS + 30_000);
+  // A tab of its own, whose pages keep the loader's script.
+  const tab = await context.newPage();
+  const engine = await holdEngine(tab, "hold");
+  try {
+    await tab.goto("/#about", { waitUntil: "domcontentloaded" });
+    await expect(tab.locator(COVER)).toHaveAttribute("data-loader-owned", "");
+    await waitForHydration(tab);
+    await tab.mouse.wheel(0, 400);
+    await tab.waitForTimeout(300);
+    await expect(tab).toHaveURL(/\/#about$/);
+
+    engine.release();
+    await waitForLift(tab);
+    await expect(tab.locator("#about")).toBeInViewport();
+    await tab.waitForTimeout(300);
+    await expect(tab).toHaveURL(/\/#about$/);
+    // The address follows the page from here on.
+    await tab.evaluate(() => window.scrollTo({ top: 0, behavior: "instant" }));
+    await expect(tab).toHaveURL(/\/$/);
+  } finally {
+    engine.release();
+    await tab.close();
+  }
 });
 
 for (const study of SHORT_STUDIES) {
@@ -388,7 +454,10 @@ test("REQ-A11Y-02 the focus ring is glow from its first frame on every focusable
   await expect(primary).toBeVisible();
   const seen: string[] = [];
   let reachedPrimary = false;
-  for (let stop = 0; stop < 40; stop += 1) {
+  let wentRound = false;
+  // Tab until focus leaves the page's last stop for the browser (body); the
+  // cap only stops a loop that never gets there, and fails it.
+  for (let stop = 0; stop < 120; stop += 1) {
     await page.keyboard.press("Tab");
     const ring = await page.evaluate(() => {
       const element = document.activeElement;
@@ -410,7 +479,10 @@ test("REQ-A11Y-02 the focus ring is glow from its first frame on every focusable
         fading,
       };
     });
-    if (ring === null) break;
+    if (ring === null) {
+      wentRound = true;
+      break;
+    }
     seen.push(ring.name);
     expect(ring, `${ring.name}: the ring as it is first drawn`).toMatchObject({
       colour: glow,
@@ -420,6 +492,9 @@ test("REQ-A11Y-02 the focus ring is glow from its first frame on every focusable
     });
     if (ring.name.includes(HERO.primaryAction)) reachedPrimary = true;
   }
+  expect(wentRound, `Tab reached the page's end in ${seen.length} stops`).toBe(
+    true,
+  );
   expect(seen.length).toBeGreaterThan(5);
   expect(reachedPrimary, "the primary pill took focus").toBe(true);
 });

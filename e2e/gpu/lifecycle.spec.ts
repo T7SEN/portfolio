@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { RAISE_AFTER_MS } from "../../src/engine/runtime/adaptive";
+import { goThroughMenu, MENU_WORK } from "../support/interface";
 import { readSurface, watchErrors } from "./frame-times";
 import { pixelStats } from "./pixels";
 
@@ -10,7 +12,14 @@ const VIEW = '[data-testid="engine-view"]';
 const HOST = `${VIEW} [data-part="host"]`;
 const CANVAS = `${HOST} > canvas`;
 // three.js reports a loss with console.error; nothing else may be logged.
-const LOSS_MESSAGE = /lost/i;
+// A lost device, and a pipeline three.js was still building when it went,
+// which reports the lost instance: "Async render pipeline creation failed
+// ... A valid external Instance reference no longer exists", then, asking
+// for the shader's diagnostics, "Instance dropped error in
+// getCompilationInfo" (three r187, WebGPUBackend). All are the loss itself,
+// never a fault of the field.
+const LOSS_MESSAGE =
+  /lost|Instance reference no longer exists|Instance dropped error/i;
 
 function settled(page: Page, tier: 1 | 2 | 3) {
   return page.locator(`${VIEW}[data-tier="${tier}"][data-ready="true"]`);
@@ -121,6 +130,21 @@ for (const tier of [1, 2] as const) {
     // The site bar carries its own Calm toggle; the development page's
     // engine listens only to the page's own button.
     const calm = page.locator(VIEW).getByRole("button", { name: "Calm" });
+    // With no chapter sent, the development page's field is the backdrop
+    // alone (lit about 0.006) for about a second after ready, and its flow
+    // lines come in over the next two (to about 0.019). Calm holds the field
+    // as it is, so calm turned on that early held the backdrop: the "0.0055"
+    // of P4.5 and of 16 Nov 2026, which came and went with the moment of the
+    // click, never with the tests run before it.
+    await expect
+      .poll(
+        async () =>
+          (await pixelStats(page, await canvas.screenshot())).litShare,
+        {
+          timeout: 15_000,
+        },
+      )
+      .toBeGreaterThan(0.012);
 
     await calm.click();
     await expect(calm).toHaveAttribute("aria-pressed", "true");
@@ -135,8 +159,14 @@ for (const tier of [1, 2] as const) {
     );
     expect(still.equals(later), "the calm field does not move").toBe(true);
     const stats = await pixelStats(page, still);
+    const look = await page.locator(VIEW).getAttribute("data-live-look");
+    const ratio = await canvas.evaluate((element) =>
+      element instanceof HTMLCanvasElement
+        ? element.width / element.clientWidth
+        : 0,
+    );
     console.log(
-      `lifecycle calm tier ${tier}: lit share ${stats.litShare.toFixed(4)}, brightest ${stats.brightest}`,
+      `lifecycle calm tier ${tier}: look ${look}, pixel ratio ${ratio}, lit share ${stats.litShare.toFixed(4)}, brightest ${stats.brightest}`,
     );
     expect(stats.litShare, "the still frame shows the field").toBeGreaterThan(
       0.01,
@@ -214,10 +244,8 @@ for (const tier of [1, 2] as const) {
     // A client-side navigation unmounts the view, which disposes the engine.
     // What dispose frees, and in what order, is checked in the runtime's
     // unit tests; a page cannot see a renderer that was left alive.
-    await page
-      .getByRole("navigation", { name: "Site controls" })
-      .getByRole("link", { name: "Work" })
-      .click();
+    // From P5 the bar's page links are in its menu.
+    await goThroughMenu(page, MENU_WORK);
     await page.waitForURL("**/work");
     await expect(page.locator(VIEW)).toHaveCount(0);
     await page.waitForTimeout(2_000);
@@ -289,7 +317,13 @@ for (const tier of [1, 2] as const) {
           ? element.width / element.clientWidth
           : 0,
       );
-    expect(await ratio()).toBe(1);
+    // A cold development page can draw its first frames at 0.75 and come up
+    // to 1 once the frames are quick. A ratio that has just risen is on
+    // trial for RAISE_AFTER_MS, and slow frames then would mark it failed and
+    // never try it again (adaptive.ts), so the slow frames start after it.
+    await expect.poll(ratio, { timeout: 10_000 }).toBe(1);
+    await page.waitForTimeout(RAISE_AFTER_MS + 500);
+    expect(await ratio(), "the ratio held 1 through its trial").toBe(1);
 
     // Every frame of the page now takes 30 ms or more, whatever the GPU.
     await page.evaluate(() => {

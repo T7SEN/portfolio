@@ -425,7 +425,10 @@ function ratioOf(page: Page) {
  * fall under the lit line while the white ones stay: on 12 Nov 2026 the
  * wordmark measured 444 white of 1732 lit cells (25.6%) at 0.75 and 446 to
  * 457 of 2069 to 2114 (21.1 to 21.9%) at 1. The burn limits are for the
- * full ratio, so each state is measured there.
+ * full ratio, so each state is measured there. The buffer takes its new size
+ * at once, but the screen keeps the last frame drawn small until the field
+ * draws again: on 16 Nov 2026 a capture straight after the ratio read 1 gave
+ * 446 white of 1718 lit cells (26.0%). So a few frames pass first.
  */
 async function atFullRatio(page: Page): Promise<number> {
   const before = await ratioOf(page);
@@ -435,8 +438,24 @@ async function atFullRatio(page: Page): Promise<number> {
       timeout: 15_000,
     })
     .toBe(1);
+  await page.evaluate(
+    (count) =>
+      new Promise<void>((resolve) => {
+        let left = count;
+        const tick = () => {
+          left -= 1;
+          if (left <= 0) resolve();
+          else requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      }),
+    FRAMES_AFTER_RATIO,
+  );
   return before;
 }
+
+/** Frames drawn after the full ratio returns, before a capture. */
+const FRAMES_AFTER_RATIO = 4;
 
 /** requestAnimationFrame intervals over a short window, after a warm-up. */
 async function shortFrames(page: Page) {
@@ -858,6 +877,10 @@ for (const { tier, count } of TIERS) {
         look === "soft" ? "soft" : "",
       );
       await page.waitForTimeout(SETTLE_MS);
+      // The burn and lattice lines hold at a pixel ratio of 1, as in the
+      // chapter states above: a slow start can leave the adaptive ratio
+      // lower after the settle (atFullRatio).
+      const ratioBefore = await atFullRatio(page);
       const measured = await frameOf(
         page,
         entry,
@@ -868,6 +891,7 @@ for (const { tier, count } of TIERS) {
       const frames = await shortFrames(page);
       const line =
         `story look ${look} tier ${tier} ${measuredText(entry, measured)}; ` +
+        `pixel ratio ${ratioBefore} after the settle, measured at 1; ` +
         `frames ${frames.frames}, median ${frames.medianMs.toFixed(2)} ms, p95 ${frames.p95Ms.toFixed(2)} ms`;
       console.log(line);
       testInfo.annotations.push({ type: "look", description: line });

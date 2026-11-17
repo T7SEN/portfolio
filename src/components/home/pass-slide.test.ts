@@ -5,9 +5,17 @@ import { PASSES } from "@/engine/story";
 import {
   glideCard,
   keyStep,
+  catchRest,
+  CATCH_HOLD_MS,
+  isPageKey,
+  isSwipe,
+  MOMENTUM_QUIET_MS,
+  pageRest,
+  progressAt,
+  sideKey,
   stepRest,
+  STEP_HOLD_MS,
   SWIPE_PX,
-  swipeCards,
   middleCard,
   NEW_TURN,
   NOTCH_GAP_MS,
@@ -171,21 +179,61 @@ describe("the making-of slide", () => {
       expect(wheel(1301, NOTCH_PX)).toBe(1450);
     });
 
-    test("REQ-SCR-02 a quick spin moves a card a notch, each from where Lenis is heading; a close stream of large inputs gathers instead", () => {
+    test("REQ-SCR-02 a quick spin moves one card; a spin that goes on walks on a card per STEP_HOLD_MS, from where Lenis is heading", () => {
       now = 20_000;
       turn = NEW_TURN;
       expect(wheel(1000, 100)).toBe(1150);
       later(NOTCH_GAP_MS + 10);
-      expect(wheel(1150, 100)).toBe(1300);
+      expect(wheel(1150, 100)).toBe(1150);
       later(NOTCH_GAP_MS + 10);
-      expect(wheel(1300, 100)).toBe(1450);
-      // A trackpad's inertia: inputs every 8 ms gather, half a card a step.
+      expect(wheel(1150, 100)).toBe(1150);
+      // Still the same turn: a notch every 50 ms until the hold is over.
+      for (let ms = 2 * (NOTCH_GAP_MS + 10); ms < STEP_HOLD_MS - 50; ms += 50) {
+        later(50);
+        expect(wheel(1150, 100)).toBe(1150);
+      }
+      now = 20_000 + STEP_HOLD_MS;
+      expect(wheel(1150, 100)).toBe(1300);
+      later(50);
+      expect(wheel(1300, 100)).toBe(1300);
+      // A pause starts a new turn, which steps at once.
       later(TURN_GAP_MS + 1);
+      expect(wheel(1300, 100)).toBe(1450);
+    });
+
+    test("REQ-SCR-02 a spin onto the last card holds there, so it never flings the page out of the slide; the next turn leaves", () => {
+      now = 25_000;
+      turn = NEW_TURN;
+      expect(wheel(1450, 100)).toBe(1600);
+      later(NOTCH_GAP_MS + 10);
+      expect(wheel(1600, 100)).toBe(1600);
+      later(NOTCH_GAP_MS + 10);
+      expect(wheel(1600, 100)).toBe(1600);
+      later(TURN_GAP_MS + 1);
+      expect(wheel(1600, 100)).toBeNull();
+      // Coming in from above, a spin lands on the first card and holds.
+      later(TURN_GAP_MS + 1);
+      expect(wheel(950, 100)).toBe(1000);
+      later(NOTCH_GAP_MS + 10);
+      expect(wheel(1000, 100)).toBe(1000);
+    });
+
+    test("REQ-SCR-02 a trackpad's close stream gathers half a card a step, then holds while the card glides in", () => {
+      now = 27_000;
+      turn = NEW_TURN;
       expect(wheel(1150, 50)).toBe(1300);
-      later(8);
-      expect(wheel(1300, 50)).toBe(1300);
-      later(8);
-      expect(wheel(1300, 50)).toBe(1450);
+      // Its inertia, an input every 16 ms in the same turn: held while the
+      // card glides in, then gathered from nothing again.
+      while (now + 16 < 27_000 + STEP_HOLD_MS) {
+        later(16);
+        expect(wheel(1300, 30)).toBe(1300);
+      }
+      later(16);
+      expect(wheel(1300, 30)).toBe(1300);
+      later(16);
+      expect(wheel(1300, 30)).toBe(1300);
+      later(16);
+      expect(wheel(1300, 30)).toBe(1450);
     });
 
     test("REQ-SCR-02 small inputs, a trackpad's, gather until they make half the way to the next card", () => {
@@ -273,16 +321,78 @@ describe("the making-of slide", () => {
       }
     });
 
-    test("REQ-SCR-02 a swipe of SWIPE_PX or more moves a card, slow or quick; a long one a card for each card's length; less is a touch", () => {
-      expect(swipeCards(SWIPE_PX - 1, 150)).toBe(0);
-      expect(swipeCards(SWIPE_PX, 150)).toBe(1);
-      expect(swipeCards(-SWIPE_PX, 150)).toBe(1);
-      expect(swipeCards(120, 150)).toBe(1);
-      expect(swipeCards(330, 150)).toBe(2);
-      expect(swipeCards(-500, 150)).toBe(3);
-      expect(swipeCards(100, 0)).toBe(1);
-      expect(swipeCards(Number.NaN, 150)).toBe(0);
+    test("REQ-SCR-02 a swipe of SWIPE_PX or more, slow or quick, short or long, is a swipe; less is a touch", () => {
+      expect(isSwipe(SWIPE_PX - 1)).toBe(false);
+      expect(isSwipe(SWIPE_PX)).toBe(true);
+      expect(isSwipe(-SWIPE_PX)).toBe(true);
+      expect(isSwipe(500)).toBe(true);
+      expect(isSwipe(-500)).toBe(true);
+      expect(isSwipe(Number.NaN)).toBe(false);
     });
+
+    test("REQ-SCR-02 a key that pages the screen from outside stops on the first card below or the last above, within a screen; else it pages as ever", () => {
+      for (const key of ["PageDown", "PageUp", " "]) {
+        expect(isPageKey(key), key).toBe(true);
+      }
+      for (const key of ["ArrowDown", "End", "Home", "Enter"]) {
+        expect(isPageKey(key), key).toBe(false);
+      }
+      expect(pageRest(920, 1, 800, rests)).toBe(1000);
+      expect(pageRest(1680, -1, 800, rests)).toBe(1600);
+      // More than a screen away, or leaving from an end card: none.
+      expect(pageRest(100, 1, 800, rests)).toBeNull();
+      expect(pageRest(1600, 1, 800, rests)).toBeNull();
+      expect(pageRest(1000, -1, 800, rests)).toBeNull();
+      expect(pageRest(920, 0, 800, rests)).toBeNull();
+      expect(pageRest(920, 1, 0, rests)).toBeNull();
+    });
+
+    test("REQ-SCR-02 a flick's momentum is caught on the first rest it crosses: the first card from above, the last from below, the next card inside", () => {
+      expect(catchRest(700, 1050, rests)).toBe(1000);
+      expect(catchRest(700, 1500, rests)).toBe(1000);
+      expect(catchRest(1900, 1590, rests)).toBe(1600);
+      expect(catchRest(1900, 1100, rests)).toBe(1600);
+      expect(catchRest(1000, 1160, rests)).toBe(1150);
+      expect(catchRest(1200, 1140, rests)).toBe(1150);
+      // Short of a rest, or leaving the slide from an end card: none.
+      expect(catchRest(700, 990, rests)).toBeNull();
+      expect(catchRest(1000, 1100, rests)).toBeNull();
+      expect(catchRest(1000, 800, rests)).toBeNull();
+      // A page a pixel past a rest is still on it.
+      expect(catchRest(1001, 800, rests)).toBeNull();
+      expect(catchRest(1599, 1800, rests)).toBeNull();
+      expect(catchRest(1600, 1800, rests)).toBeNull();
+      expect(catchRest(1200, 1200, rests)).toBeNull();
+      expect(catchRest(Number.NaN, 1200, rests)).toBeNull();
+      expect(catchRest(700, 1050, [])).toBeNull();
+      // The hold outlasts the browser's momentum; a flick scrolls each frame.
+      expect(CATCH_HOLD_MS).toBeGreaterThan(1_300);
+      expect(MOMENTUM_QUIET_MS).toBeGreaterThan(50);
+    });
+  });
+
+  test("REQ-SCR-02 REQ-I18N-01 the arrow toward the next card goes on, the other back, mirrored right to left; other keys nothing", () => {
+    expect(sideKey("ArrowRight", false)).toBe(1);
+    expect(sideKey("ArrowLeft", false)).toBe(-1);
+    expect(sideKey("ArrowLeft", true)).toBe(1);
+    expect(sideKey("ArrowRight", true)).toBe(-1);
+    for (const other of ["ArrowDown", "ArrowUp", " ", "Home", "a"]) {
+      expect(sideKey(other, false)).toBe(0);
+    }
+  });
+
+  test("REQ-SCR-02 progressAt is slideAt's inverse: a card's rest at a whole card, the glide's place between two", () => {
+    PASSES.forEach((_, index) => {
+      expect(progressAt(index)).toBeCloseTo(restProgress(index), 12);
+    });
+    for (let step = 0; step <= 400; step += 1) {
+      const place = (step / 400) * (PASSES.length - 1);
+      expect(slideAt(progressAt(place))).toBeCloseTo(place, 9);
+    }
+    // Clamped to the cards; not a number is the first card's rest.
+    expect(progressAt(-1)).toBe(restProgress(0));
+    expect(progressAt(PASSES.length + 2)).toBe(restProgress(PASSES.length - 1));
+    expect(progressAt(Number.NaN)).toBe(restProgress(0));
   });
 
   test("REQ-SCR-02 progress outside 0 to 1, or not a number, is clamped", () => {

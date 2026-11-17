@@ -4,7 +4,9 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { copyright, site } from "@/content/site";
+import { soundCopy } from "@/content/sound";
 import { calmStore } from "@/lib/calm-store";
+import { overlayStore } from "@/lib/overlay-store";
 import { colors, type ColorName } from "@/tokens/colors";
 import { contrastRatio } from "@/tokens/contrast";
 
@@ -20,7 +22,7 @@ import { Logo } from "./logo";
 import { Panel } from "./panel";
 import { PillButton, PillLink } from "./pill";
 import { SiteFooter } from "./site-footer";
-import { SiteHeader } from "./site-header";
+import { HomeLink, SiteHeader } from "./site-header";
 import { SkipLink } from "./skip-link";
 import { TextLink } from "./text-link";
 import { Wordmark } from "./wordmark";
@@ -60,6 +62,25 @@ const device = vi.hoisted(() => {
   };
 });
 
+const route = vi.hoisted(() => ({ pathname: "/work" as string | null }));
+
+vi.mock("next/navigation", () => ({
+  usePathname: () => route.pathname,
+}));
+
+const eggs = vi.hoisted(() => ({ requested: [] as string[] }));
+
+vi.mock("@/lib/eggs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/eggs")>();
+  return {
+    ...actual,
+    requestEgg: (egg: string) => {
+      eggs.requested.push(egg);
+      return { played: true } as const;
+    },
+  };
+});
+
 vi.mock("@/lib/calm-store", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/calm-store")>();
   return {
@@ -93,7 +114,7 @@ function spokenText(element: Element | null) {
   return (copy.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
-function classesOf(element: Element | null) {
+function classesOf(element: Element | null | undefined) {
   return (element?.getAttribute("class") ?? "").split(/\s+/);
 }
 
@@ -103,7 +124,43 @@ function allClasses(host: Element) {
     .join(" ");
 }
 
-const VARIANTS: readonly CalmToggleVariant[] = ["header", "pill", "words"];
+const VARIANTS: readonly CalmToggleVariant[] = ["pill", "words"];
+
+/** The name assistive technology gives a control: its label, else its words. */
+function nameOf(element: Element | null | undefined) {
+  return element?.getAttribute("aria-label") ?? spokenText(element ?? null);
+}
+
+let liveHost: HTMLDivElement;
+let liveRoot: Root;
+
+function useLiveRoot() {
+  beforeEach(() => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    liveHost = document.createElement("div");
+    document.body.append(liveHost);
+    liveRoot = createRoot(liveHost);
+  });
+
+  afterEach(async () => {
+    await act(async () => {
+      liveRoot.unmount();
+    });
+    overlayStore.close();
+    overlayStore.takeReturnFocus();
+    route.pathname = "/work";
+    eggs.requested.length = 0;
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    document.body.replaceChildren();
+  });
+}
+
+async function mountLive(element: ReactElement) {
+  await act(async () => {
+    liveRoot.render(element);
+  });
+}
 
 describe("SkipLink", () => {
   it("REQ-A11Y-02 skip link targets the main landmark", () => {
@@ -129,38 +186,217 @@ describe("SiteHeader", () => {
     );
   });
 
-  it("REQ-A11Y-02 the nav named Site controls holds Work, About and Contact as pills, then the Calm switch last", () => {
+  it("REQ-NAV-02 the nav named Site controls holds Sound, the Ctrl K pill and Menu, in that order, after the logo link", () => {
     const header = render(<SiteHeader />);
     const nav = header.querySelector('nav[aria-label="Site controls"]');
-    const links = [...(nav?.querySelectorAll("a") ?? [])];
-    const stops = [...header.querySelectorAll("a, button")];
+    const buttons = [...(nav?.querySelectorAll("button") ?? [])];
 
     expect(header.querySelectorAll("nav")).toHaveLength(1);
-    expect(links.map((link) => link.getAttribute("href"))).toEqual([
-      "/work",
-      "/about",
-      "/contact",
+    expect(buttons.map(nameOf)).toEqual([
+      soundCopy.toggle.names.off,
+      "Open the command palette, Ctrl K",
+      "Menu",
     ]);
-    expect(stops.map((stop) => spokenText(stop))).toEqual([
-      "T7SEN",
-      "Work",
-      "About",
-      "Contact",
-      "Calm mode",
-    ]);
-    expect(stops.at(-1)?.getAttribute("role")).toBe("switch");
-    expect(stops.at(-1)?.closest("nav")).toBe(nav);
-    for (const link of links) {
-      expect(classesOf(link)).toEqual(
-        expect.arrayContaining(["rounded-full", "min-h-11", "min-w-11"]),
+    // Work, About, Contact and the Calm switch left the bar at P5.
+    expect(nav?.querySelector('[role="switch"]')).toBeNull();
+    expect(
+      [...header.querySelectorAll("a")].map((link) =>
+        link.getAttribute("href"),
+      ),
+    ).toEqual(["/", "#" + site.siteLinksId]);
+    for (const button of buttons) {
+      expect(classesOf(button)).toEqual(
+        expect.arrayContaining(["min-h-11", "min-w-11"]),
       );
     }
   });
 
-  it("REQ-NAV-01 below 640 px the controls take their own row, from 640 px they sit beside the logo", () => {
-    const nav = render(<SiteHeader />).querySelector("nav");
-    expect(classesOf(nav)).toEqual(
-      expect.arrayContaining(["basis-full", "sm:basis-auto", "flex-wrap"]),
+  it("REQ-NAV-02 the Ctrl K pill shows two raised key caps, a magnifying glass below 640 px", () => {
+    const button = render(<SiteHeader />).querySelector(
+      '[data-part="palette-button"]',
+    );
+    const caps = button?.querySelector('span[aria-hidden="true"]');
+    const glass = button?.querySelector("svg");
+
+    expect(classesOf(caps)).toContain("max-sm:hidden");
+    expect([...(caps?.children ?? [])].map((cap) => cap.textContent)).toEqual([
+      "Ctrl",
+      "K",
+    ]);
+    for (const cap of caps?.children ?? []) {
+      expect(classesOf(cap)).toEqual(
+        expect.arrayContaining(["bg-raised", "border", "font-mono"]),
+      );
+    }
+    expect(classesOf(glass)).toContain("sm:hidden");
+    expect(glass?.getAttribute("aria-hidden")).toBe("true");
+    expect(classesOf(button)).toEqual(
+      expect.arrayContaining(["max-sm:size-11", "max-sm:px-0"]),
+    );
+    expect(button?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(button?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("REQ-NAV-03 Menu shows its two-line icon and its word on every width", () => {
+    const button = render(<SiteHeader />).querySelector(
+      '[data-part="menu-button"]',
+    );
+    const path = button?.querySelector("svg path")?.getAttribute("d");
+
+    expect(path).toBe("M4 9h16M4 15h10");
+    expect(button?.textContent).toBe("Menu");
+    expect(button?.innerHTML).not.toMatch(/sr-only|max-sm:hidden/);
+    expect(button?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(button?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("REQ-NAV-01 REQ-CNT-01 with scripts off sound and the palette are hidden, and Menu is a link to the footer's site links", () => {
+    const header = render(<SiteHeader />);
+    const items = [...header.querySelectorAll("nav li")];
+    const button = header.querySelector('[data-part="menu-button"]');
+    const link = header.querySelector('[data-part="menu-link"]');
+
+    expect(
+      items.map((item) => classesOf(item).includes("noscript:hidden")),
+    ).toEqual([true, true, false]);
+    expect(classesOf(button?.parentElement)).toEqual(
+      expect.arrayContaining(["contents", "noscript:hidden"]),
+    );
+    expect(classesOf(link?.parentElement)).toEqual(
+      expect.arrayContaining(["hidden", "noscript:contents"]),
+    );
+    expect(link?.getAttribute("href")).toBe("#" + site.siteLinksId);
+    expect(link?.textContent).toBe("Menu");
+    expect(
+      render(<SiteFooter year={2027} />)
+        .querySelector("#" + site.siteLinksId)
+        ?.getAttribute("aria-label"),
+    ).toBe(site.names.footer);
+  });
+
+  it("REQ-NAV-01 one row on every width: the controls never take a row of their own", () => {
+    const header = render(<SiteHeader />);
+    const row = header.querySelector("header > div");
+    expect(classesOf(row)).toEqual(
+      expect.arrayContaining(["flex", "flex-wrap", "py-3", "lg:py-7"]),
+    );
+    expect(classesOf(header.querySelector("nav"))).not.toContain("basis-full");
+  });
+});
+
+describe("The bar's controls", () => {
+  useLiveRoot();
+
+  it("REQ-NAV-03 Menu opens the menu through the overlay store and says so", async () => {
+    await mountLive(<SiteHeader />);
+    const menu = liveHost.querySelector<HTMLButtonElement>(
+      '[data-part="menu-button"]',
+    );
+    menu?.focus();
+
+    await act(async () => {
+      menu?.click();
+    });
+    expect(overlayStore.getSnapshot()).toBe("menu");
+    expect(menu?.getAttribute("aria-expanded")).toBe("true");
+
+    await act(async () => {
+      overlayStore.close();
+    });
+    expect(overlayStore.takeReturnFocus()).toBe(menu);
+  });
+
+  it("REQ-NAV-03 a second press on Menu, while the menu's code is still loading, closes it again", async () => {
+    await mountLive(<SiteHeader />);
+    const menu = liveHost.querySelector<HTMLButtonElement>(
+      '[data-part="menu-button"]',
+    );
+    await act(async () => {
+      menu?.click();
+    });
+    expect(overlayStore.getSnapshot()).toBe("menu");
+    await act(async () => {
+      menu?.click();
+    });
+    expect(overlayStore.getSnapshot()).toBeNull();
+    expect(menu?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("REQ-NAV-04 the Ctrl K pill opens the palette", async () => {
+    await mountLive(<SiteHeader />);
+    const palette = liveHost.querySelector<HTMLButtonElement>(
+      '[data-part="palette-button"]',
+    );
+
+    await act(async () => {
+      palette?.click();
+    });
+    expect(overlayStore.getSnapshot()).toBe("palette");
+    expect(palette?.getAttribute("aria-expanded")).toBe("true");
+  });
+
+  it("REQ-NAV-04 on an Apple device the pill shows Command K and its name says so", async () => {
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    await mountLive(<SiteHeader />);
+    const palette = liveHost.querySelector('[data-part="palette-button"]');
+
+    expect(palette?.getAttribute("aria-label")).toBe(
+      "Open the command palette, ⌘ K",
+    );
+    expect(palette?.textContent).toBe("⌘ K");
+  });
+
+  it("REQ-NAV-05 a long press on the logo link plays the mark egg and swallows the click; a short press plays nothing", async () => {
+    vi.useFakeTimers();
+    await mountLive(<HomeLink />);
+    const home = liveHost.querySelector("a");
+    if (home === null) throw new Error("The home link is missing");
+    const press = (type: string) =>
+      home.dispatchEvent(
+        new PointerEvent(type, {
+          bubbles: true,
+          isPrimary: true,
+          button: 0,
+          pointerId: 1,
+        }),
+      );
+    // A click that nothing stopped would make next/link navigate, which
+    // this test has no router for, so a listener on the parent records it.
+    const reached: string[] = [];
+    liveHost.addEventListener("click", (event) => {
+      reached.push(event.defaultPrevented ? "stopped" : "followed");
+      event.preventDefault();
+    });
+    const click = () =>
+      home.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+
+    press("pointerdown");
+    vi.advanceTimersByTime(600);
+    press("pointerup");
+    expect(eggs.requested).toEqual(["mark"]);
+    expect(click()).toBe(false);
+    expect(reached).toEqual([]);
+
+    press("pointerdown");
+    vi.advanceTimersByTime(200);
+    press("pointerup");
+    click();
+    expect(eggs.requested).toEqual(["mark"]);
+    expect(reached).toHaveLength(1);
+  });
+
+  it("REQ-A11Y-02 the logo link marks the home page as the current page, and no other", async () => {
+    route.pathname = "/";
+    await mountLive(<HomeLink />);
+    expect(liveHost.querySelector("a")?.getAttribute("aria-current")).toBe(
+      "page",
+    );
+    route.pathname = "/about";
+    await mountLive(<HomeLink className="x" />);
+    expect(liveHost.querySelector("a")?.hasAttribute("aria-current")).toBe(
+      false,
     );
   });
 });
@@ -227,22 +463,19 @@ describe("CalmToggle", () => {
     },
   );
 
-  it("REQ-A11Y-04 the header and hero forms show a track with a knob; the footer form says its state in words", () => {
+  it("REQ-A11Y-04 the hero form shows a track with a knob; the footer form says its state in words", () => {
     const host = render(
       <>
-        <CalmToggle variant="header" />
         <CalmToggle variant="pill" />
         <CalmToggle variant="words" />
       </>,
     );
-    const [header, pill, words] = [...host.querySelectorAll("button")];
+    const [pill, words] = [...host.querySelectorAll("button")];
 
-    for (const form of [header, pill]) {
-      const knob = form?.querySelector('[aria-hidden="true"] > span');
-      expect(classesOf(knob ?? null)).toEqual(
-        expect.arrayContaining(["bg-muted", "group-aria-checked:bg-glow"]),
-      );
-    }
+    const knob = pill?.querySelector('[aria-hidden="true"] > span');
+    expect(classesOf(knob ?? null)).toEqual(
+      expect.arrayContaining(["bg-muted", "group-aria-checked:bg-glow"]),
+    );
     expect(pill?.textContent).toBe("Calm mode");
     expect(words?.textContent).toBe("Calm mode off");
     expect(words?.querySelector('[aria-hidden="true"]')?.textContent).toBe(
@@ -250,17 +483,15 @@ describe("CalmToggle", () => {
     );
   });
 
-  it("REQ-NAV-01 below 640 px the header form shows Calm and keeps the name Calm mode", () => {
-    const toggle = render(<CalmToggle variant="header" />).querySelector(
-      "button",
-    );
-    const word = [...(toggle?.querySelectorAll("span") ?? [])].find(
-      (span) => span.textContent === " mode",
-    );
-
-    expect(classesOf(word ?? null)).toContain("max-sm:sr-only");
-    expect(spokenText(toggle ?? null)).toBe("Calm mode");
-  });
+  it.each(VARIANTS)(
+    "REQ-A11Y-04 the %s form is hidden with scripts off, where it would do nothing",
+    (variant) => {
+      const toggle = render(<CalmToggle variant={variant} />).querySelector(
+        "button",
+      );
+      expect(classesOf(toggle)).toContain("noscript:hidden");
+    },
+  );
 
   it("REQ-I18N-01 the knob moves along the inline axis, so it mirrors on right-to-left pages", () => {
     const knob = render(<CalmToggle variant="pill" />).querySelector(
@@ -275,7 +506,7 @@ describe("CalmToggle", () => {
   });
 
   it("REQ-A11Y-04 a click turns calm on for the visit and a second click turns it off", async () => {
-    await mount(<CalmToggle variant="header" />);
+    await mount(<CalmToggle variant="pill" />);
 
     await click();
     expect(first().getAttribute("aria-checked")).toBe("true");
@@ -288,26 +519,25 @@ describe("CalmToggle", () => {
     expect(device.stored.has("portfolio:calm")).toBe(false);
   });
 
-  it("REQ-A11Y-04 the header, hero and footer forms share one store and always agree", async () => {
+  it("REQ-A11Y-04 the hero and footer forms share one store and always agree", async () => {
     await mount(
       <>
-        <CalmToggle variant="header" />
         <CalmToggle variant="pill" />
         <CalmToggle variant="words" />
       </>,
     );
-    const [, , words] = switches() as HTMLButtonElement[];
+    const [, words] = switches() as HTMLButtonElement[];
     if (words === undefined) throw new Error("The footer form is missing");
 
     await click(words);
     expect(switches().map((node) => node.getAttribute("aria-checked"))).toEqual(
-      ["true", "true", "true"],
+      ["true", "true"],
     );
     expect(words.textContent).toBe("Calm mode on");
 
     await click();
     expect(switches().map((node) => node.getAttribute("aria-checked"))).toEqual(
-      ["false", "false", "false"],
+      ["false", "false"],
     );
     expect(words.textContent).toBe("Calm mode off");
   });
@@ -315,7 +545,6 @@ describe("CalmToggle", () => {
   it("REQ-A11Y-03 while the OS asks for reduced motion every form shows on, says why and stays on", async () => {
     await mount(
       <>
-        <CalmToggle variant="header" />
         <CalmToggle variant="pill" />
         <CalmToggle variant="words" />
       </>,
@@ -405,6 +634,34 @@ describe("SiteFooter", () => {
   it("REQ-NAV-01 the copyright year is the year the page is built", () => {
     const footer = render(<SiteFooter />);
     expect(footer.textContent).toContain(`© ${new Date().getFullYear()} T7SEN`);
+  });
+
+  it("REQ-NAV-04 REQ-SND-01 the footer holds the Sound pill beside the Calm pill, and the way into the palette in the copyright row", () => {
+    const footer = render(<SiteFooter year={2027} />);
+    const sound = footer.querySelector('[data-part="sound-pill"]');
+    const invite = footer.querySelector('[data-part="palette-invite"]');
+
+    expect(nameOf(sound)).toBe(soundCopy.toggle.names.off);
+    expect(sound?.textContent).toContain(soundCopy.toggle.words.off);
+    expect(sound?.getAttribute("aria-expanded")).toBe("false");
+    // The pill and its panel join the row, the panel opening in place on a
+    // line of its own under the pills.
+    const box = sound?.parentElement;
+    expect(classesOf(box)).toEqual(["contents"]);
+    expect(classesOf(box?.parentElement)).toEqual(
+      expect.arrayContaining(["contents", "noscript:hidden"]),
+    );
+    expect(box?.parentElement?.nextElementSibling?.getAttribute("role")).toBe(
+      "switch",
+    );
+    expect(invite?.tagName).toBe("BUTTON");
+    expect(invite?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(classesOf(invite)).toEqual(
+      expect.arrayContaining(["noscript:hidden", "min-h-11"]),
+    );
+    expect(invite?.parentElement?.firstElementChild?.textContent).toBe(
+      "© 2027 T7SEN",
+    );
   });
 
   it("REQ-A11Y-04 the footer's Calm pill is a switch that says its state in words", () => {
@@ -549,7 +806,7 @@ describe("Label", () => {
   it("REQ-A11Y-06 the eyebrow is violet and the chosen item's label glow", () => {
     const host = render(
       <>
-        <Label parts={["WebGPU developer"]} tone="violet" size="md" />
+        <Label parts={["Software Architect"]} tone="violet" size="md" />
         <Label parts={["2", "Velocity"]} tone="glow" />
       </>,
     );
@@ -785,6 +1042,7 @@ describe("Colour and direction", () => {
           Skip intro
         </PillLink>
         <CalmToggle variant="pill" />
+        <CalmToggle variant="words" />
         <Chip>GSAP</Chip>
         <Badge tone="progress">In progress</Badge>
         <Panel tone="raised">Panel</Panel>
@@ -819,6 +1077,8 @@ describe("Colour and direction", () => {
       "dashed",
       "t",
       "current",
+      "start",
+      "end",
     ]);
 
     expect(used.length).toBeGreaterThan(0);

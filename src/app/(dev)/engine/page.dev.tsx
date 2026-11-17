@@ -18,7 +18,10 @@ export default function EnginePage() {
         with ?look=soft, draw the making-of passes in a row of five flat cards,
         the T7 mark in the middle one, with ?passes=1, or one card in the middle
         with the mark inside it in one pass with ?pass= (points, velocity,
-        density, glow or final), and show only the field with ?bare=1.
+        density, glow or final), play an easter egg once it is ready with ?egg=
+        (gg, mark or flip), send the sound&apos;s levels to the about strands
+        with ?audio= (three numbers from 0 to 1, or wave for moving ones), and
+        show only the field with ?bare=1.
       </p>
       <EngineView />
     </div>

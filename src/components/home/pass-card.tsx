@@ -86,9 +86,14 @@ export function PassCard({
       data-live={isLive ? "" : undefined}
       data-middle={isMarked ? "" : undefined}
       className={cx(
-        "relative block aspect-[4/5] h-[32svh] max-h-65 overflow-hidden rounded-xl border",
-        isSliding &&
-          "transition-[border-color,box-shadow,opacity] duration-500 motion-reduce:transition-none lg:h-[min(52svh,25rem)] lg:max-h-none",
+        "relative block aspect-[4/5] max-h-65 overflow-hidden rounded-xl border",
+        // In the sliding row the face leaves room for the held heading over
+        // it: below 1024 px the label and the title, a card's words under
+        // the face and the buttons; from 1024 px the whole heading and the
+        // buttons, the words beside the face.
+        isSliding
+          ? "h-[min(32svh,calc(100svh-36rem))] transition-[border-color,box-shadow,opacity] duration-500 motion-reduce:transition-none lg:h-[min(25rem,calc(100svh-20rem))] lg:max-h-none"
+          : "h-[32svh]",
         isSliding && !isMiddle && "opacity-35",
         hasFill && "bg-surface",
         isMarked
@@ -164,11 +169,17 @@ export function PassCard({
       ) : (
         <span className="shrink-0">{face}</span>
       )}
+      {/* In the sliding row every card is as tall as the tallest, the row
+          stretching them [T7SEN, 16 Nov 2026] (D-177): below 1024 px the
+          words panel fills the card under the face, so the face and the
+          panel sit in the same place on every card and nothing shifts as
+          the row moves; from 1024 px the panel stays centred beside it. */}
       <Panel
         padding="md"
         className={cx(
           "w-full min-w-0",
-          isSliding && "lg:max-w-[28rem] lg:flex-1",
+          // The panel grows down the card below 1024 px, across it above.
+          isSliding && "flex-1 lg:max-w-[28rem]",
         )}
       >
         <div data-plate="own">

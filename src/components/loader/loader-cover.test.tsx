@@ -25,6 +25,7 @@ import type {
   LoaderScene,
   SceneProgress,
 } from "./scene/types";
+import { sceneLayout } from "./scene/world";
 
 const mocks = vi.hoisted(() => ({ pathname: "/" }));
 
@@ -33,7 +34,7 @@ vi.mock("next/navigation", () => ({ usePathname: () => mocks.pathname }));
 const html = document.documentElement;
 
 /** A scene that records what the cover asks of it. */
-function fakeScene({ fails = false } = {}) {
+function fakeScene({ fails = false, draws = true } = {}) {
   const progress: SceneProgress[] = [];
   let finishExit: (() => void) | null = null;
   const scene = {
@@ -52,7 +53,7 @@ function fakeScene({ fails = false } = {}) {
     dispose: vi.fn(),
   } satisfies LoaderScene;
   const create = vi.fn<CreateLoaderScene>((_canvas, options) => {
-    options.onFirstFrame?.();
+    if (draws) options.onFirstFrame?.();
     return scene;
   });
   const load = vi.fn(() =>
@@ -252,6 +253,13 @@ describe("LoaderCover", () => {
     }
     const label = doc.querySelector('[data-part="loader-label"]');
     expect(label?.classList.contains("inset-x-0")).toBe(true);
+    // In px from the middle, where the scene lays the label and its patch.
+    const wide = sceneLayout(1280, 800, false).labelTop - 400;
+    const phone = sceneLayout(375, 812, true).labelTop - 406;
+    expect(label?.classList.contains(`top-[calc(50%+${wide}px)]`)).toBe(true);
+    expect(label?.classList.contains(`max-sm:top-[calc(50%+${phone}px)]`)).toBe(
+      true,
+    );
     for (const item of doc.querySelectorAll("[class]")) {
       expect(item.getAttribute("class")).not.toMatch(
         /(?:^|\s|:)(?:ml|mr|pl|pr|left|right)-/,
@@ -503,6 +511,20 @@ describe("LoaderCover", () => {
     expect(cover()?.getAttribute("data-loader-exit")).toBe("fade");
     expect(fake.scene.exit).not.toHaveBeenCalled();
     await advance(CALM_FADE_MS);
+    expect(cover()).toBeNull();
+  });
+
+  it("REQ-LOAD-01 a scene that never draws a frame, as with no 2D context, keeps the void and fades the cover, never cut", async () => {
+    const fake = await mountCover(fakeScene({ draws: false }));
+    await send({ type: "tierChosen", tier: 3, reason: "no-backend" });
+    await send({ type: "ready", tier: 3, particles: 0 });
+    await advance(MIN_COVER_MS);
+    expect(cover()?.getAttribute("data-loader-state")).toBe("leaving");
+    expect(cover()?.getAttribute("data-loader-exit")).toBe("fade");
+    expect(fake.scene.exit).not.toHaveBeenCalled();
+    await advance(CALM_FADE_MS - 1);
+    expect(cover()).not.toBeNull();
+    await advance(1);
     expect(cover()).toBeNull();
   });
 

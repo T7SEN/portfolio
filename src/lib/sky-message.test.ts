@@ -3,14 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { countWords, createSkyMessage } from "./sky-message";
 
 describe("the contact sky's message (D-146)", () => {
-  it("D-146 counts words, and the letters of the word being typed", () => {
+  it("REQ-SCR-08 D-146 counts words, and the letters of the word being typed", () => {
     expect(countWords("We need a site")).toEqual({ words: 4, letters: 4 });
     expect(countWords("We need ")).toEqual({ words: 2, letters: 0 });
     expect(countWords("   ")).toEqual({ words: 0, letters: 0 });
     expect(countWords("Hi,\nthere")).toEqual({ words: 2, letters: 5 });
   });
 
-  it("D-146 holds the words and when Send was pressed, telling listeners only of a change", () => {
+  it("REQ-SCR-08 D-146 holds the words and when Send was pressed, telling listeners only of a change", () => {
     let clock = 100;
     const store = createSkyMessage(() => clock);
     const listener = vi.fn();

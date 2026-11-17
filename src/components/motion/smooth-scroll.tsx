@@ -3,7 +3,9 @@
 import { useEffect } from "react";
 
 import { calmStore } from "@/lib/calm-store";
+import { overlayStore } from "@/lib/overlay-store";
 
+import { sectionGlides } from "./scroll-to-section";
 import { COARSE_POINTER_QUERY } from "./should-smooth-scroll";
 import { createSmoothScroll } from "./smooth-scroll-session";
 
@@ -27,6 +29,8 @@ export function SmoothScroll() {
     const session = createSmoothScroll({
       calm: calmStore,
       pointer: coarsePointerQuery(),
+      overlay: overlayStore,
+      sections: sectionGlides,
     });
     return () => session.dispose();
   }, []);

@@ -1426,6 +1426,7 @@ describe("the page's height", () => {
   }
 
   let height: number;
+  let bodyHeight: number;
   let frames: Map<number, FrameRequestCallback>;
   let cancelFrame: Mock<(id: number) => void>;
 
@@ -1451,10 +1452,14 @@ describe("the page's height", () => {
     vi.stubGlobal("cancelAnimationFrame", cancelFrame);
     height = 5500;
     root.getBoundingClientRect = () => ({ height }) as DOMRect;
+    bodyHeight = 6200;
+    root.ownerDocument.body.getBoundingClientRect = () =>
+      ({ height: bodyHeight }) as DOMRect;
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    Reflect.deleteProperty(root.ownerDocument.body, "getBoundingClientRect");
   });
 
   it("REQ-SCR-01 REQ-SCR-02 when main's height changes with no resize, as when the pass viewer turns from its grid into its row, every trigger is measured again once, on the next frame", () => {
@@ -1486,6 +1491,24 @@ describe("the page's height", () => {
     observer?.callback();
     runFrames();
     expect(fake.ScrollTrigger.refresh).toHaveBeenCalledTimes(refreshes + 2);
+    stop();
+  });
+
+  it("REQ-A11Y-06 REQ-SCR-02 the body is watched too: the footer's Sound panel closing shortens the page outside main, and the plates are laid again (D-180)", () => {
+    const fake = createFakeMotion(page);
+    const stop = start(fake);
+    const [observer] = FakeResizeObserver.made;
+    expect(observer?.observe).toHaveBeenCalledWith(root);
+    expect(observer?.observe).toHaveBeenCalledWith(root.ownerDocument.body);
+    const refreshes = fake.ScrollTrigger.refresh.mock.calls.length;
+
+    bodyHeight = 5900;
+    observer?.callback();
+    expect(frames.size).toBe(1);
+    runFrames();
+    expect(fake.ScrollTrigger.refresh).toHaveBeenCalledTimes(refreshes + 1);
+    observer?.callback();
+    expect(frames.size).toBe(0);
     stop();
   });
 

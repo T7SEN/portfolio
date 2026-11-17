@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { LIVE_PASSES, PASSES } from "@/engine/story";
 
 import { isMarker } from "./markers";
-import { passNumber, passPosition, passViewer } from "./passes";
+import { passHint, passNumber, passPosition, passViewer } from "./passes";
 
 function strings(value: unknown): string[] {
   if (typeof value === "string") return [value];
@@ -45,6 +45,24 @@ describe("pass viewer copy", () => {
     ]);
     expect(passViewer.count).toEqual({ pass: "Pass", of: "of" });
     expect(passViewer.group).toBe("Render passes");
+  });
+
+  it("REQ-ENG-09 REQ-SCR-02 the hint under the ticks gives the card's place and how to reach the next one, by touch or with a mouse and keys, and says the page goes on from the last card", () => {
+    expect(passHint(0, false)).toBe("1 of 5 · Swipe for the next pass");
+    expect(passHint(1, true)).toBe("2 of 5 · Scroll or use the arrows");
+    expect(passHint(PASSES.indexOf("final"), false)).toBe(
+      "5 of 5 · Keep scrolling",
+    );
+    expect(passHint(PASSES.indexOf("final"), true)).toBe(
+      "5 of 5 · Keep scrolling",
+    );
+    // A place out of range is held to the cards.
+    expect(passHint(-3, false)).toBe("1 of 5 · Swipe for the next pass");
+    expect(passHint(9, true)).toBe("5 of 5 · Keep scrolling");
+    expect(passHint(Number.NaN, true)).toBe(
+      "1 of 5 · Scroll or use the arrows",
+    );
+    expect(passViewer.skip).toBe("Skip to About");
   });
 
   it("REQ-ENG-09 REQ-A11Y-05 what each picture shows is the pass on the T7 mark, the shape the field forms in the middle card and its still shows", () => {

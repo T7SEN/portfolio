@@ -2,7 +2,6 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { WORK_SHAPES } from "../../story";
-import type { ShapeId } from "../../story";
 import type { Ring } from "./draw";
 import {
   EDGE_BAND,
@@ -13,9 +12,9 @@ import {
   sampleLayers,
   sampleShape,
 } from "./index";
-import { MARKS } from "./marks";
+import { MARKS, type MarkId } from "./marks";
 
-const IDS: ShapeId[] = ["logo", "wordmark", ...WORK_SHAPES];
+const IDS: MarkId[] = ["logo", "wordmark", ...WORK_SHAPES, "gg"];
 // Vitest runs from the repository root.
 const SVG_PATH = "public/brand/t7sen-purple.svg";
 
@@ -110,7 +109,7 @@ function area(rings: Ring[]): number {
  * or both.
  */
 function layerPoints(
-  id: ShapeId,
+  id: MarkId,
   count: number,
   layer: number,
   part: "fill" | "edge" | "all" = "fill",
@@ -127,7 +126,7 @@ function layerPoints(
 }
 
 /** Whether a point is inside any layer of a shape that sits in front of one. */
-function underFront(id: ShapeId, layer: number, x: number, y: number) {
+function underFront(id: MarkId, layer: number, x: number, y: number) {
   const shape = layers(id);
   const weight = shape[layer]?.weight ?? 0;
   return shape.some(
@@ -180,6 +179,24 @@ const LAYERS = IDS.flatMap((id) =>
 );
 
 describe("shape outlines", () => {
+  it("REQ-NAV-05 GG is one G twice, the second moved on by the pen's advance, on the wordmark's baseline", () => {
+    const [layer] = MARKS.gg;
+    expect(MARKS.gg).toHaveLength(1);
+    expect(layer?.weight).toBe(1);
+    const [first, second] = layer?.rings ?? [];
+    expect(layer?.rings).toHaveLength(2);
+    expect(first?.length).toBe(second?.length);
+    first?.forEach((value, index) => {
+      expect(second?.[index]).toBe(index % 2 === 0 ? value + 984 : value);
+    });
+    // Font units, y down: the letter stands on the baseline at 766, with a
+    // round letter's overshoot past it and past the cap height.
+    const heights = (first ?? []).filter((_, index) => index % 2 === 1);
+    expect(Math.min(...heights)).toBeGreaterThanOrEqual(-20);
+    expect(Math.max(...heights)).toBeGreaterThan(766);
+    expect(Math.max(...heights)).toBeLessThan(800);
+  });
+
   it("REQ-SCR-07 the logo is the polygon of public/brand/t7sen-purple.svg", () => {
     const svg = readFileSync(SVG_PATH, "utf8");
     const listed = /<polygon[^>]*\spoints="([^"]+)"/.exec(svg)?.[1] ?? "";
@@ -340,7 +357,7 @@ describe("the study shapes", () => {
   });
 
   it("REQ-SCR-01 back layers weigh less than the front: the sheets step forward, the cards fan out from the middle", () => {
-    const weights = (id: ShapeId) => MARKS[id].map((layer) => layer.weight);
+    const weights = (id: MarkId) => MARKS[id].map((layer) => layer.weight);
     const sheets = weights("making-of");
     for (let index = 1; index < sheets.length; index += 1) {
       expect(sheets[index]).toBeGreaterThan(sheets[index - 1] ?? 1);

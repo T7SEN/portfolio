@@ -27,6 +27,17 @@ export type PassViewerCopy = {
   group: Text;
   /** The words round the numbers in "Pass 2 of 5". */
   count: { pass: Text; of: Text };
+  /** The buttons either side of the sliding row's ticks. */
+  previous: Text;
+  next: Text;
+  /**
+   * The line under the sliding row's ticks [T7SEN, 16 Nov 2026] (D-175),
+   * after the card's place ("1 of 5"): how to reach the next card, by touch
+   * or with a mouse and keys, and on the last card that the page goes on.
+   */
+  hint: { touch: Text; pointer: Text; last: Text };
+  /** The sliding row's link past it, to the next chapter (D-175). */
+  skip: Text;
   /** What the tier table lists, for assistive technology. */
   tiersName: Text;
   tiers: readonly [TierRow, TierRow, TierRow];
@@ -41,6 +52,14 @@ export type PassViewerCopy = {
 export const passViewer = {
   group: "Render passes",
   count: { pass: "Pass", of: "of" },
+  previous: "Previous pass",
+  next: "Next pass",
+  hint: {
+    touch: "Swipe for the next pass",
+    pointer: "Scroll or use the arrows",
+    last: "Keep scrolling",
+  },
+  skip: "Skip to About",
   tiersName: "Frame time on each tier",
   // Measured on the production build on one PC with an RTX 4060 Ti, with
   // the P4 viewer in view, whose five cards were all live
@@ -118,4 +137,21 @@ export function passNumber(pass: PassId): number {
 export function passPosition(pass: PassId): Text {
   const { count } = passViewer;
   return `${count.pass} ${passNumber(pass)} ${count.of} ${PASSES.length}`;
+}
+
+/**
+ * "2 of 5 · Swipe for the next pass": the line under the sliding row's
+ * ticks for the card in the middle, by its index, with the words for a fine
+ * pointer or for touch, and on the last card "Keep scrolling" (D-175).
+ */
+export function passHint(index: number, isFine: boolean): Text {
+  const { count, hint } = passViewer;
+  const total = PASSES.length;
+  // The card's place, counted from 1 and held to the cards.
+  const place = Number.isFinite(index)
+    ? Math.min(Math.max(Math.round(index) + 1, 1), total)
+    : 1;
+  const words =
+    place === total ? hint.last : isFine ? hint.pointer : hint.touch;
+  return `${place} ${count.of} ${total} · ${words}`;
 }

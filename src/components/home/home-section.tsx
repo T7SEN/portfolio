@@ -20,7 +20,9 @@ type HomeSectionProps = {
 
 // A chapter of the home page after the hero. A hairline rule across the
 // whole window opens it; the hero has none above it, and the footer draws
-// its own after the last chapter.
+// its own after the last chapter. No focus ring round the whole chapter:
+// the palette's home rows make a chapter focusable for their one move and
+// take focus there (palette-dialog.tsx), as the skip link does with main.
 export function HomeSection({
   id,
   chapter,
@@ -34,7 +36,7 @@ export function HomeSection({
       aria-label={name}
       aria-labelledby={name === undefined ? `${id}-heading` : undefined}
       data-chapter={chapter}
-      className={cx("border-t", RULE, className)}
+      className={cx("border-t focus:outline-none", RULE, className)}
     >
       {children}
     </section>

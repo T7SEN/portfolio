@@ -8,11 +8,11 @@ import { cx } from "./class-names";
 import { pillClassName } from "./pill";
 
 /**
- * header: the bar's switch; below 640 px it shows "Calm" (its name stays
- * "Calm mode") so the bar's row holds at 320 px. pill: the hero's corner
- * switch. words: the footer's pill, which says its state in words.
+ * pill: the hero's corner switch. words: the footer's pill, which says its
+ * state in words. The bar's switch left the bar at P5, for Sound, Ctrl K and
+ * Menu; calm stays in the hero's corner, the footer and the palette.
  */
-export type CalmToggleVariant = "header" | "pill" | "words";
+export type CalmToggleVariant = "pill" | "words";
 
 type CalmToggleProps = {
   variant?: CalmToggleVariant;
@@ -25,7 +25,7 @@ type CalmToggleProps = {
  * OS reduced motion setting always wins, so while it asks for calm the switch
  * stays on and says why (REQ-A11Y-03).
  */
-export function CalmToggle({ variant = "header", className }: CalmToggleProps) {
+export function CalmToggle({ variant = "pill", className }: CalmToggleProps) {
   const { calm, system } = useSyncExternalStore(
     calmStore.subscribe,
     calmStore.getSnapshot,
@@ -46,15 +46,16 @@ export function CalmToggle({ variant = "header", className }: CalmToggleProps) {
         className={cx(
           "group",
           pillClassName({ variant: "quiet", size: "sm", gap: false }),
-          variant === "header" ? "gap-1.5 max-sm:px-2 sm:gap-2.5" : "gap-2.5",
+          "gap-2.5",
+          // With scripts off nothing moves (no field, no smooth scroll, and
+          // CSS honours the OS setting by itself), so the switch would do
+          // nothing; it is hidden then.
+          "noscript:hidden",
           className,
         )}
       >
         <span>
-          Calm
-          <span className={variant === "header" ? "max-sm:sr-only" : undefined}>
-            {" mode"}
-          </span>
+          Calm mode
           {variant === "words" && (
             // The state as a word for sighted visitors; assistive technology
             // hears it from aria-checked, so the name stays "Calm mode".

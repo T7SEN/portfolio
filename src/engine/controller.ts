@@ -3,6 +3,7 @@ import { decideTier, tier2ParticleCount } from "./tier/decide";
 import { readEnvironment } from "./tier/environment";
 import { classifyProbe } from "./tier/probe";
 import type {
+  AudioLevels,
   Backend,
   ChapterId,
   Engine,
@@ -70,13 +71,15 @@ export function createEngine(
   let disposed = false;
   let disposal: Promise<void> | null = null;
 
-  let forcedTier = options.forcedTier;
+  // Undefined: the decision table and the probe choose (setTier(null)).
+  let forcedTier: Tier | undefined = options.forcedTier;
   let calm = options.calm === true;
   let story: readonly [ChapterId, number] | null = null;
   let pointer: readonly [number, number, boolean] | null = null;
   let stages: Stages | null = null;
   let passes: readonly PassCard[] | null = null;
   let sky: SkyView | null = null;
+  let audio: AudioLevels | null = null;
   let facts: Promise<Environment> | null = null;
 
   let canvas: HTMLCanvasElement | null = null;
@@ -320,14 +323,17 @@ export function createEngine(
     // chapter the page is on (REQ-TIER-01). A first story is seated at the
     // runtime's next step, before its canvas is shown. The stage goes first,
     // so that seat already puts the dot and the shapes where the page wants
-    // them. The pass cards and the sky come last: they change only what is
-    // drawn and where the contact chapter's stars sit.
+    // them. The pass cards, the sky and the sound come last: they change
+    // only what is drawn, where the contact chapter's stars sit and how the
+    // about strands move. An easter egg is never sent again: it played on
+    // the field it was sent to.
     const heard = attempt(target, (live) => {
       if (stages !== null) live.setStage(stages);
       if (story !== null) live.setStory(...story);
       if (pointer !== null) live.setPointer(...pointer);
       if (passes !== null) live.setPasses(passes);
       if (sky !== null) live.setSky(sky);
+      if (audio !== null) live.setAudio(audio);
     });
     if (!heard) return;
 
@@ -569,7 +575,9 @@ export function createEngine(
 
     setTier(tier) {
       if (disposed) return;
-      forcedTier = tier;
+      // null hands the choice back: the decision table, then the probe where
+      // it sends one, as on a first start, with the decision's own reason.
+      forcedTier = tier ?? undefined;
       if (started) launch(choose);
     },
 
@@ -606,6 +614,23 @@ export function createEngine(
       const target = listening();
       if (target !== null) {
         attempt(target, (runtime) => runtime.setSky(view));
+      }
+    },
+
+    playEgg(egg) {
+      // Only a running field with calm off plays one; anything else, the
+      // probe and tier 3 among them, ignores it, and nothing is kept.
+      if (disposed || calm || !running) return;
+      const target = listening();
+      if (target !== null) attempt(target, (runtime) => runtime.playEgg(egg));
+    },
+
+    setAudio(levels) {
+      if (disposed) return;
+      audio = levels === null ? null : [levels[0], levels[1], levels[2]];
+      const target = listening();
+      if (target !== null) {
+        attempt(target, (runtime) => runtime.setAudio(audio));
       }
     },
 

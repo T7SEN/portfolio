@@ -11,7 +11,8 @@ import { PointerRing } from "./pointer-ring";
 import { StoryScene } from "./story-scene";
 import { TierReadout } from "./tier-readout";
 
-// The field chapter (its id stays "bloom"): the field is the content, from
+// The field chapter (its chapter name stays "bloom"; its id, the page's
+// address "/#field", is "field" since D-170): the field is the content, from
 // the dot's bloom through the T7SEN mark and the wordmark to the flow lines.
 // One screen holds on screen through the whole chapter (position sticky), as
 // the preview shows the label, the tier and the note with the wordmark: the
@@ -26,7 +27,7 @@ import { TierReadout } from "./tier-readout";
 export function BloomSection() {
   return (
     <HomeSection
-      id="bloom"
+      id="field"
       chapter="bloom"
       name={site.names.field}
       className="relative min-h-[260svh] lg:min-h-[220svh]"

@@ -1,7 +1,6 @@
-import type { ShapeId } from "../../story";
 import type { Layer, Ring } from "./draw";
 import { EDGE_GRID, GRID_EXTENT, fillGrid } from "./edge";
-import { MARKS } from "./marks";
+import { MARKS, type MarkId } from "./marks";
 
 /**
  * How wide the band a layer's outline points spread over, in the sampler's
@@ -16,7 +15,7 @@ export const EDGE_BAND = 0.03;
  * together, so the whole shape is centred on the origin with its longer side
  * running from -1 to 1 and the other keeping its proportion, with y up.
  */
-export function layers(id: ShapeId): Layer[] {
+export function layers(id: MarkId): Layer[] {
   const source = MARKS[id];
   let minX = Infinity;
   let minY = Infinity;
@@ -50,7 +49,7 @@ export function layers(id: ShapeId): Layer[] {
 }
 
 /** Every ring of a shape, all its layers together, in the sampler's space. */
-export function outline(id: ShapeId): Ring[] {
+export function outline(id: MarkId): Ring[] {
   return layers(id).flatMap((layer) => layer.rings);
 }
 
@@ -202,7 +201,7 @@ interface Plan {
   union: number;
 }
 
-const plans = new Map<ShapeId, Plan>();
+const plans = new Map<MarkId, Plan>();
 
 function perimeterOf(rings: readonly Ring[]): number {
   let length = 0;
@@ -224,7 +223,7 @@ function perimeterOf(rings: readonly Ring[]): number {
  * area the whole shape covers: exact for one layer, counted on the edge
  * grid (2.04 / 256 a cell) for several, whose rings overlap.
  */
-function planFor(id: ShapeId): Plan {
+function planFor(id: MarkId): Plan {
   const cached = plans.get(id);
   if (cached !== undefined) return cached;
   const shape = layers(id);
@@ -287,7 +286,7 @@ function planFor(id: ShapeId): Plan {
 }
 
 /** Each layer's budget for a shape (layerBudgets(id)[i] is layers(id)[i]'s). */
-export function layerBudgets(id: ShapeId): LayerBudget[] {
+export function layerBudgets(id: MarkId): LayerBudget[] {
   return planFor(id).budgets;
 }
 
@@ -298,7 +297,7 @@ export function layerBudgets(id: ShapeId): LayerBudget[] {
  * mark and the wordmark keep the light their area gives them; more where
  * outlines and layers behind add points beyond the front's fill.
  */
-export function fillShare(id: ShapeId): number {
+export function fillShare(id: MarkId): number {
   const { budgets, union } = planFor(id);
   const units = budgets.reduce(
     (sum, budget) => sum + budget.fillUnits + budget.edgeUnits,
@@ -424,7 +423,7 @@ function spreadAlong(
  * The order is then shuffled, so a point's index says nothing about where
  * it sits or which layer it belongs to.
  */
-export function sampleLayers(id: ShapeId, count: number): ShapeSample {
+export function sampleLayers(id: MarkId, count: number): ShapeSample {
   const total = Number.isFinite(count) ? Math.max(0, Math.floor(count)) : 0;
   const points = new Float32Array(total * 2);
   const layerOf = new Uint8Array(total);
@@ -507,6 +506,6 @@ export function sampleLayers(id: ShapeId, count: number): ShapeSample {
 }
 
 /** The points of sampleLayers alone: two numbers per point, x then y. */
-export function sampleShape(id: ShapeId, count: number): Float32Array {
+export function sampleShape(id: MarkId, count: number): Float32Array {
   return sampleLayers(id, count).points;
 }

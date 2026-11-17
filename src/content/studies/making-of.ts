@@ -34,7 +34,7 @@ export const makingOf = {
       },
       {
         label: "3D payload",
-        value: "238.9 KB on desktop",
+        value: "239.0 KB on desktop",
         source: `Tier 1, gzip, ${BUDGET}`,
       },
     ],
@@ -67,7 +67,7 @@ export const makingOf = {
     role: "Solo project: I designed it, built it and host it.",
   },
   approach: [
-    "The engine lives in its own folder, imports no app code and keeps one canvas for the whole site. The page sends it a few commands (where the story is, where the page's boxes are, the pointer, calm and the pass cards), and it reports only three events: ready, the tier it chose and its frame rate.",
+    "The engine lives in its own folder, imports no app code and keeps one canvas for the whole site. The page sends it short commands (the tier asked for, where the story is, where the page's boxes are, the pass cards, the sky, the easter eggs, the sound's levels, the pointer and calm), and it reports only five events: ready, the tier it chose, its frame rate, and two loading steps, the renderer started and the probe started.",
     "The tier is chosen from facts first: Save-Data gets stills, and a touch screen or a browser without WebGPU gets WebGL2. Otherwise the real field runs unseen for 2 s, and a median frame under 20 ms keeps tier 1 at 1,000,000 particles; tier 2 runs 250,000 on desktop and 100,000 on phones. A lost WebGPU device rebuilds once on tier 2, and a lost WebGL2 context ends on the stills.",
   ],
   diagram: {

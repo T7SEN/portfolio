@@ -17,8 +17,10 @@ import {
   skyFrame,
   traceProgress,
 } from "@/engine/sky/sky";
-import { PASSES, type PassId } from "@/engine/story";
+import { EGG_SECONDS } from "@/engine/runtime/eggs";
+import { EGGS, PASSES, type EggId, type PassId } from "@/engine/story";
 import type {
+  AudioLevels,
   ChapterId,
   Engine,
   EngineEvent,
@@ -105,6 +107,34 @@ function skyViewFor(host: HTMLElement, query: SkyQuery): SkyView {
   };
 }
 
+// ?audio=<low>,<mid>,<high> sends fixed levels once; ?audio=wave sends
+// levels that move on every animation frame, each band at its own pace, as
+// the sound module sends them while sound is on (REQ-SND-03).
+type AudioQuery = AudioLevels | "wave" | null;
+
+function readAudio(value: string | null): AudioQuery {
+  if (value === "wave") return "wave";
+  const parts = (value ?? "").split(",").map(Number);
+  const [low, mid, high] = parts;
+  if (
+    parts.length !== 3 ||
+    low === undefined ||
+    mid === undefined ||
+    high === undefined ||
+    !parts.every(Number.isFinite)
+  ) {
+    return null;
+  }
+  return [low, mid, high];
+}
+
+/** The moving levels of ?audio=wave at a time in seconds. */
+function waveLevels(seconds: number): AudioLevels {
+  const wave = (rate: number, phase: number) =>
+    0.5 + 0.5 * Math.sin(2 * Math.PI * rate * seconds + phase);
+  return [wave(0.5, 0), wave(0.8, 2), wave(1.3, 4)];
+}
+
 const BUTTON =
   "inline-flex min-h-11 items-center rounded-md border border-edge px-4 font-mono text-sm hover:border-glow hover:text-glow aria-pressed:border-glow aria-pressed:text-glow";
 
@@ -130,6 +160,8 @@ function readOptions(search: string) {
   const wholePass = PASSES.find((pass) => pass === params.get("pass")) ?? null;
   const when = Date.parse(params.get("when") ?? "");
   const words = Number(params.get("words") ?? 0);
+  const egg: EggId | null =
+    EGGS.find((value) => value === params.get("egg")) ?? null;
 
   return {
     options,
@@ -143,6 +175,8 @@ function readOptions(search: string) {
       : 0,
     hasPasses: params.get("passes") === "1",
     wholePass,
+    egg,
+    audio: readAudio(params.get("audio")),
     sky: {
       at: Number.isFinite(when) ? when : Date.now(),
       words: Number.isInteger(words) && words > 0 ? words : 0,
@@ -309,6 +343,8 @@ export function EngineView() {
   const engineRef = useRef<Engine | null>(null);
   // Sends the test layout again; set by the effect once the query is read.
   const sendLayoutRef = useRef<(() => void) | null>(null);
+  // Plays an egg and mirrors it as data-egg; set by the effect.
+  const playEggRef = useRef<((egg: EggId) => void) | null>(null);
 
   const sendStoryNow = () => {
     const view = viewRef.current;
@@ -350,9 +386,15 @@ export function EngineView() {
       hasPasses,
       wholePass,
       sky,
+      egg,
+      audio,
     } = readOptions(window.location.search);
     let engine: Engine | null = null;
     let isCancelled = false;
+    let eggTimer: ReturnType<typeof setTimeout> | null = null;
+    let wave: number | null = null;
+    // ?egg plays once, on the first ready of a live tier.
+    let eggPending = egg;
     let events = 0;
     let renderers = 0;
     let probes = 0;
@@ -383,6 +425,21 @@ export function EngineView() {
       );
     };
     sendLayoutRef.current = send;
+    // data-egg names the egg while it plays, for its length, and only where
+    // the engine plays one: a live tier with calm off. The engine sends
+    // nothing back, so the page keeps the time itself (REQ-ENG-03).
+    const playEgg = (id: EggId) => {
+      if (engine === null) return;
+      engine.playEgg(id);
+      const live = view.dataset.status === "running" && !isPressed(calm);
+      if (!live || view.dataset.egg !== "") return;
+      view.dataset.egg = id;
+      eggTimer = setTimeout(() => {
+        view.dataset.egg = "";
+        eggTimer = null;
+      }, EGG_SECONDS[id] * 1000);
+    };
+    playEggRef.current = playEgg;
     // The faces follow the layout, so a new window size measures them again.
     window.addEventListener("resize", send);
 
@@ -406,6 +463,8 @@ export function EngineView() {
       cards: "",
       makingOf: "",
       sky: "",
+      egg: "",
+      audio: audio === null ? "" : JSON.stringify(audio),
     });
     // A bare view covers the window, so the page under it must not scroll:
     // its scrollbar would take its width from the host and the canvas.
@@ -439,6 +498,14 @@ export function EngineView() {
           view.dataset.ready = "true";
           view.dataset.status = event.tier === 3 ? "still" : "running";
           view.dataset.particles = String(event.particles);
+          // The look the field really draws, beside data-look, the one
+          // asked for: soft where the halftone's half-float check failed.
+          view.dataset.liveLook = event.look ?? "";
+          if (eggPending !== null && event.tier !== 3) {
+            const id = eggPending;
+            eggPending = null;
+            playEgg(id);
+          }
           break;
         // The loading signals (REQ-LOAD-01): data-backend is the backend of
         // the last renderer started, data-renderers and data-probes count
@@ -482,6 +549,15 @@ export function EngineView() {
       view.dataset.sky = JSON.stringify(skyView);
       engine.setSky(skyView);
       sendStory(engine, view, select, range);
+      if (audio === "wave") {
+        const sendWave = (time: number) => {
+          engine?.setAudio(waveLevels(time / 1000));
+          wave = requestAnimationFrame(sendWave);
+        };
+        wave = requestAnimationFrame(sendWave);
+      } else if (audio !== null) {
+        engine.setAudio(audio);
+      }
       await engine.start();
     })().catch((error: unknown) => {
       if (isCancelled) return;
@@ -495,6 +571,10 @@ export function EngineView() {
       isCancelled = true;
       engineRef.current = null;
       sendLayoutRef.current = null;
+      playEggRef.current = null;
+      if (eggTimer !== null) clearTimeout(eggTimer);
+      if (wave !== null) cancelAnimationFrame(wave);
+      view.dataset.egg = "";
       window.removeEventListener("resize", send);
       delete view.dataset.bare;
       root.style.overflow = rootOverflow;
@@ -522,11 +602,14 @@ export function EngineView() {
       data-progress=""
       data-stage=""
       data-look=""
+      data-live-look=""
       data-particles=""
       data-pass=""
       data-cards=""
       data-making-of=""
       data-sky=""
+      data-egg=""
+      data-audio=""
       className="group mt-4"
     >
       <div className="flex flex-wrap gap-3 group-data-[bare=true]:hidden">
@@ -540,6 +623,13 @@ export function EngineView() {
             Tier {tier}
           </button>
         ))}
+        <button
+          type="button"
+          className={BUTTON}
+          onClick={() => engineRef.current?.setTier(null)}
+        >
+          Auto
+        </button>
         <button
           ref={calmRef}
           type="button"
@@ -568,6 +658,16 @@ export function EngineView() {
         >
           Passes
         </button>
+        {EGGS.map((id) => (
+          <button
+            key={id}
+            type="button"
+            className={BUTTON}
+            onClick={() => playEggRef.current?.(id)}
+          >
+            Play {id}
+          </button>
+        ))}
         <label className="inline-flex min-h-11 items-center gap-2 font-mono text-sm">
           Chapter
           <select

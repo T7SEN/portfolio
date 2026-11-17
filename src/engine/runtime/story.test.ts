@@ -53,6 +53,8 @@ import {
   isNarrow,
   lightArea,
   openLinePoint,
+  ORBIT_CLEAR,
+  ORBIT_GROWTH_MAX,
   orbitAxes,
   orbitPoint,
   releaseRankScale,
@@ -437,7 +439,7 @@ describe("making-of, about and contact", () => {
     }
   });
 
-  test("D-146 REQ-SCR-01 contact gathers its sky over the first quarter and holds it to the end of the page, its stars nearly still", () => {
+  test("REQ-SCR-01 REQ-SCR-08 D-146 contact gathers its sky over the first quarter and holds it to the end of the page, its stars nearly still", () => {
     expect(chapterTargets("contact", 0).sky).toBe(0);
     expect(chapterTargets("contact", 0.1).sky).toBeGreaterThan(0);
     for (const progress of [0.25, 0.5, 0.9, 1]) {
@@ -1006,12 +1008,21 @@ describe("flow lines", () => {
   });
 
   test.each([
-    ["1280 by 800", landscape],
-    ["1920 by 1080", wide],
-    ["375 by 812", portrait],
+    ["1280 by 800", landscape, true],
+    ["1920 by 1080", wide, true],
+    ["375 by 812", portrait, true],
+    ["768 by 1024", { halfWidth: 2.33 * 0.75, halfHeight: 2.33 }, true],
+    ["a square", { halfWidth: 2.33, halfHeight: 2.33 }, true],
+    // An open line crosses the wordmark this wide: flagged for T7SEN on
+    // 16 Nov 2026, so only the ellipse is held here.
+    [
+      "an ultrawide 2.4 to 1",
+      { halfWidth: 2.33 * 2.4, halfHeight: 2.33 },
+      false,
+    ],
   ] as const)(
-    "REQ-SCR-07 at %s the ellipse closes round the wordmark, and the lines that keep running stay clear of it",
-    (_, frame) => {
+    "REQ-SCR-07 at %s the ellipse closes round the wordmark, its corners too at the wobble's low point, on the screen at its high point, and the lines that keep running stay clear of it",
+    (_, frame, holdsOpenLines) => {
       const staged = stagedFrame(
         bloomStage(frame.halfWidth / frame.halfHeight),
         frame,
@@ -1025,11 +1036,30 @@ describe("flow lines", () => {
       const ellipse = FLOW_LINES.find((line) => line.closed);
       expect(ellipse).toBeDefined();
       if (ellipse === undefined) return;
-      const { a, b } = orbitAxes(frame);
-      const wobble = 1 - ellipse.waves[0].amplitude;
-      expect(a * wobble - width).toBeGreaterThan(halfWidth);
-      expect(b * wobble - width).toBeGreaterThan(halfHeight);
+      const { a, b } = orbitAxes(frame, extent);
+      const low = 1 - ellipse.waves[0].amplitude;
+      const high = 1 + ellipse.waves[0].amplitude;
+      const innerA = a * low - width;
+      const innerB = b * low - width;
+      expect(innerA).toBeGreaterThan(halfWidth);
+      expect(innerB).toBeGreaterThan(halfHeight);
+      // The wordmark's corner inside the line's inner edge: the sum below 1
+      // (the review of 16 Nov 2026 found 1.06 to 1.37 before the ellipse
+      // grew for it).
+      expect(
+        (halfWidth / innerA) ** 2 + (halfHeight / innerB) ** 2,
+      ).toBeLessThanOrEqual(ORBIT_CLEAR);
+      // Its sides on the screen, or no wider than the plain ellipse.
+      const plain = orbitAxes(frame);
+      expect(
+        Math.min(a * high + width, plain.a * high + width + 1e-9),
+      ).toBeLessThanOrEqual(Math.max(frame.halfWidth, plain.a * high + width));
+      // Grown alike, never shrunk, and never more than the cap.
+      expect(a).toBeGreaterThanOrEqual(plain.a - 1e-9);
+      expect(b).toBeGreaterThanOrEqual(plain.b - 1e-9);
+      expect(b / plain.b).toBeLessThanOrEqual(ORBIT_GROWTH_MAX + 1e-9);
 
+      if (!holdsOpenLines) return;
       for (const line of FLOW_LINES) {
         if (line.closed || line.keeps === 0) continue;
         for (let t = 0; t <= 1; t += 1 / 400) {
@@ -1121,7 +1151,7 @@ describe("about strands and the contact sky", () => {
     expect(STRANDS_LIT).toBeGreaterThan(1);
   });
 
-  test("D-146 the sky's particles are stars, constellation lines and a faint dust, and its light counts a small share of the frame", () => {
+  test("REQ-SCR-08 D-146 the sky's particles are stars, constellation lines and a faint dust, and its light counts a small share of the frame", () => {
     expect(SKY_STAR_SHARE).toBeGreaterThan(0.5);
     expect(SKY_FORMED_SHARE).toBeGreaterThan(SKY_STAR_SHARE);
     expect(SKY_FORMED_SHARE).toBeLessThan(1);

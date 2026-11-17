@@ -1,5 +1,5 @@
 const REDUCED_MOTION = "(prefers-reduced-motion: reduce)";
-// Remembered for the visit (accessibility.md section 6): the tab's session
+// Remembered for the visit (REQ-A11Y-04): the tab's session
 // storage, which no server ever reads.
 const STORAGE_KEY = "portfolio:calm";
 

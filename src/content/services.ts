@@ -10,9 +10,9 @@ export type Services = {
 };
 
 // The two headline offers carry the pitch; everything else fits on one line
-// (REQ-CNT-11). The descriptions and the hiring line are T7SEN's own
-// statements, accepted on 11 Nov 2026 with his check still owed (phase P3.5,
-// item 9).
+// (REQ-CNT-11). The descriptions are T7SEN's own statements, accepted on
+// 11 Nov 2026 with his check still owed (phase P3.5, item 9). The hiring line
+// names no form, so it holds before the form arrives and after (16 Nov 2026).
 export const services = {
   offers: [
     {
@@ -26,5 +26,6 @@ export const services = {
     },
   ],
   also: "Also: full sites with motion, creator tools and Discord bots.",
-  hiring: "Hiring for a creative or WebGPU frontend role? Same form.",
+  // The lead role [T7SEN, 16 Nov 2026] (D-178).
+  hiring: "Hiring a software architect? Send a message the same way.",
 } satisfies Services;

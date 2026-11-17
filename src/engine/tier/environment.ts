@@ -38,6 +38,35 @@ function readGpu(): GPU | null {
   }
 }
 
+interface NavigatorWithPlatform {
+  readonly userAgentData?: { readonly platform?: unknown };
+}
+
+/**
+ * The power preference the WebGPU adapter is asked for: the faster GPU on a
+ * device with two. Chrome on Windows ignores it and writes a console warning
+ * for every request that names it (crbug.com/369219127), so there it is left
+ * out, which changes nothing that runs. Read from the platform Chromium
+ * reports, else from the user agent string.
+ */
+export function adapterPowerPreference(
+  nav: Navigator | undefined = typeof navigator === "undefined"
+    ? undefined
+    : navigator,
+): GPUPowerPreference | undefined {
+  try {
+    const platform = (nav as (Navigator & NavigatorWithPlatform) | undefined)
+      ?.userAgentData?.platform;
+    const isWindows =
+      typeof platform === "string" && platform !== ""
+        ? platform === "Windows"
+        : typeof nav?.userAgent === "string" && /Windows/.test(nav.userAgent);
+    return isWindows ? undefined : "high-performance";
+  } catch {
+    return "high-performance";
+  }
+}
+
 // A limit that is missing or not a number must fail the size check, and a
 // comparison with undefined would pass it.
 function limitOrZero(value: unknown): number {
@@ -46,9 +75,10 @@ function limitOrZero(value: unknown): number {
 
 async function readAdapter(gpu: GPU): Promise<AdapterFacts | null> {
   try {
-    const adapter = await gpu.requestAdapter({
-      powerPreference: "high-performance",
-    });
+    const powerPreference = adapterPowerPreference();
+    const adapter = await gpu.requestAdapter(
+      powerPreference === undefined ? undefined : { powerPreference },
+    );
     if (!adapter) return null;
 
     return {

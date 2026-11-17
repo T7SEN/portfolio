@@ -102,6 +102,12 @@ function stubRuntimes(outcomes: readonly Outcome[] = []) {
       setSky(view) {
         stub.log.push(`sky ${JSON.stringify(view)}`);
       },
+      playEgg(egg) {
+        stub.log.push(`egg ${egg}`);
+      },
+      setAudio(levels) {
+        stub.log.push(`audio ${JSON.stringify(levels)}`);
+      },
       dispose() {
         stub.isDisposed = true;
         stub.log.push("dispose");
@@ -271,12 +277,14 @@ afterEach(async () => {
 });
 
 describe("commands and events", () => {
-  test("REQ-ENG-03 REQ-ENG-09 the engine offers eight commands, on and dispose", () => {
+  test("REQ-ENG-03 REQ-ENG-09 REQ-NAV-05 REQ-SND-03 the engine offers ten commands, on and dispose", () => {
     const { engine } = mount({});
 
     expect(Object.keys(engine).sort()).toEqual([
       "dispose",
       "on",
+      "playEgg",
+      "setAudio",
       "setCalm",
       "setPasses",
       "setPointer",
@@ -539,6 +547,149 @@ describe("commands and events", () => {
     expect(
       nth(stubs.built, 1).log.filter((line) => line.startsWith("sky")),
     ).toEqual([]);
+  });
+
+  test("REQ-SND-03 setAudio sent before the runtime exists reaches it after the sky, each call replaces the last, and the latest levels reach a new runtime after a tier change", async () => {
+    const stubs = stubRuntimes();
+    const { engine } = mount({
+      environment: facts(NO_WEBGPU),
+      loadRuntime: stubs.loadRuntime,
+    });
+    const levels: [number, number, number] = [0.25, 0.5, 0.75];
+
+    const sky = {
+      at: 1,
+      turn: 0,
+      tilt: 0,
+      horizon: null,
+      reveal: [],
+      trace: null,
+    };
+
+    engine.setAudio([0.1, 0.1, 0.1]);
+    engine.setAudio(levels);
+    // The engine keeps its own copy: the page may reuse its array.
+    levels[0] = 1;
+    engine.setSky(sky);
+    engine.setStory("about", 0.5);
+    void engine.start();
+    await settle();
+
+    const first = nth(stubs.built, 0);
+    expect(first.log.slice(0, 3)).toEqual([
+      "story about 0.5",
+      `sky ${JSON.stringify(sky)}`,
+      "audio [0.25,0.5,0.75]",
+    ]);
+
+    engine.setAudio([0, 1, 0]);
+    expect(first.log.at(-1)).toBe("audio [0,1,0]");
+
+    engine.setTier(2);
+    await settle();
+    const second = nth(stubs.built, 1);
+    expect(second.log.filter((line) => line.startsWith("audio"))).toEqual([
+      "audio [0,1,0]",
+    ]);
+
+    engine.setAudio(null);
+    expect(second.log.at(-1)).toBe("audio null");
+    engine.setTier(2);
+    await settle();
+    expect(
+      nth(stubs.built, 2).log.filter((line) => line.startsWith("audio")),
+    ).toEqual([]);
+  });
+
+  test("REQ-NAV-05 playEgg reaches the running field once and is never sent to a new runtime", async () => {
+    const { engine, stubs, runtime } = await startTier2();
+    runtime.frame();
+
+    engine.playEgg("gg");
+    expect(runtime.log.at(-1)).toBe("egg gg");
+    engine.playEgg("flip");
+    // The runtime decides whether an egg already plays; the engine passes
+    // each one on to the field it has.
+    expect(count(runtime.log, "egg flip")).toBe(1);
+
+    engine.setTier(2);
+    await settle();
+    expect(
+      nth(stubs.built, 1).log.filter((line) => line.startsWith("egg")),
+    ).toEqual([]);
+  });
+
+  test("REQ-NAV-05 REQ-A11Y-03 playEgg is ignored before a tier is settled, on tier 3, while calm and while the field is paused", async () => {
+    const stubs = stubRuntimes();
+    const { engine } = mount({
+      environment: facts(),
+      loadRuntime: stubs.loadRuntime,
+    });
+    engine.playEgg("gg");
+    void engine.start();
+    await settle();
+    // The probe runs unseen: nothing of the field is on screen yet.
+    const probing = nth(stubs.built, 0);
+    engine.playEgg("mark");
+    await playProbe(probing, 10);
+    expect(probing.log.filter((line) => line.startsWith("egg"))).toEqual([]);
+
+    engine.setCalm(true);
+    engine.playEgg("mark");
+    engine.setCalm(false);
+    setHidden(true);
+    engine.playEgg("flip");
+    setHidden(false);
+    expect(probing.log.filter((line) => line.startsWith("egg"))).toEqual([]);
+
+    engine.playEgg("flip");
+    expect(probing.log.filter((line) => line.startsWith("egg"))).toEqual([
+      "egg flip",
+    ]);
+
+    engine.setTier(3);
+    await settle();
+    engine.playEgg("gg");
+    expect(stubs.built).toHaveLength(1);
+  });
+
+  test("REQ-TIER-04 setTier(null) after a forced tier runs the decision table and the probe again, with the decision's own reason", async () => {
+    const { engine, events, log, stubs } = await startWith({
+      environment: facts(),
+      forcedTier: 2,
+    });
+    expect(events).toEqual([{ type: "tierChosen", tier: 2, reason: "forced" }]);
+    nth(stubs.built, 0).frame();
+
+    engine.setTier(null);
+    await settle();
+    const probing = nth(stubs.built, 1);
+    expect(nth(stubs.requests, 1).backend).toBe("webgpu");
+    expect(log.at(-1)).toEqual({
+      type: "probeStarted",
+      durationMs: PROBE.durationMs,
+    });
+    expect(nth(stubs.built, 0).isDisposed).toBe(true);
+
+    await playProbe(probing, 10);
+    expect(events.slice(2)).toEqual([
+      { type: "tierChosen", tier: 1, reason: "probe-pass" },
+    ]);
+  });
+
+  test("REQ-TIER-04 setTier(null) from a forced tier 3 on a desktop without WebGPU settles on tier 2 with reason no-webgpu", async () => {
+    const { engine, events, stubs } = await startWith({
+      environment: facts(NO_WEBGPU),
+      forcedTier: 3,
+    });
+    expect(stubs.loadRuntime).not.toHaveBeenCalled();
+
+    engine.setTier(null);
+    await settle();
+    expect(events.slice(2)).toEqual([
+      { type: "tierChosen", tier: 2, reason: "no-webgpu" },
+    ]);
+    expect(nth(stubs.requests, 0).backend).toBe("webgl2");
   });
 
   test("REQ-ENG-09 REQ-ENG-07 null sent after cards reaches the runtime, and a new runtime after it hears no cards at all", async () => {

@@ -33,7 +33,7 @@ export type ContrastPair = {
   readonly use: string;
 };
 
-// Every pair the site uses, from visual-system.md section 2. A pair missing
+// Every pair the site uses. A pair missing
 // here is not checked, so a new pairing of tokens is added here first.
 export const pairsInUse: readonly ContrastPair[] = [
   { foreground: "text", background: "void", needs: 4.5, use: "Body text" },
@@ -82,8 +82,8 @@ export const pairsInUse: readonly ContrastPair[] = [
   {
     foreground: "glow",
     background: "raised",
-    needs: 3,
-    use: "Focus ring on inputs",
+    needs: 4.5,
+    use: "The palette's selected row and chosen value on its panel; the focus ring on inputs",
   },
   {
     foreground: "void",
@@ -126,6 +126,12 @@ export const pairsInUse: readonly ContrastPair[] = [
     background: "surface",
     needs: 4.5,
     use: "Form errors on cards",
+  },
+  {
+    foreground: "danger",
+    background: "raised",
+    needs: 4.5,
+    use: "A sound setting's failure line on its panel",
   },
   {
     foreground: "edge",

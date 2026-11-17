@@ -3,11 +3,19 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { calmStore, createCalmStore } from "@/lib/calm-store";
+import { createOverlayStore, overlayStore } from "@/lib/overlay-store";
 import { wheelSteps } from "@/lib/wheel-steps";
 
+import {
+  createSectionScroller,
+  SECTION_GLIDE_EVENT,
+  scrollToSection,
+  type SectionGlide,
+} from "./scroll-to-section";
 import { SmoothScroll } from "./smooth-scroll";
 import {
   createSmoothScroll,
+  scrollsNatively,
   stepWheel,
   type LenisInput,
   type SmoothScrollModules,
@@ -89,7 +97,9 @@ type FakeLenis = {
   isSmooth: boolean;
   animatedScroll: number;
   targetScroll: number;
+  userData: Record<string, unknown>;
   raf: ReturnType<typeof vi.fn>;
+  scrollTo: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
   start: ReturnType<typeof vi.fn>;
   destroy: ReturnType<typeof vi.fn>;
@@ -105,7 +115,18 @@ function fakeModules() {
     isSmooth = false;
     animatedScroll = 0;
     targetScroll = 0;
+    userData: Record<string, unknown> = {};
     raf = vi.fn();
+    // As Lenis does: the glide starts and keeps what it was given.
+    scrollTo = vi.fn(
+      (
+        _target: HTMLElement,
+        options: { userData: Record<string, unknown> },
+      ) => {
+        this.isSmooth = true;
+        this.userData = options.userData;
+      },
+    );
     stop = vi.fn();
     start = vi.fn();
     destroy = vi.fn();
@@ -179,9 +200,30 @@ function fakeDevice({ system = false, coarse = false } = {}) {
     }),
   };
 
+  // The real overlay store, counting who listens.
+  const overlays = createOverlayStore();
+  const overlayListeners = new Set<() => void>();
+  const overlay: typeof overlays = {
+    ...overlays,
+    subscribe(listener) {
+      overlayListeners.add(listener);
+      const unsubscribe = overlays.subscribe(listener);
+      return () => {
+        overlayListeners.delete(listener);
+        unsubscribe();
+      };
+    },
+  };
+  const sections = createSectionScroller({ overlay, calm });
+  const setGlide = vi.spyOn(sections, "setGlide");
+
   return {
     calm,
     pointer,
+    overlay,
+    overlayListeners,
+    sections,
+    setGlide,
     motionListeners,
     pointerListeners,
     setSystem(next: boolean) {
@@ -215,6 +257,8 @@ describe("smooth scroll session", () => {
     const session = createSmoothScroll({
       calm: device.calm,
       pointer: device.pointer,
+      overlay: device.overlay,
+      sections: device.sections,
       load,
       schedule,
     });
@@ -247,7 +291,11 @@ describe("smooth scroll session", () => {
     // syncTouch stays false (REQ-SCR-02), and a click on a link to another
     // page stops the inertia, so the new page starts at its top.
     expect(lenis?.args).toEqual([
-      { stopInertiaOnNavigate: true, virtualScroll: expect.any(Function) },
+      {
+        stopInertiaOnNavigate: true,
+        virtualScroll: expect.any(Function),
+        prevent: scrollsNatively,
+      },
     ]);
     expect(lenis?.scrollCallbacks).toEqual([fake.ScrollTrigger.update]);
     expect(fake.ticker.add).toHaveBeenCalledTimes(1);
@@ -290,7 +338,14 @@ describe("smooth scroll session", () => {
   it("REQ-SCR-03 a browser that cannot answer the pointer question keeps native scroll", async () => {
     const device = fakeDevice();
     const load = vi.fn(async () => fakeModules().modules);
-    createSmoothScroll({ calm: device.calm, pointer: null, load, schedule });
+    createSmoothScroll({
+      calm: device.calm,
+      pointer: null,
+      overlay: device.overlay,
+      sections: device.sections,
+      load,
+      schedule,
+    });
     await passFirstContent();
     await settle();
 
@@ -369,6 +424,8 @@ describe("smooth scroll session", () => {
     createSmoothScroll({
       calm: device.calm,
       pointer: device.pointer,
+      overlay: device.overlay,
+      sections: device.sections,
       load,
       schedule,
     });
@@ -422,6 +479,8 @@ describe("smooth scroll session", () => {
     const session = createSmoothScroll({
       calm: device.calm,
       pointer: device.pointer,
+      overlay: device.overlay,
+      sections: device.sections,
       load: () =>
         new Promise<SmoothScrollModules>((resolve) => {
           finish = resolve;
@@ -448,6 +507,8 @@ describe("smooth scroll session", () => {
     createSmoothScroll({
       calm: device.calm,
       pointer: device.pointer,
+      overlay: device.overlay,
+      sections: device.sections,
       load,
       schedule,
     });
@@ -662,6 +723,339 @@ describe("smooth scroll session", () => {
       expect(glideEnds(next)).toBe(3);
       expect(glideEnds(lenis)).toBe(0);
     });
+
+    it("REQ-SCR-02 a step back or forward through the history stops the glide, so the page it lands on is not carried on", async () => {
+      const { lenis } = await withLenis();
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(glideEnds(lenis)).toBe(1);
+
+      lenis.isSmooth = false;
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(glideEnds(lenis)).toBe(1);
+    });
+
+    it("REQ-NAV-04 the palette's glide to a chapter goes on when focus is given back, but a key, a stray scroll or a history step still end it", async () => {
+      const { device, lenis } = await withLenis();
+      lenis.isSmooth = false;
+      const work = document.createElement("section");
+      work.id = "work";
+      const opener = document.createElement("button");
+      document.body.append(work, opener);
+
+      expect(device.sections.scrollToSection("work")).toBe(true);
+      expect(lenis.scrollTo).toHaveBeenCalledExactlyOnceWith(work, {
+        userData: { section: true },
+      });
+      opener.focus();
+      expect(glideEnds(lenis)).toBe(0);
+
+      press(document.body, "PageDown");
+      expect(glideEnds(lenis)).toBe(1);
+
+      device.sections.scrollToSection("#work");
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(glideEnds(lenis)).toBe(2);
+
+      // A wheel glide carries no mark, so a focus ends it as before.
+      lenis.userData = {};
+      lenis.isSmooth = true;
+      work.tabIndex = -1;
+      work.focus();
+      expect(glideEnds(lenis)).toBe(3);
+    });
+  });
+
+  describe("with the menu or the palette open", () => {
+    /** A Lenis made after first content, with no glide running yet. */
+    async function withLenis(device = fakeDevice()) {
+      const set = setUp(device);
+      await passFirstContent();
+      await settle();
+      const lenis = set.fake.instances[0];
+      if (lenis === undefined) throw new Error("No Lenis was made");
+      return { ...set, lenis };
+    }
+
+    function options(lenis: FakeLenis) {
+      return lenis.args[0] as {
+        virtualScroll: (data: LenisInput) => boolean;
+        prevent: (node: HTMLElement) => boolean;
+      };
+    }
+
+    it("REQ-NAV-03 REQ-NAV-04 an overlay opening stops Lenis, ending any glide, and its closing starts it again", async () => {
+      const { device, lenis } = await withLenis();
+
+      device.overlay.open("menu");
+      expect(lenis.stop).toHaveBeenCalledTimes(1);
+      expect(lenis.start).not.toHaveBeenCalled();
+
+      // A switch to the palette keeps it held, with no second stop.
+      device.overlay.open("palette");
+      expect(lenis.stop).toHaveBeenCalledTimes(1);
+
+      device.overlay.close();
+      expect(lenis.start).toHaveBeenCalledTimes(1);
+      const [stopped] = lenis.stop.mock.invocationCallOrder;
+      const [started] = lenis.start.mock.invocationCallOrder;
+      expect(stopped).toBeLessThan(started ?? 0);
+    });
+
+    it("REQ-NAV-03 a Lenis made while an overlay is open starts held, and the closing lets it go", async () => {
+      const device = fakeDevice();
+      device.overlay.open("palette");
+      const { lenis } = await withLenis(device);
+      expect(lenis.stop).toHaveBeenCalledTimes(1);
+
+      device.overlay.close();
+      expect(lenis.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("REQ-NAV-03 REQ-SCR-02 while held, no key, click, focus or history step reaches Lenis", async () => {
+      const { device, lenis } = await withLenis();
+      device.overlay.open("menu");
+      lenis.isSmooth = true;
+      const link = document.createElement("a");
+      link.setAttribute("href", "#contact");
+      link.addEventListener("click", (event) => event.preventDefault());
+      const button = document.createElement("button");
+      document.body.append(link, button);
+
+      link.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true }),
+      );
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "PageDown", bubbles: true }),
+      );
+      button.focus();
+      window.dispatchEvent(new PopStateEvent("popstate"));
+      expect(lenis.stop).toHaveBeenCalledTimes(1);
+      expect(lenis.start).not.toHaveBeenCalled();
+    });
+
+    it("REQ-NAV-03 REQ-SCR-02 while held, every input passes Lenis's hook as it came and the making-of's wheel step is never asked", async () => {
+      const { device, lenis } = await withLenis();
+      const asked = vi.fn(() => 900);
+      wheelSteps.set(asked);
+      device.overlay.open("palette");
+      let prevented = false;
+      const data: LenisInput = {
+        deltaX: 0,
+        deltaY: 100,
+        event: {
+          type: "wheel",
+          ctrlKey: false,
+          cancelable: true,
+          preventDefault: () => {
+            prevented = true;
+          },
+        } as unknown as WheelEvent,
+      };
+
+      expect(options(lenis).virtualScroll(data)).toBe(true);
+      expect(data.deltaY).toBe(100);
+      expect(prevented).toBe(false);
+      expect(asked).not.toHaveBeenCalled();
+
+      device.overlay.close();
+      options(lenis).virtualScroll(data);
+      expect(asked).toHaveBeenCalledTimes(1);
+      wheelSteps.reset();
+    });
+
+    it("REQ-NAV-03 REQ-NAV-04 a dialog's panel scrolls natively, so a held Lenis never cancels its wheel", async () => {
+      const { lenis } = await withLenis();
+      const dialog = document.createElement("div");
+      dialog.setAttribute("role", "dialog");
+      const plain = document.createElement("div");
+      expect(options(lenis).prevent(dialog)).toBe(true);
+      expect(options(lenis).prevent(plain)).toBe(false);
+    });
+
+    it("REQ-NAV-04 the session hands Lenis's glide to the palette's scroll while Lenis lives, and takes it back when Lenis goes", async () => {
+      const { device, lenis, session } = await withLenis();
+      const contact = document.createElement("section");
+      contact.id = "contact";
+      contact.scrollIntoView = vi.fn();
+      document.body.append(contact);
+      expect(device.setGlide).toHaveBeenCalledTimes(1);
+
+      device.sections.scrollToSection("contact");
+      expect(lenis.scrollTo).toHaveBeenCalledTimes(1);
+
+      // Calm removes Lenis: the browser's own scroll takes over, as a jump.
+      device.calm.setChosen(true);
+      device.sections.scrollToSection("contact");
+      expect(lenis.scrollTo).toHaveBeenCalledTimes(1);
+      expect(contact.scrollIntoView).toHaveBeenCalledWith({
+        block: "start",
+        behavior: "instant",
+      });
+
+      device.calm.setChosen(false);
+      await settle();
+      const next = device.setGlide.mock.calls.length;
+      expect(next).toBe(2);
+      session.dispose();
+      device.sections.scrollToSection("contact");
+      expect(contact.scrollIntoView).toHaveBeenCalledTimes(2);
+    });
+
+    it("REQ-NAV-04 a scroll asked for while the palette is open waits for it to close, then glides once Lenis is free", async () => {
+      const { device, lenis } = await withLenis();
+      const about = document.createElement("section");
+      about.id = "about";
+      document.body.append(about);
+      device.overlay.open("palette");
+
+      expect(device.sections.scrollToSection("about")).toBe(true);
+      expect(lenis.scrollTo).not.toHaveBeenCalled();
+      device.overlay.close();
+      await Promise.resolve();
+      expect(lenis.scrollTo).toHaveBeenCalledExactlyOnceWith(about, {
+        userData: { section: true },
+      });
+      const [started] = lenis.start.mock.invocationCallOrder;
+      const [glided] = lenis.scrollTo.mock.invocationCallOrder;
+      expect(started).toBeLessThan(glided ?? 0);
+    });
+
+    it("REQ-SCR-04 dispose stops listening to the overlays", async () => {
+      const { device, lenis, session } = await withLenis();
+      expect(device.overlayListeners.size).toBe(1);
+      session.dispose();
+      expect(device.overlayListeners.size).toBe(0);
+      device.overlay.open("menu");
+      expect(lenis.stop).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe("scroll to a section", () => {
+  function setUp({ calm = false } = {}) {
+    const overlay = createOverlayStore();
+    const calmStoreFake = {
+      getSnapshot: () => ({ calm, system: false, chosen: calm }),
+      subscribe: vi.fn(() => () => undefined),
+    };
+    const scroller = createSectionScroller({ overlay, calm: calmStoreFake });
+    const work = document.createElement("section");
+    work.id = "work";
+    work.scrollIntoView = vi.fn();
+    document.body.append(work);
+    return { overlay, scroller, work, calmStoreFake };
+  }
+
+  it("REQ-NAV-04 a part that is not on this page says so and moves nothing", () => {
+    const { scroller, work } = setUp();
+    expect(scroller.scrollToSection("contact")).toBe(false);
+    expect(scroller.scrollToSection("")).toBe(false);
+    expect(scroller.scrollToSection("#")).toBe(false);
+    expect(work.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("REQ-NAV-04 REQ-SCR-02 with Lenis live the glide is Lenis's, by id or by hash", () => {
+    const { scroller, work } = setUp();
+    const glide = vi.fn<SectionGlide>();
+    scroller.setGlide(glide);
+    expect(scroller.scrollToSection("work")).toBe(true);
+    expect(scroller.scrollToSection("#work")).toBe(true);
+    expect(glide.mock.calls).toEqual([[work], [work]]);
+    expect(work.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("REQ-NAV-04 with no Lenis the browser glides, and under calm it jumps, reading calm after subscribing", () => {
+    const moving = setUp();
+    moving.scroller.scrollToSection("work");
+    expect(moving.work.scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      behavior: "smooth",
+    });
+    document.body.replaceChildren();
+
+    const still = setUp({ calm: true });
+    still.scroller.scrollToSection("work");
+    expect(still.work.scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      behavior: "instant",
+    });
+    expect(still.calmStoreFake.subscribe).toHaveBeenCalled();
+  });
+
+  it("REQ-NAV-04 REQ-SCR-02 a glide says so on the window as it starts, Lenis's or the browser's; a jump under calm does not (D-180)", () => {
+    const heard = vi.fn();
+    window.addEventListener(SECTION_GLIDE_EVENT, heard);
+    try {
+      const lenis = setUp();
+      const glide = vi.fn<SectionGlide>(() => {
+        expect(heard).toHaveBeenCalledTimes(1);
+      });
+      lenis.scroller.setGlide(glide);
+      lenis.scroller.scrollToSection("work");
+      expect(glide).toHaveBeenCalledTimes(1);
+      document.body.replaceChildren();
+
+      heard.mockClear();
+      const browser = setUp();
+      browser.work.scrollIntoView = vi.fn(() => {
+        expect(heard).toHaveBeenCalledTimes(1);
+      });
+      browser.scroller.scrollToSection("work");
+      expect(browser.work.scrollIntoView).toHaveBeenCalledTimes(1);
+      document.body.replaceChildren();
+
+      heard.mockClear();
+      const still = setUp({ calm: true });
+      still.scroller.scrollToSection("work");
+      expect(still.work.scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(heard).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(SECTION_GLIDE_EVENT, heard);
+    }
+  });
+
+  it("REQ-NAV-04 a release leaves a newer glide in place", () => {
+    const { scroller, work } = setUp();
+    const first = vi.fn<SectionGlide>();
+    const second = vi.fn<SectionGlide>();
+    const releaseFirst = scroller.setGlide(first);
+    scroller.setGlide(second);
+    releaseFirst();
+    scroller.scrollToSection("work");
+    expect(second).toHaveBeenCalledWith(work);
+    expect(first).not.toHaveBeenCalled();
+  });
+
+  it("REQ-NAV-04 while an overlay is open the scroll waits for the last one to close, and a later call takes its place", async () => {
+    const { overlay, scroller, work } = setUp();
+    const about = document.createElement("section");
+    about.id = "about";
+    about.scrollIntoView = vi.fn();
+    document.body.append(about);
+    overlay.open("menu");
+
+    scroller.scrollToSection("work");
+    overlay.open("palette");
+    scroller.scrollToSection("about");
+    await Promise.resolve();
+    expect(work.scrollIntoView).not.toHaveBeenCalled();
+    expect(about.scrollIntoView).not.toHaveBeenCalled();
+
+    overlay.close();
+    expect(about.scrollIntoView).not.toHaveBeenCalled();
+    await Promise.resolve();
+    expect(about.scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(work.scrollIntoView).not.toHaveBeenCalled();
+  });
+
+  it("REQ-NAV-04 a part removed while the overlay closes is not scrolled to", async () => {
+    const { overlay, scroller, work } = setUp();
+    overlay.open("palette");
+    scroller.scrollToSection("work");
+    work.remove();
+    overlay.close();
+    await Promise.resolve();
+    expect(work.scrollIntoView).not.toHaveBeenCalled();
   });
 });
 
@@ -811,6 +1205,38 @@ describe("SmoothScroll", () => {
     await act(async () => {
       root.unmount();
     });
+  });
+
+  it("REQ-NAV-03 REQ-NAV-04 the shared overlay store holds the component's Lenis, and the shared scroll to a section uses its glide", async () => {
+    stubPointer(false);
+    const fake = useFakeLibraries();
+    const root = createRoot(document.createElement("div"));
+    await act(async () => {
+      root.render(<SmoothScroll />);
+    });
+    await passFirstContent();
+    await settle();
+    const lenis = fake.instances[0];
+
+    overlayStore.open("palette");
+    expect(lenis?.stop).toHaveBeenCalledTimes(1);
+    overlayStore.close();
+    expect(lenis?.start).toHaveBeenCalledTimes(1);
+
+    const work = document.createElement("section");
+    work.id = "work";
+    document.body.append(work);
+    expect(scrollToSection("work")).toBe(true);
+    expect(lenis?.scrollTo).toHaveBeenCalledWith(work, {
+      userData: { section: true },
+    });
+
+    await act(async () => {
+      root.unmount();
+    });
+    overlayStore.open("menu");
+    expect(lenis?.stop).toHaveBeenCalledTimes(1);
+    overlayStore.close();
   });
 
   it("REQ-A11Y-04 the toggle's calm reaches the component's Lenis", async () => {

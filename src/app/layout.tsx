@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 
 import { EngineHost } from "@/components/engine/engine-host";
+import { InterfaceKeys } from "@/components/interface/interface-keys";
+import { Overlays } from "@/components/interface/overlays";
 import { LoaderCover } from "@/components/loader/loader-cover";
 import {
   LOADER_NOSCRIPT,
@@ -10,6 +12,7 @@ import { SmoothScroll } from "@/components/motion/smooth-scroll";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
 import { SkipLink } from "@/components/site/skip-link";
+import { InterfaceTicks } from "@/components/sound/interface-ticks";
 import { colors } from "@/tokens/colors";
 
 import { fontVariables } from "./fonts";
@@ -66,6 +69,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <EngineHost />
         {/* Renders nothing. Mounted once, so Lenis lives across routes. */}
         <SmoothScroll />
+        {/* Ctrl K and the typed eggs; renders nothing. Then the menu and the
+            palette, each loaded on its first open and portalled into body,
+            so neither is ever a Tab stop before it opens. */}
+        <InterfaceKeys />
+        <Overlays />
+        {/* The interface sounds on every press, dialog and hover; renders
+            nothing, and plays nothing until the visitor turns them on. */}
+        <InterfaceTicks />
       </body>
     </html>
   );

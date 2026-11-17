@@ -10,9 +10,11 @@ import {
 import { colors } from "@/tokens/colors";
 
 import { LIVE_PASSES } from "../story";
+import { adapterPowerPreference } from "../tier/environment";
 import { median } from "../tier/probe";
 import type {
   ChapterId,
+  EggId,
   FieldLook,
   PassCard,
   Runtime,
@@ -27,6 +29,24 @@ import { skyFrame, type SkyCatalogue } from "../sky/sky";
 import { nextResolution, startResolution } from "./adaptive";
 import { packAtlas, type Atlas } from "./atlas";
 import { liveBackend } from "./backend";
+import {
+  EGG_CHUNK,
+  EGG_REST,
+  EGG_SECONDS,
+  EGG_SHAPE,
+  SILENT,
+  cleanLevels,
+  easeLevels,
+  eggFrame,
+  eggLight,
+  eggPlacement,
+  formedShare,
+  isEgg,
+  litShare,
+  stepPhases,
+  strandLifts,
+  type Levels,
+} from "./eggs";
 import { createField, viewFor } from "./field";
 import { createHalftone, halftoneWorks } from "./halftone";
 import {
@@ -62,6 +82,7 @@ import {
   formedLight,
   glideStage,
   meanStreamShare,
+  orbitAxes,
   PASS_STREAM_SECONDS,
   releaseRankScale,
   stagedFrame,
@@ -221,6 +242,12 @@ function startRuntime(
   // The contact sky's stars, moved to this year once (D-146).
   const skyField = createSkyField(catalogue, Date.now());
   const simulation = createSimulation(particleCount, view, shapes, skyField);
+  // The field chapter's ellipse round the wordmark, for this frame.
+  const placeOrbit = () => {
+    const { a, b } = orbitAxes(view, atlas.extents.wordmark);
+    simulation.orbit.value.set(a, b);
+  };
+  placeOrbit();
   // The making-of's passes are the halftone's own, so the soft look has
   // none; the velocity draw is built only for a tier that shows it live.
   const tier = tierOf(backend);
@@ -296,6 +323,18 @@ function startRuntime(
   // The page's view of the contact sky (types.ts, SkyView); null until it
   // sends one, and then the sky is the moment, unturned, with no lines.
   let skyView: SkyView | null = null;
+  // The easter egg that plays (eggs.ts) and how long it has, in the field's
+  // own time; null while none does. held is the share of the field that
+  // keeps its formation's white, lit the share lit with its light, and light
+  // that light (eggs.ts formedShare, litShare and eggLight): the field's
+  // white leans to the formation's by held and its light to the egg's by lit.
+  let egg: { id: EggId; seconds: number } | null = null;
+  const eggLook = { held: 0, lit: 0, light: 1 };
+  // The sound's levels as last sent, as eased toward on each step, and each
+  // about strand's wave phase (eggs.ts); silence until the page sends any.
+  let audioTarget: Levels = [...SILENT];
+  let audio: Levels = [...SILENT];
+  let phases: Levels = [...SILENT];
   // The last pointer the page sent. It pushes the particles only while the
   // field runs: the page lets go of the pointer only after calm has frozen
   // the field, and a settle with the push on would press a hole at the
@@ -384,12 +423,13 @@ function startRuntime(
         ? { x: 0, y: 0, halfWidth: 0, halfHeight: 0 }
         : stageToCss(finiteStage(stages.work), bufferWidth, bufferHeight);
     halftone.setFrame({ ...frame, light: followed.frame });
-    halftone.setFormed(followed.white);
+    halftone.setFormed(followed.white + (1 - followed.white) * eggLook.held);
   };
 
   const showFollowed = () => {
     simulation.release.value = followed.release;
-    field.light.value = followed.light;
+    field.light.value =
+      followed.light + (eggLook.light - followed.light) * eggLook.lit;
     field.setFocus(-followed.push * PUSH_DEPTH);
     simulation.dotCentre.value.set(followed.dotX, followed.dotY);
     simulation.dotSwell.value = followed.dotSwell;
@@ -576,6 +616,7 @@ function startRuntime(
     bufferRatio = ratio;
     renderer.setDrawingBufferSize(width, height, ratio);
     view = field.setAspect(width / height);
+    placeOrbit();
     // The cell grid comes from the CSS size alone, so a new pixel ratio
     // draws each dot more or less finely and never moves the lattice.
     const grid = gridFor(width, height);
@@ -586,6 +627,56 @@ function startRuntime(
     refit();
     showFollowed();
     return true;
+  };
+
+  /** Ends the egg at once: the field is the story's again. */
+  const endEgg = () => {
+    egg = null;
+    eggLook.held = 0;
+    eggLook.lit = 0;
+    simulation.applyEgg(EGG_REST, 0, 1);
+  };
+
+  /**
+   * One step of the egg's clock: its moment, its shape's band and scale for
+   * the frame as it is now, and the share and light of its formation. It
+   * ends on the rest values, which the story already holds.
+   */
+  const stepEgg = (seconds: number) => {
+    if (egg === null) return;
+    egg.seconds += seconds;
+    if (egg.seconds >= EGG_SECONDS[egg.id]) {
+      endEgg();
+      return;
+    }
+    const moment = eggFrame(egg.id, egg.seconds);
+    const shape = EGG_SHAPE[egg.id];
+    // The flip forms no shape and lights no share of the field: its rain
+    // carries a light of its own (field.ts), so the story's stays.
+    const extent = shape === null ? null : atlas.extents[shape];
+    const placed = extent === null ? null : eggPlacement(extent, view);
+    eggLook.held = formedShare(moment);
+    eggLook.lit = litShare(moment);
+    eggLook.light =
+      placed === null ? followed.light : eggLight(placed.area, look);
+    simulation.applyEgg(
+      moment,
+      shape === null ? 0 : atlas.index[shape],
+      placed?.scale ?? 1,
+      extent?.halfHeight ?? 0,
+      EGG_CHUNK[egg.id],
+    );
+  };
+
+  /**
+   * One step of the about strands' answer to the sound: the levels eased
+   * toward the latest, each strand's phase moved on. A still has none
+   * (REQ-A11Y-03), so its strands are as drawn.
+   */
+  const stepAudio = (seconds: number) => {
+    audio = still ? [...SILENT] : easeLevels(audio, audioTarget, seconds);
+    phases = stepPhases(phases, audio, seconds);
+    simulation.setStrands(strandLifts(audio), phases);
   };
 
   const step = (seconds: number) => {
@@ -645,6 +736,8 @@ function startRuntime(
     }
     stepTrail(seconds);
     stepStream(seconds);
+    stepEgg(seconds);
+    stepAudio(seconds);
     // A still holds the dot at rest (REQ-A11Y-03).
     simulation.pulse.value = still
       ? 0
@@ -653,8 +746,9 @@ function startRuntime(
     simulation.stepSeconds.value = seconds;
     simulation.elapsedSeconds.value = elapsedSeconds;
     // The flow clock runs only once the release this step simulates is
-    // complete (story.ts, flowClockStep).
-    simulation.advanceFlow(seconds, followed.release);
+    // complete (story.ts, flowClockStep). It holds while an egg plays, so no
+    // line wraps a particle the egg has taken back to its start.
+    simulation.advanceFlow(egg === null ? seconds : 0, followed.release);
     placeSky();
     void renderer.compute(simulation.update);
     steps += 1;
@@ -694,6 +788,7 @@ function startRuntime(
   const seat = () => {
     seatPending = false;
     elapsedSeconds = 0;
+    phases = [...SILENT];
     simulation.resetFlow();
     seatTrail();
     simulation.reseat.value = 1;
@@ -955,6 +1050,12 @@ function startRuntime(
       if (disposal === null && loss.message === null) {
         applySize();
         still = true;
+        // Calm ends an egg at once, and the still is the story's own: its
+        // particles are seated and settled again, wherever the egg left them.
+        if (egg !== null) {
+          endEgg();
+          seatPending = true;
+        }
         applyPointer();
         // The still pays what the field owes, so the microtask finds nothing.
         // It draws the pass cards with it.
@@ -981,14 +1082,31 @@ function startRuntime(
       // frame, or, after the tier 1 probe, while the probe's frames of the
       // ambient field are still on a hidden canvas (controller.ts, adopt).
       const fresh = story === null || seatPending;
+      const was = story?.chapter ?? null;
       story = { chapter, progress };
       if (!still) {
         const before = { ...centre };
         aim(liveTargets(), fresh);
-        if (fresh) seatPending = true;
+        if (fresh) {
+          seatPending = true;
+          return;
+        }
         // The hero's glide moves the dot a little on every scroll frame:
         // taken at once, it keeps to the scroll; a jump glides.
-        else takeSmallMoves(before, DOT_PAIR);
+        takeSmallMoves(before, DOT_PAIR);
+        // Coming into the making-of with a card already in the middle, the
+        // mark forms anew: gathered from the flow into its card, as when
+        // the card comes (setStage), not glided in from the last shape's
+        // centre with a trail drawn ahead of it.
+        if (
+          chapter === "making-of" &&
+          was !== "making-of" &&
+          stages["making-of"] !== undefined
+        ) {
+          followed.shapeX = centre.shapeX;
+          followed.shapeY = centre.shapeY;
+          seatTrail();
+        }
         return;
       }
       // A calm field is drawn again only for a new chapter or study, never
@@ -1048,7 +1166,12 @@ function startRuntime(
     setSky(next) {
       if (disposal !== null || loss.message !== null) return;
       // Kept for the next step. A calm field holds its still: the page sends
-      // the frozen moment and no lines while calm (REQ-A11Y-03).
+      // the frozen moment and no lines while calm (REQ-A11Y-03). Calm turned
+      // on in the contact chapter draws its still from the last live view,
+      // the head turned and the lines drawn; the calm view comes a frame
+      // later, and the still is put on it and drawn again, once: the page
+      // then sends the same frozen view every frame, which changes nothing.
+      const changed = !sameSky(skyView, next);
       skyView =
         next === null
           ? null
@@ -1057,6 +1180,19 @@ function startRuntime(
               reveal: [...next.reveal],
               trace: next.trace === null ? null : { ...next.trace },
             };
+      if (still && changed && targets.sky > 0) owe("reseat");
+    },
+    playEgg(id) {
+      // Only a running field plays one, and only one at a time; a still,
+      // calm's, ignores it (types.ts, Engine.playEgg).
+      if (disposal !== null || loss.message !== null) return;
+      if (!running || still || egg !== null || !isEgg(id)) return;
+      egg = { id, seconds: 0 };
+    },
+    setAudio(levels) {
+      if (disposal !== null || loss.message !== null) return;
+      // Kept for the steps, which ease toward it and ignore it while still.
+      audioTarget = cleanLevels(levels);
     },
     dispose() {
       disposal ??= release();
@@ -1065,15 +1201,38 @@ function startRuntime(
   };
 }
 
+/** Whether two sky views from the page would place the same sky. */
+function sameSky(a: SkyView | null, b: SkyView | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (
+    a.at !== b.at ||
+    a.turn !== b.turn ||
+    a.tilt !== b.tilt ||
+    a.horizon !== b.horizon ||
+    a.reveal.length !== b.reveal.length ||
+    a.reveal.some((value, index) => value !== b.reveal[index])
+  ) {
+    return false;
+  }
+  if (a.trace === null || b.trace === null) return a.trace === b.trace;
+  return (
+    a.trace.constellation === b.trace.constellation &&
+    a.trace.done === b.trace.done &&
+    a.trace.partial === b.trace.partial &&
+    a.trace.flash === b.trace.flash
+  );
+}
+
 export const createRuntime: RuntimeFactory = async (options) => {
   // A fresh options object for every renderer: the constructor writes its
   // WebGL2 fallback into the object it is given. powerPreference reaches the
-  // WebGPU adapter request only.
+  // WebGPU adapter request only, and is left out where Chrome ignores it with
+  // a warning (environment.ts, adapterPowerPreference).
   const renderer = new WebGPURenderer({
     canvas: options.canvas,
     antialias: false,
     forceWebGL: options.backend === "webgl2",
-    powerPreference: "high-performance",
+    powerPreference: adapterPowerPreference(),
   });
 
   const loss: Loss = { message: null, report: null };

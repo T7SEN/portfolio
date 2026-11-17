@@ -17,6 +17,7 @@ import {
   ENGINE_MARKER,
   FIRST_LOAD_LIMIT_BYTES,
   MOTION_LIBRARIES,
+  OVERLAY_LIBRARIES,
   chunkFiles,
   engineChunkBytes,
   findDeferredLibraries,
@@ -27,6 +28,10 @@ import {
   missingDeferred,
   pageRoutes,
   payloadFailures,
+  soundCheck,
+  soundFileCheck,
+  soundFilesNamed,
+  SOUND_FILES_DIR,
   staticFilePath,
   unprerenderedPages,
 } from "./budget-lib.mjs";
@@ -37,6 +42,8 @@ const MANIFEST_PATH = "src/engine/manifest.json";
 const RUNTIME_DIR = "src/engine/runtime";
 const SKY_CATALOGUE_FILE = "src/engine/sky/catalogue.ts";
 const MOTION_LOADER = "src/lib/load-motion.ts";
+const OVERLAY_LOADER = "src/components/interface/overlays.tsx";
+const SOUND_SOURCE = "src/components/sound/voices.ts";
 const SCRIPT_FILE = /\.(?:js|jsx|mjs|cjs|ts|tsx|mts|cts)$/;
 
 const readJson = (path) => JSON.parse(readFileSync(path, "utf8"));
@@ -141,6 +148,40 @@ if (motionMissing.length > 0) {
     `${MOTION_LOADER} has code but no built chunk is detected as ${motionMissing.join(", ")}, so the first-load check cannot find ${motionMissing.length === 1 ? "it" : "them"}`,
   );
 }
+
+// The same for the menu's and the palette's libraries, which the overlays
+// import on a dialog's first open.
+const overlayHasCode =
+  existsSync(OVERLAY_LOADER) &&
+  readFileSync(OVERLAY_LOADER, "utf8").includes("import(");
+const overlayMissing = overlayHasCode
+  ? missingDeferred(builtChunks, OVERLAY_LIBRARIES)
+  : [];
+if (overlayMissing.length > 0) {
+  failures.push(
+    `${OVERLAY_LOADER} imports its dialogs but no built chunk is detected as ${overlayMissing.join(", ")}, so the first-load check cannot find ${overlayMissing.length === 1 ? "it" : "them"}`,
+  );
+}
+
+// The sound's own limits, outside the 3D payload [T7SEN, 9 Nov 2026]: the
+// chunks the first switch turned on loads, and each of the bed's recordings
+// (D-179).
+const soundSource = existsSync(SOUND_SOURCE)
+  ? readFileSync(SOUND_SOURCE, "utf8")
+  : "";
+const soundHasCode = soundSource.trim() !== "";
+const sound = soundCheck(builtChunks, soundHasCode);
+failures.push(...sound.failures);
+const soundFiles = soundFileCheck(
+  existsSync(SOUND_FILES_DIR)
+    ? readdirSync(SOUND_FILES_DIR).map((name) => ({
+        name,
+        bytes: statSync(join(SOUND_FILES_DIR, name)).size,
+      }))
+    : [],
+  soundFilesNamed(soundSource),
+);
+failures.push(...soundFiles.failures);
 
 // Chunks that hold three.js count toward the 3D payload of tiers 1 and 2;
 // the engine's entry chunk counts toward every tier.
@@ -248,6 +289,11 @@ const report = [
       ]
     : [`Not measured: ${MANIFEST_PATH} does not exist yet.`]),
   "",
+  "## Sound (REQ-SND-01, its own limit)",
+  "",
+  `Built chunks holding the sound's code: ${sound.count}, ${formatKb(sound.bytes)} gzip, loaded when the first sound switch is turned on. Limit: ${formatKb(sound.limit)}.`,
+  `The bed's recordings in ${SOUND_FILES_DIR}: ${soundFiles.count}, the largest ${formatKb(soundFiles.largest)}, one fetched when the background is first turned on. Limit for each: ${formatKb(soundFiles.limit)}.`,
+  "",
   "## Result",
   "",
   ...(failures.length > 0
@@ -269,5 +315,5 @@ if (failures.length > 0) {
   process.exit(1);
 }
 console.log(
-  `ok budget: ${rows.length} routes, largest first load ${formatKb(largest)}, ${payloadLines.length > 0 ? "3D payload within limits" : "no 3D payload yet"} (${reportPath})`,
+  `ok budget: ${rows.length} routes, largest first load ${formatKb(largest)}, ${payloadLines.length > 0 ? "3D payload within limits" : "no 3D payload yet"}, sound ${formatKb(sound.bytes)} of ${formatKb(sound.limit)}, its recordings at most ${formatKb(soundFiles.largest)} of ${formatKb(soundFiles.limit)} each (${reportPath})`,
 );

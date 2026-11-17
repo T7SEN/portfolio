@@ -1,3 +1,4 @@
+import { SectionLink } from "@/components/motion/section-link";
 import { ArrowIcon } from "@/components/site/arrow-icon";
 import { CalmToggle } from "@/components/site/calm-toggle";
 import { cx } from "@/components/site/class-names";
@@ -14,15 +15,14 @@ import { StoryScene } from "./story-scene";
 import { TierReadout } from "./tier-readout";
 
 // The hero fills the first screen below the bar, which keeps Skip intro in
-// view from the first frame (REQ-NAV-01). The bar is 120 px (7.5rem) below
-// 640 px, where it takes two rows, 68 px (4.25rem) from 640 px and 100 px
-// (6.25rem) from 1024 px (site-header.tsx). svh is the height with the phone
-// browser's bars showing. Phones under 40rem tall (a 375 by 667 phone with
-// its bars showing is about 548 px) get tighter spacing and a smaller dot
-// room: at 375 by 548 the hero then needs about 415 px of the 428 px below
-// the bar, by the font metrics. At 320 px wide and short heights the content
-// is taller than this minimum, so Skip intro can end below the fold there
-// (D-063).
+// view from the first frame (REQ-NAV-01). Since P5 the bar is one row on
+// every width: 68 px (4.25rem) below 1024 px and 100 px (6.25rem) from
+// 1024 px (site-header.tsx). svh is the height with the phone browser's bars
+// showing. Phones under 40rem tall (a 375 by 667 phone with its bars showing
+// is about 548 px) get tighter spacing and a smaller dot room: at 375 by 548
+// the hero then needs about 415 px of the 480 px below the bar, by the font
+// metrics. At 320 px wide and short heights the content can still be taller
+// than this minimum, so Skip intro can end below the fold there (D-063).
 //
 // The hero is that first screen and no more: the field chapter starts at its
 // foot, and the bloom begins as its top reaches the middle of the screen.
@@ -46,7 +46,7 @@ export function Hero() {
       <Container
         width="full"
         className={cx(
-          "grid min-h-[calc(100svh_-_7.5rem)] grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(4rem,1fr)] gap-x-4 pt-2 pb-4 sm:min-h-[calc(100svh_-_4.25rem)] sm:grid-cols-1 sm:grid-rows-[1fr_auto] sm:gap-y-8 sm:pb-8 lg:min-h-[calc(100svh_-_6.25rem)]",
+          "grid min-h-[calc(100svh_-_4.25rem)] grid-cols-[minmax(0,1fr)_auto] grid-rows-[minmax(4rem,1fr)] gap-x-4 pt-2 pb-4 sm:grid-cols-1 sm:grid-rows-[1fr_auto] sm:gap-y-8 sm:pb-8 lg:min-h-[calc(100svh_-_6.25rem)]",
           "max-sm:[@media(max-height:40rem)]:grid-rows-[minmax(2.5rem,1fr)] max-sm:[@media(max-height:40rem)]:pt-1 max-sm:[@media(max-height:40rem)]:pb-2",
         )}
       >
@@ -136,9 +136,11 @@ export function Hero() {
           </div>
         </div>
         <div className="max-sm:contents sm:grid sm:grid-cols-[1fr_auto_1fr] sm:items-end sm:gap-4">
-          {/* id "work" is Skip intro's target (REQ-NAV-01). Its arrow comes
-              before the words in the pill, after them on a phone's row. */}
-          <SiteAnchor
+          {/* id "work" is Skip intro's target (REQ-NAV-01), which the page
+              scrolls to rather than jumping (section-link.tsx, D-176). Its
+              arrow comes before the words in the pill, after them on a
+              phone's row. */}
+          <SectionLink
             href="#work"
             className={cx(
               pillClassName({ variant: "quiet", size: "sm" }),
@@ -152,7 +154,7 @@ export function Hero() {
               direction="down"
               className="size-4 text-glow sm:hidden"
             />
-          </SiteAnchor>
+          </SectionLink>
           <ScrollCue label={copy.scrollCue} className="max-sm:hidden" />
           <CalmToggle
             variant="pill"

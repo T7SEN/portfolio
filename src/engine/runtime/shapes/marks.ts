@@ -3,6 +3,12 @@ import { arc, roundedRect, turn } from "./draw";
 import type { Layer, Ring } from "./draw";
 
 /**
+ * Every outline the atlas holds: the shapes the story forms (ShapeId) and the
+ * letters GG, which only the gg easter egg forms (runtime/eggs.ts).
+ */
+export type MarkId = ShapeId | "gg";
+
+/**
  * The T7SEN wordmark, set in Unbounded Bold: the static
  * fonts/ttf/Unbounded-Bold.ttf of https://github.com/googlefonts/unbounded,
  * Copyright 2022 The Unbounded Project Authors, under the SIL Open Font
@@ -35,6 +41,35 @@ const WORDMARK: Ring[] = [
     3915, 766, 3545, 239, 3545, 766, 3344, 766, 3344, 16, 3612, 16, 3975, 531,
     3975, 16, 4176, 16, 4176, 766,
   ],
+];
+
+/**
+ * One letter G for the gg easter egg, in Unbounded at weight 700, the Bold
+ * instance of the variable font the site serves (next/font/google, its Latin
+ * file; the same OFL font as WORDMARK). The static TTF is not on this
+ * machine, so the letter was drawn at 1,000 px to the em on a canvas in
+ * Chromium, traced along the line where the glyph covers half a pixel, and
+ * every point that moved the outline by less than 0.25% of the pair's width
+ * was dropped, as for the wordmark. Font units, y down, the baseline at 766
+ * as in WORDMARK. A G has no counter, so it is one ring.
+ */
+const LETTER_G: Ring = [
+  451, 0, 323, 19, 230, 56, 149, 114, 91, 186, 51, 281, 38, 391, 50, 499, 89,
+  595, 134, 654, 193, 705, 264, 744, 355, 772, 475, 782, 588, 767, 686, 724,
+  753, 666, 764, 766, 910, 766, 910, 378, 513, 378, 513, 524, 717, 525, 661,
+  575, 578, 606, 480, 614, 390, 600, 324, 567, 276, 515, 257, 472, 247, 420,
+  247, 363, 257, 310, 298, 238, 331, 210, 379, 187, 476, 173, 580, 188, 655,
+  230, 679, 260, 695, 295, 903, 295, 886, 234, 850, 166, 803, 112, 750, 70, 688,
+  38, 617, 15, 531, 2,
+];
+
+/** The pen's advance from one G to the next, with the 0.02 em tracking. */
+const G_ADVANCE = 984;
+
+/** GG: the letter twice, the second moved on by the advance. */
+const GG: Ring[] = [
+  LETTER_G,
+  LETTER_G.map((value, index) => (index % 2 === 0 ? value + G_ADVANCE : value)),
 ];
 
 const DEGREE = Math.PI / 180;
@@ -154,7 +189,7 @@ function bubble(): Layer[] {
  * The sampler fits any size to the frame and needs no change when an entry
  * does.
  */
-export const MARKS: Record<ShapeId, Layer[]> = {
+export const MARKS: Record<MarkId, Layer[]> = {
   // The single polygon of public/brand/t7sen-purple.svg, as written there.
   logo: [
     {
@@ -173,4 +208,5 @@ export const MARKS: Record<ShapeId, Layer[]> = {
   "making-of": sheets(),
   "coup-online": cards(),
   archelab: bubble(),
+  gg: [{ weight: 1, rings: GG }],
 };

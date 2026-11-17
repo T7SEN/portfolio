@@ -230,7 +230,7 @@ export function startStory(
   let makingStage: Stage | undefined;
   let resizeObserver: ResizeObserver | null = null;
   let resizeFrame = 0;
-  let lastHeight = -1;
+  let lastHeights = "";
   let layout: (PageLayout & Partial<PassLayout>) | null = null;
   let plateLayer: HTMLElement | null = null;
   let unsubscribeTier: (() => void) | null = null;
@@ -272,9 +272,10 @@ export function startStory(
   // (samePasses).
   // The middle card's face goes with them as the making-of stage, so the
   // field forms the mark where the live pass is drawn, and it moves with the
-  // row on every frame (REQ-SCR-05: the engine takes a small move at once and
-  // glides over the jump to the next card). The stages go out once, with
-  // the work stage when the caller has moved that too.
+  // row on every frame (REQ-SCR-05: the engine takes every move of the mark
+  // at once, and over the jump to the next card streams its particles from
+  // the card it left, D-127). The stages go out once, with the work stage
+  // when the caller has moved that too.
   function sendPasses(
     position: number,
     stagesMoved = false,
@@ -311,21 +312,29 @@ export function startStory(
 
   // The page's height changes without a resize: the pass viewer turns from
   // a still grid into its sliding row once the page's script runs, and back
-  // with calm mode; late images and fonts move text. Every trigger is then
-  // measured again, once per frame at most.
+  // with calm mode; late images and fonts move text; the footer's Sound
+  // panel opens and closes in the page's flow, outside main, and the
+  // plates over the footer's words must move with them (D-180). So main
+  // and the body are both watched, and every trigger is then measured
+  // again, once per frame at most. The plates' own layer is out of the
+  // flow, so it never changes the body's height.
   function watchHeight() {
     if (typeof ResizeObserver === "undefined") return;
+    const body = root.ownerDocument.body;
+    const heights = () =>
+      `${root.getBoundingClientRect().height} ${body.getBoundingClientRect().height}`;
     resizeObserver = new ResizeObserver(() => {
-      const height = root.getBoundingClientRect().height;
-      if (height === lastHeight || resizeFrame !== 0) return;
-      lastHeight = height;
+      const now = heights();
+      if (now === lastHeights || resizeFrame !== 0) return;
+      lastHeights = now;
       resizeFrame = requestAnimationFrame(() => {
         resizeFrame = 0;
         if (!isStopped) ScrollTrigger.refresh();
       });
     });
-    lastHeight = root.getBoundingClientRect().height;
+    lastHeights = heights();
     resizeObserver.observe(root);
+    resizeObserver.observe(body);
   }
 
   // Any part of the work chapter is on screen: its top is above the
@@ -411,6 +420,7 @@ export function startStory(
     const blocks = plates(
       layout.lines,
       layout.width > 0 ? layout.width : undefined,
+      layout.end,
     );
     // The study frames and the live pass faces hold no text and show the
     // field, so the plates keep clear of them.

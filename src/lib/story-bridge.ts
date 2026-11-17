@@ -1,5 +1,8 @@
+import { EGGS } from "@/engine/story";
 import type {
+  AudioLevels,
   ChapterId,
+  EggId,
   Engine,
   PassCard,
   Point,
@@ -8,13 +11,20 @@ import type {
 } from "@/engine/types";
 
 /**
- * What the page drives: the engine's story, stage, passes, sky and pointer
- * commands, and the veil, which the engine session lays over the field (it
- * never reaches the engine). A veil of null is the session's own default.
+ * What the page drives: the engine's story, stage, passes, sky, pointer,
+ * egg and audio commands, and the veil, which the engine session lays over
+ * the field (it never reaches the engine). A veil of null is the session's
+ * own default.
  */
 export type StoryTarget = Pick<
   Engine,
-  "setStory" | "setStage" | "setPasses" | "setSky" | "setPointer"
+  | "setStory"
+  | "setStage"
+  | "setPasses"
+  | "setSky"
+  | "setPointer"
+  | "playEgg"
+  | "setAudio"
 > & {
   setVeil(veil: number | null): void;
 };
@@ -34,13 +44,26 @@ export type StoryBridge = {
   setPasses(cards: readonly PassCard[] | null): void;
   /**
    * The contact sky as the page sees it (D-147), null when the chapter is
-   * away. A view whose moment or turn is not a finite number is dropped.
+   * away. A view whose moment, turn or tilt is not a finite number is
+   * dropped.
    */
   setSky(view: SkyView | null): void;
   /** Normalised device coordinates, -1 to 1 on both axes, y up. */
   setPointer(x: number, y: number, active: boolean): void;
   /** The veil's strength over the field, 0 to 1; null for the default. */
   setVeil(veil: number | null): void;
+  /**
+   * One easter egg (REQ-NAV-05), handed to the target connected now and to
+   * no later one: an egg is a moment, not a state. An id that is not an egg
+   * is dropped.
+   */
+  playEgg(egg: EggId): void;
+  /**
+   * The sound's band levels while sound is on, null when it is off
+   * (REQ-SND-03). Each level is clamped to 0 to 1, and one that is not a
+   * finite number becomes 0.
+   */
+  setAudio(levels: AudioLevels | null): void;
   /** The latest story sent, null before any. */
   getStory(): StoryState | null;
   /**
@@ -61,6 +84,11 @@ function signedUnit(value: number): number {
   return Number.isFinite(value) ? Math.min(Math.max(value, -1), 1) : 0;
 }
 
+function cleanLevels(levels: AudioLevels | null): AudioLevels | null {
+  if (levels === null) return null;
+  return [unit(levels[0]), unit(levels[1]), unit(levels[2])];
+}
+
 function isFinitePoint({ x, y }: Point): boolean {
   return Number.isFinite(x) && Number.isFinite(y);
 }
@@ -75,12 +103,8 @@ function cleanCards(
   return kept.length > 0 ? kept : null;
 }
 
-// The page's scroll and pointer code and the engine session start at
-// different times and never import each other. This plain object sits
-// between them and keeps only the latest values, the way the engine itself
-// keeps them (engine-webgpu-tsl.md section 7).
-// A sky view with a moment, turn and tilt that are numbers, its reveals
-// clamped to 0 to 1; null for anything else.
+// A trace with a whole constellation index and finite counts, its partial
+// line clamped to 0 to 1; null for anything else.
 function cleanTrace(trace: SkyView["trace"]): SkyView["trace"] {
   if (trace === null) return null;
   const { constellation, done, partial, flash } = trace;
@@ -94,6 +118,8 @@ function cleanTrace(trace: SkyView["trace"]): SkyView["trace"] {
   };
 }
 
+// A sky view with a moment, turn and tilt that are numbers, its reveals
+// clamped to 0 to 1; null for anything else.
 function cleanSky(view: SkyView | null): SkyView | null {
   if (view === null) return null;
   if (![view.at, view.turn, view.tilt].every(Number.isFinite)) return null;
@@ -110,6 +136,10 @@ function cleanSky(view: SkyView | null): SkyView | null {
   };
 }
 
+// The page's scroll and pointer code and the engine session start at
+// different times and never import each other. This plain object sits
+// between them and keeps only the latest values, the way the engine itself
+// keeps them.
 export function createStoryBridge(): StoryBridge {
   let story: StoryState | null = null;
   let stages: Stages | null = null;
@@ -120,6 +150,8 @@ export function createStoryBridge(): StoryBridge {
   let pointer: PointerState | null = null;
   // Undefined until the page sends one; null is a sent default.
   let veil: number | null | undefined;
+  // Null is also the engine's own default, so only levels are replayed.
+  let audio: AudioLevels | null = null;
   let target: StoryTarget | null = null;
 
   return {
@@ -153,6 +185,15 @@ export function createStoryBridge(): StoryBridge {
       target?.setVeil(veil);
     },
 
+    playEgg(egg) {
+      if (EGGS.includes(egg)) target?.playEgg(egg);
+    },
+
+    setAudio(next) {
+      audio = cleanLevels(next);
+      target?.setAudio(audio);
+    },
+
     getStory: () => story,
 
     connect(next) {
@@ -164,6 +205,7 @@ export function createStoryBridge(): StoryBridge {
       if (story !== null) next.setStory(story.chapter, story.progress);
       if (pointer !== null)
         next.setPointer(pointer.x, pointer.y, pointer.active);
+      if (audio !== null) next.setAudio(audio);
       if (veil !== undefined) next.setVeil(veil);
       return () => {
         if (target === next) target = null;
@@ -177,6 +219,7 @@ export function createStoryBridge(): StoryBridge {
       sky = undefined;
       pointer = null;
       veil = undefined;
+      audio = null;
       target = null;
     },
   };

@@ -37,6 +37,12 @@ export type PageLayout = {
   width: number;
   /** Every visible line of text, in page coordinates. */
   lines: PageRect[];
+  /**
+   * Where the page's own content ends, in page coordinates: the body's
+   * bottom, which absolutely placed plates never move. Left out where
+   * nothing is laid out (a unit test).
+   */
+  end?: number;
 };
 
 export type LayoutView = Pick<
@@ -171,12 +177,33 @@ function holderOf(text: Node, body: Element): Element | null {
 /**
  * Every box of visible text on the page, in page coordinates. Visually
  * hidden text (the scene lines, sr-only) is left out by its size: it is
- * clipped to a single pixel. Text with its own plate is left out too.
+ * clipped to a single pixel. Text with its own plate is left out too, and
+ * so is text in a box fixed to the screen or stuck to it.
  */
 function measureLines(view: LayoutView): PageRect[] {
   const { body } = view.document;
   const lines: PageRect[] = [];
   const held = new Set<Element>();
+  // Text in a box fixed to the screen, or stuck to it while its block
+  // scrolls, has no place in page coordinates: a plate laid where it was
+  // measured stays there as the page moves. The skip link, fixed above the
+  // screen until it takes focus, was measured at the page's end while the
+  // page shrank (a shorter window, a phone's layout and back), and its plate,
+  // past the new end, held the page long (16 Nov 2026). Such text brings its
+  // own surface (the skip link, the menu, the palette) or its own plate.
+  const pinned = new Map<Element, boolean>();
+  const isPinned = (element: Element | null): boolean => {
+    if (element === null || element === body) return false;
+    const known = pinned.get(element);
+    if (known !== undefined) return known;
+    const { position } = view.getComputedStyle(element);
+    const result =
+      position === "fixed" ||
+      position === "sticky" ||
+      isPinned(element.parentElement);
+    pinned.set(element, result);
+    return result;
+  };
   const walker = body.ownerDocument.createTreeWalker(
     body,
     NodeFilter.SHOW_TEXT,
@@ -203,6 +230,7 @@ function measureLines(view: LayoutView): PageRect[] {
     // gone once it lifts, and the sky's name, which moves with the pointer
     // and keeps its own halo (D-146).
     if (parent.closest('[data-plate="none"]') !== null) continue;
+    if (isPinned(parent)) continue;
     const holder = holderOf(node, body);
     if (holder !== null) {
       if (held.has(holder)) continue;
@@ -257,7 +285,13 @@ function measureBoxes(
 
 /** Everything the field needs to know about the page's layout. */
 export function measureLayout(root: ParentNode, view: LayoutView): PageLayout {
-  return { ...measureBoxes(root, view), lines: measureLines(view) };
+  const layout: PageLayout = {
+    ...measureBoxes(root, view),
+    lines: measureLines(view),
+  };
+  const page = view.document.body.getBoundingClientRect();
+  if (page.height > 0) layout.end = page.bottom + view.scrollY;
+  return layout;
 }
 
 /**

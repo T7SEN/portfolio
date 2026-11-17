@@ -56,7 +56,7 @@ export const story = {
     "making-of":
       "Where your device draws the field live, all of its light gathers into the T7 mark inside the pass card in the middle of the row, moves with the row and pours into the next card as that card reaches the middle; when that card is drawn live, it shows its pass of the mark as it is drawn.",
     about:
-      "Where your device draws the field live, three thin strands of light, one bright and two faint, wave slowly across the full width of the screen.",
+      "Where your device draws the field live, three thin strands of light, one bright and two faint, wave slowly across the full width of the screen; with sound on, they follow the sound.",
     contact:
       "Where your device draws the field live, the light becomes the stars over AlUla as they stand now, real stars behind the contact panel.",
   },

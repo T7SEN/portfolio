@@ -35,7 +35,8 @@ export const headlines = {
 export function heroCopy(tier: Tier): HeroCopy {
   const form = tier === 3 ? "still" : "gpu";
   return {
-    eyebrow: "WebGPU developer",
+    // The lead role [T7SEN, 16 Nov 2026] (D-178).
+    eyebrow: "Software Architect",
     headline: headlines[form],
     headlineLines: [headlineParts.first, headlineParts.second[form]],
     subLine:
@@ -56,6 +57,15 @@ const TIER_NAMES = {
 /** The tier as the field chapter's readout names it. */
 export function tierLabel(tier: Tier): Text {
   return TIER_NAMES[tier];
+}
+
+/**
+ * After the field readout's tier, where to change it: the palette's keys
+ * where a keyboard is likely, the bar's search button on touch, where no key
+ * opens the palette (null keys). P5's palette holds the Quality tier.
+ */
+export function tierChangeHint(keys: string | null): Text {
+  return keys === null ? "change in search" : `change in ${keys}`;
 }
 
 /** A particle count in the readout's short form: 1M, 250K, 100K. */

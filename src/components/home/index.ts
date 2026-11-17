@@ -9,6 +9,7 @@ export { HomeSection } from "./home-section";
 export { MakingOfSection } from "./making-of-section";
 export { PointerRing } from "./pointer-ring";
 export { ScrollCue } from "./scroll-cue";
+export { SectionAddress } from "./section-address";
 export { ServicesSection } from "./services-section";
 export { StoryScene } from "./story-scene";
 export { TierReadout, type TierReadoutVariant } from "./tier-readout";

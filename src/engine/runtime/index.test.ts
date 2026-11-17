@@ -9,14 +9,27 @@ import type {
   PassId,
   RuntimeOptions,
 } from "../types";
+import {
+  AUDIO_LIFT,
+  EGG_CHUNK,
+  EGG_SECONDS,
+  GG_CRUMBLE,
+  eggFrame,
+  eggLight,
+  eggPlacement,
+  heldShare,
+} from "./eggs";
+import { viewFor } from "./field";
 import { sprinkle } from "./halftone-rules";
 import {
   DOT_SWELL,
   dotSwell,
   dotTravel,
   meanStreamShare,
+  orbitAxes,
   PASS_STREAM_SECONDS,
   FLOW_SHARE,
+  STRANDS_SPEED,
 } from "./story";
 
 // The runtime with three.js, the simulation and the field replaced by
@@ -41,6 +54,8 @@ const fakes = vi.hoisted(() => {
     pointerAt: [0, 0] as [number, number],
     reseat: { value: 0 },
     stepSeconds: { value: 0 },
+    /** The field chapter's ellipse, as the runtime sets it. */
+    orbit: { value: vector() },
     /** The story's uniforms, as the fake simulation hands them out. */
     story: {
       release: { value: 1 },
@@ -66,6 +81,15 @@ const fakes = vi.hoisted(() => {
     /** Each advanceFlow call: the step's seconds and the release it ran with. */
     flows: [] as Array<[number, number]>,
     resetFlows: 0,
+    /** Every egg moment the simulation was handed, with its band and scale. */
+    eggs: [] as Array<{
+      frame: Record<string, number>;
+      shape: number;
+      scale: number;
+      chunk: number;
+    }>,
+    /** Every strand lift and phase the simulation was handed. */
+    strands: [] as Array<{ lifts: number[]; phases: number[] }>,
     /** Every targets object applyTargets was handed. */
     applied: [] as unknown[],
     /** Every depth the field's focus plane was moved to. */
@@ -360,7 +384,7 @@ vi.mock("./passes", () => ({
 // Every shape gets the same square box, so its fit is easy to predict.
 vi.mock("./atlas", async () => {
   const { WORK_SHAPES: shapes } = await import("../story");
-  const ids = ["logo", "wordmark", ...shapes];
+  const ids = ["logo", "wordmark", ...shapes, "gg"];
   return {
     packAtlas: () => {
       fakes.state.packs += 1;
@@ -413,6 +437,7 @@ vi.mock("./simulation", () => ({
       stepSeconds: fakes.state.stepSeconds,
       elapsedSeconds: { value: 0 },
       reseat: fakes.state.reseat,
+      orbit: fakes.state.orbit,
       ...uniforms,
       update: fakes.part("update"),
       // As simulation.ts does: every target uniform from the targets.
@@ -446,6 +471,19 @@ vi.mock("./simulation", () => ({
       },
       resetFlow() {
         fakes.state.resetFlows += 1;
+      },
+      applyEgg(
+        frame: Record<string, number>,
+        shape: number,
+        scale: number,
+        halfHeight = 0,
+        chunk = 0,
+      ) {
+        void halfHeight;
+        fakes.state.eggs.push({ frame: { ...frame }, shape, scale, chunk });
+      },
+      setStrands(lifts: number[], phases: number[]) {
+        fakes.state.strands.push({ lifts: [...lifts], phases: [...phases] });
       },
     };
   },
@@ -600,6 +638,8 @@ afterEach(() => {
   story.shapeScaleTo.value = 1;
   state.flows.length = 0;
   state.resetFlows = 0;
+  state.eggs.length = 0;
+  state.strands.length = 0;
   state.applied.length = 0;
   state.drawOffset = [0, 0];
   state.stream = [0, 0, 0];
@@ -1474,6 +1514,26 @@ describe("the making-of's middle card", () => {
     expect(Math.abs(state.drawOffset[1])).toBeLessThan(0.01);
   });
 
+  test("REQ-ENG-09 REQ-SCR-05 coming into the making-of with its card already in the middle gathers the mark in the card, never glided in from the last study's frame", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    const frame = { x: -0.5, y: 0.3, halfWidth: 0.3, halfHeight: 0.3 };
+    runtime.setStage({ work: frame });
+    runtime.setStory("work", 0.9);
+    runtime.run();
+    for (let at = 0; at < 30; at += 1) state.loop?.(16 * at);
+    expect(story.shapeCentre.value.x).toBeLessThan(0);
+
+    runtime.setStage({ work: frame, "making-of": card });
+    runtime.setStory("making-of", 0.5);
+    state.loop?.(16 * 30);
+    // At the card from the first frame, with nothing drawn ahead.
+    expect(story.shapeCentre.value.x).toBeCloseTo(0.4, 6);
+    expect(story.shapeCentre.value.y).toBeCloseTo(-0.1, 6);
+    expect(Math.abs(state.drawOffset[0])).toBeLessThan(0.01);
+    expect(Math.abs(state.drawOffset[1])).toBeLessThan(0.01);
+  });
+
   test("REQ-ENG-09 a making-of stage aims nothing in another chapter", async () => {
     const { options } = mount("webgpu", 1000, 500);
     const runtime = await createRuntime(options);
@@ -1935,7 +1995,7 @@ describe("the stage follow", () => {
     expect(moved).toBeLessThan(0.5);
   });
 
-  test("D-146 D-147 the contact sky is placed each step for the page's view, on the sky band", async () => {
+  test("REQ-SCR-08 D-146 D-147 the contact sky is placed each step for the page's view, on the sky band", async () => {
     const { options } = mount("webgpu", 1000, 500);
     const runtime = await createRuntime(options);
     const view = {
@@ -1967,7 +2027,7 @@ describe("the stage follow", () => {
     expect(last?.view).not.toBe(view);
   });
 
-  test("D-146 rule A11: a sky catalogue that fails to load gives an empty sky, never a lost field", async () => {
+  test("REQ-SCR-08 D-146 rule A11: a sky catalogue that fails to load gives an empty sky, never a lost field", async () => {
     await expect(
       loadSkyCatalogue(() => Promise.reject(new Error("chunk failed"))),
     ).resolves.toEqual({ stars: [], segments: [], constellations: [] });
@@ -1976,7 +2036,54 @@ describe("the stage follow", () => {
     expect(real.stars.length).toBeGreaterThan(0);
   });
 
-  test("D-146 a horizon the page sends wins over the band's", async () => {
+  test("REQ-SCR-08 REQ-A11Y-03 calm turned on in contact is drawn again once on the calm view the page sends next, and the same view again draws nothing", async () => {
+    const { options } = mount("webgpu", 1000, 500);
+    const runtime = await createRuntime(options);
+    const at = Date.parse("2026-01-15T16:00:00Z");
+    const live = {
+      at,
+      turn: 2,
+      tilt: -1,
+      horizon: null,
+      reveal: [0, 1],
+      trace: { constellation: 59, done: 2, partial: 0.5, flash: 0 },
+    };
+    const calm = { ...live, turn: 0, tilt: 0, trace: null };
+    runtime.setSky(live);
+    runtime.setStory("contact", 0.5);
+    runtime.run();
+    state.loop?.(16);
+    runtime.pause();
+    await runtime.drawStill();
+    await settled();
+    const renders = count("render");
+
+    runtime.setSky(calm);
+    await settled();
+    expect(count("render")).toBe(renders + 1);
+    expect(state.skyUpdates.at(-1)?.view).toEqual(calm);
+
+    runtime.setSky({ ...calm, reveal: [...calm.reveal] });
+    await settled();
+    expect(count("render")).toBe(renders + 1);
+  });
+
+  test("REQ-SCR-07 the runtime sets the field chapter's ellipse for the wordmark from the start and again on every resize", async () => {
+    // The fake atlas's square stands in for the wordmark's extent.
+    const square = { halfWidth: 1, halfHeight: 1, area: 2 };
+    const { options, resizeTo } = mount("webgpu", 1000, 500);
+    await createRuntime(options);
+    const wide = orbitAxes(viewFor(2), square);
+    expect(state.orbit.value.x).toBeCloseTo(wide.a, 9);
+    expect(state.orbit.value.y).toBeCloseTo(wide.b, 9);
+
+    resizeTo(500, 1000);
+    const tall = orbitAxes(viewFor(0.5), square);
+    expect(state.orbit.value.x).toBeCloseTo(tall.a, 9);
+    expect(state.orbit.value.y).toBeCloseTo(tall.b, 9);
+  });
+
+  test("REQ-SCR-08 D-146 a horizon the page sends wins over the band's", async () => {
     const { options } = mount("webgpu", 1000, 500);
     const runtime = await createRuntime(options);
     runtime.setSky({
@@ -1994,7 +2101,7 @@ describe("the stage follow", () => {
     expect(state.skyUpdates.at(-1)?.frame.horizon).toBe(321);
   });
 
-  test("D-146 no sky is placed outside the contact chapter, and with no view from the page the sky is the moment, unturned", async () => {
+  test("REQ-SCR-08 D-146 no sky is placed outside the contact chapter, and with no view from the page the sky is the moment, unturned", async () => {
     const { options } = mount("webgpu", 1000, 500);
     const runtime = await createRuntime(options);
     runtime.setStory("about", 0.5);
@@ -2314,5 +2421,230 @@ describe("the flow clock", () => {
     expect(release).toBeGreaterThan(0);
     expect(release).toBeLessThan(1);
     expect(release).toBe(story.release.value);
+  });
+});
+
+describe("the easter eggs", () => {
+  /** Runs frames of the fake timer's step until the field's time reaches seconds. */
+  function runFor(seconds: number, from = { time: 0 }) {
+    const frames = Math.ceil(seconds / state.delta);
+    for (let index = 0; index < frames; index += 1) {
+      from.time += 16;
+      state.loop?.(from.time);
+    }
+    return from;
+  }
+
+  test("REQ-NAV-05 gg steps through its own moments on the GG band, fitted as the bloom's mark is, and ends on the rest values", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("about", 0.5);
+    runtime.run();
+    state.loop?.(16);
+    state.eggs.length = 0;
+
+    runtime.playEgg("gg");
+    const clock = runFor(1.5);
+    const during = state.eggs.at(-1);
+    // The fake atlas puts gg in the sixth band, and every shape in a square
+    // box; the fit is the one eggPlacement gives on this 2 by 1 frame.
+    expect(during?.shape).toBe(5);
+    const placed = eggPlacement(
+      { halfWidth: 1, halfHeight: 1, area: 2 },
+      { halfWidth: 2, halfHeight: 1 },
+    );
+    expect(during?.scale).toBeCloseTo(placed.scale, 6);
+    expect(during?.frame).toEqual(eggFrame("gg", state.eggs.length / 60));
+    // The formation holds the whole field, so the light is its own.
+    expect(state.light.value).toBeCloseTo(eggLight(placed.area, "halftone"), 6);
+    expect(state.halftones.at(-1)?.formed).toBeCloseTo(1, 6);
+
+    runFor(EGG_SECONDS.gg - 1.5 + 0.1, clock);
+    expect(state.eggs.at(-1)?.frame).toEqual(eggFrame("gg", -1));
+    expect(state.eggs.at(-1)?.frame.form).toBe(0);
+  });
+
+  test("REQ-NAV-05 gg is sent in pieces whose fall keeps the letters' light and white; the flip sends none and leaves the story's light and white as they are", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("about", 0.5);
+    runtime.run();
+    const clock = runFor(1);
+    const storyLight = state.light.value;
+    const storyFormed = state.halftones.at(-1)?.formed ?? -1;
+
+    runtime.playEgg("gg");
+    runFor((GG_CRUMBLE.from + GG_CRUMBLE.to) / 2, clock);
+    expect(state.eggs.at(-1)?.chunk).toBe(EGG_CHUNK.gg);
+    const placed = eggPlacement(
+      { halfWidth: 1, halfHeight: 1, area: 2 },
+      { halfWidth: 2, halfHeight: 1 },
+    );
+    // Mid crumble the field keeps the whole letters' light and white.
+    expect(state.light.value).toBeCloseTo(eggLight(placed.area, "halftone"), 6);
+    expect(state.halftones.at(-1)?.formed).toBeCloseTo(1, 6);
+
+    runFor(EGG_SECONDS.gg, clock);
+    runtime.playEgg("flip");
+    runFor(1.6, clock);
+    expect(state.eggs.at(-1)?.chunk).toBe(0);
+    expect(state.eggs.at(-1)?.frame.rain).toBeGreaterThan(1.5);
+    // The rain carries a light of its own (field.ts), so the story's holds.
+    expect(state.light.value).toBeCloseTo(storyLight, 6);
+    expect(state.halftones.at(-1)?.formed).toBeCloseTo(storyFormed, 6);
+  });
+
+  test("REQ-NAV-05 the flow clock holds while an egg plays and runs again after it", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("about", 0.5);
+    runtime.run();
+    state.loop?.(16);
+
+    runtime.playEgg("flip");
+    const clock = runFor(1);
+    expect(state.flows.at(-1)?.[0]).toBe(0);
+    runFor(EGG_SECONDS.flip, clock);
+    expect(state.flows.at(-1)?.[0]).toBe(1 / 60);
+  });
+
+  test("REQ-NAV-05 a second egg while one plays, an egg sent to a paused field and an unknown name are ignored", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("work", 0.2);
+
+    runtime.playEgg("gg");
+    runtime.run();
+    state.loop?.(16);
+    expect(state.eggs).toHaveLength(0);
+
+    runtime.playEgg("mark");
+    runtime.playEgg("gg");
+    const clock = runFor(1);
+    expect(state.eggs.at(-1)?.frame).toEqual(
+      expect.objectContaining({ gravity: 0, form: 1 }),
+    );
+    // The mark's band, not gg's: the second call changed nothing.
+    expect(state.eggs.at(-1)?.shape).toBe(0);
+
+    runFor(EGG_SECONDS.mark, clock);
+    state.eggs.length = 0;
+    runtime.playEgg("bounce" as never);
+    runFor(0.5, clock);
+    expect(state.eggs).toHaveLength(0);
+  });
+
+  test("REQ-NAV-05 REQ-A11Y-03 calm ends an egg at once and its still is seated and settled, and a still ignores a new egg", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("about", 0.5);
+    runtime.run();
+    const clock = runFor(0.5);
+    runtime.playEgg("gg");
+    runFor(1, clock);
+
+    runtime.pause();
+    state.computes.length = 0;
+    await runtime.drawStill();
+
+    expect(state.eggs.at(-1)?.frame).toEqual(eggFrame("gg", -1));
+    // One reseat step, then the settle.
+    expect(state.computes).toEqual(settle([1]));
+
+    state.eggs.length = 0;
+    runtime.playEgg("flip");
+    runtime.setStory("about", 0.6);
+    await settled();
+    expect(state.eggs).toHaveLength(0);
+  });
+
+  test("REQ-NAV-05 the formation's share of the light leans in as it gathers and out again once it has let go", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("hero", 0);
+    runtime.run();
+    state.loop?.(16);
+    const before = state.light.value;
+
+    runtime.playEgg("mark");
+    const clock = runFor(0.3);
+    const held = heldShare(eggFrame("mark", state.eggs.length / 60));
+    expect(held).toBeGreaterThan(0);
+    expect(held).toBeLessThan(1);
+    expect(state.light.value).not.toBe(before);
+
+    runFor(EGG_SECONDS.mark, clock);
+    expect(state.light.value).toBeCloseTo(before, 6);
+  });
+});
+
+describe("the sound", () => {
+  function runFrames(frames: number, from = { time: 0 }) {
+    for (let index = 0; index < frames; index += 1) {
+      from.time += 16;
+      state.loop?.(from.time);
+    }
+    return from;
+  }
+
+  test("REQ-SND-03 with no sound each strand's phase is the elapsed time times STRANDS_SPEED and its amplitude the one drawn", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("about", 0.5);
+    runtime.run();
+    runFrames(30);
+
+    const last = state.strands.at(-1);
+    expect(last?.lifts).toEqual([1, 1, 1]);
+    // The seat's step of no length, then thirty frames of a sixtieth.
+    for (const phase of last?.phases ?? []) {
+      expect(phase).toBeCloseTo(30 * (1 / 60) * STRANDS_SPEED, 9);
+    }
+  });
+
+  test("REQ-SND-03 the strands follow the levels eased, one band each, and ease back to the drawn strands when sound goes off", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("about", 0.5);
+    runtime.run();
+    const clock = runFrames(2);
+
+    runtime.setAudio([1, 0.5, Number.NaN]);
+    runFrames(1, clock);
+    const first = state.strands.at(-1)?.lifts ?? [];
+    // One step of a sixtieth against a 60 ms attack: part of the way there.
+    expect(first[0]).toBeGreaterThan(1);
+    expect(first[0]).toBeLessThan(1 + AUDIO_LIFT);
+    expect(first[2]).toBe(1);
+
+    runFrames(60, clock);
+    const risen = state.strands.at(-1)?.lifts ?? [];
+    expect(risen[0]).toBeCloseTo(1 + AUDIO_LIFT, 3);
+    expect(risen[1]).toBeCloseTo(1 + AUDIO_LIFT / 2, 3);
+    expect(risen[2]).toBe(1);
+
+    runtime.setAudio(null);
+    runFrames(1, clock);
+    const falling = state.strands.at(-1)?.lifts ?? [];
+    // The release is slower than the attack.
+    expect(falling[0]).toBeGreaterThan(1 + AUDIO_LIFT * 0.9);
+    runFrames(180, clock);
+    expect(state.strands.at(-1)?.lifts[0]).toBeCloseTo(1, 3);
+  });
+
+  test("REQ-SND-03 REQ-A11Y-03 a still ignores the levels: its strands are as drawn", async () => {
+    const { options } = mount();
+    const runtime = await createRuntime(options);
+    runtime.setStory("about", 0.5);
+    runtime.setAudio([1, 1, 1]);
+    runtime.run();
+    runFrames(30);
+    expect(state.strands.at(-1)?.lifts[0]).toBeGreaterThan(1);
+
+    runtime.pause();
+    state.strands.length = 0;
+    await runtime.drawStill();
+    expect(state.strands.length).toBeGreaterThan(0);
+    for (const { lifts } of state.strands) expect(lifts).toEqual([1, 1, 1]);
   });
 });

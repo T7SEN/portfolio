@@ -32,7 +32,8 @@ const IDLE: LoaderScene = {
 };
 
 export const createLoaderScene: CreateLoaderScene = (canvas, options) => {
-  // Without a 2D context the cover keeps its own background and lifts as it would.
+  // Without a 2D context the cover keeps its own background; this scene never
+  // draws a first frame, so the session lifts the cover with the fade.
   let ctx = canvas.getContext("2d");
   if (!ctx) return IDLE;
   let target: HTMLCanvasElement | null = canvas;

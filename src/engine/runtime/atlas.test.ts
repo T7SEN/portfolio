@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 
-import { WORK_SHAPES, type ShapeId } from "../story";
+import { WORK_SHAPES } from "../story";
 import {
   ATLAS_SHAPES,
   ATLAS_WIDTH,
@@ -11,13 +11,14 @@ import {
 } from "./atlas";
 import { fillShare, layers } from "./shapes";
 import type { Layer } from "./shapes/draw";
+import type { MarkId } from "./shapes/marks";
 
 /**
  * A sampler of a box from (x0, y0) to (x1, y1), its points on an even grid,
  * every point in layer 0.
  */
 function square(x0: number, y0: number, x1: number, y1: number) {
-  return (id: ShapeId, count: number) => {
+  return (id: MarkId, count: number) => {
     void id;
     const side = Math.ceil(Math.sqrt(count));
     const points = new Float32Array(count * 2);
@@ -31,7 +32,7 @@ function square(x0: number, y0: number, x1: number, y1: number) {
 }
 
 /** One layer of one ring, weight 1. */
-function one(ring: number[]): (id: ShapeId) => Layer[] {
+function one(ring: number[]): (id: MarkId) => Layer[] {
   return () => [{ weight: 1, rings: [ring] }];
 }
 
@@ -45,19 +46,19 @@ function pointOf(data: Float32Array, shape: number, point: number) {
   ] as const;
 }
 
-const IDS: ShapeId[] = ["logo", "wordmark", ...WORK_SHAPES];
+const IDS: MarkId[] = ["logo", "wordmark", ...WORK_SHAPES, "gg"];
 // The real atlas is made once: it samples every shape and measures its rims.
 const real = packAtlas();
 
 describe("the shape atlas", () => {
-  test("REQ-SCR-07 REQ-SCR-01 holds exactly the mark, the wordmark and the three full studies' shapes, each in its own band of rows, at a size every WebGL2 device reads", () => {
+  test("REQ-SCR-07 REQ-SCR-01 REQ-NAV-05 holds exactly the mark, the wordmark, the three full studies' shapes and the gg egg's letters, each in its own band of rows, at a size every WebGL2 device reads", () => {
     expect(ATLAS_SHAPES).toEqual(IDS);
     expect(ATLAS_SHAPES).not.toContain("t7sen-url");
     expect(ATLAS_SHAPES).not.toContain("systemseven");
     expect(real.width).toBe(ATLAS_WIDTH);
     expect(real.width).toBeLessThanOrEqual(2048);
     expect(real.height).toBe(ROWS_PER_SHAPE * ATLAS_SHAPES.length);
-    expect(real.height).toBe(80);
+    expect(real.height).toBe(96);
     expect(real.height).toBeLessThanOrEqual(2048);
     expect(Number.isInteger(ROWS_PER_SHAPE)).toBe(true);
     expect(real.data).toHaveLength(real.width * real.height * 4);
@@ -160,7 +161,7 @@ describe("the shape atlas", () => {
   test("REQ-SCR-01 REQ-ENG-05 the fourth channel carries each point's layer weight, 1 for the front layer", () => {
     // Two layers: the even points in a back layer of weight 0.4, the odd
     // ones in the front layer.
-    const stacked = (id: ShapeId, count: number) => {
+    const stacked = (id: MarkId, count: number) => {
       const { points } = square(-1, -1, 1, 1)(id, count);
       const layer = new Uint8Array(count);
       for (let index = 1; index < count; index += 2) layer[index] = 1;
@@ -201,7 +202,7 @@ describe("the shape atlas", () => {
   });
 
   test("REQ-SCR-01 a sampler that gives too few points has them repeated, never left at the origin", () => {
-    const few = (id: ShapeId, count: number) => {
+    const few = (id: MarkId, count: number) => {
       void count;
       void id;
       return {

@@ -73,6 +73,13 @@
     outline-offset: 3px;
   }
 
+  /* A dialog asked for whose code is still on its way (overlays.tsx): the
+     pointer says the page is busy until it opens or is closed. */
+  html[data-overlay-loading],
+  html[data-overlay-loading] * {
+    cursor: progress;
+  }
+
   /* The plate that text held on screen brings along (home/held-plate.tsx):
      the veil's plate exactly (story-veil.ts), the void at PLATE_ALPHA, so
      over the open veil of 0.35 the field behind the words is at 0.8, with

@@ -133,17 +133,28 @@ describe("study page parts", () => {
   });
 
   it("REQ-CNT-05 a screenshot without its alt text or size, or words in its place, does not compile", () => {
+    // Each sample lacks only the one part its line is about, so each
+    // directive fails for that reason alone, never for a missing phone file.
+    const phone = {
+      src: "/work/shot-phone.webp",
+      width: 800,
+      height: 450,
+    } as const;
     const unnamed = {
       src: "/work/shot.webp",
       caption: "A caption.",
       width: 1600,
       height: 900,
+      phone,
     } as const;
     const unsized = {
       src: "/work/shot.webp",
       alt: "What the picture shows.",
       caption: "A caption.",
+      phone,
     } as const;
+    const whole: Screenshot = { ...unnamed, alt: "What the picture shows." };
+    expect(whole.phone).toBe(phone);
     // @ts-expect-error REQ-CNT-05: a picture names what it shows
     const noAlt: Screenshot = unnamed;
     // @ts-expect-error REQ-CNT-05: its size holds its place while it loads

@@ -282,21 +282,23 @@ describe("FullStudy", () => {
     }
   });
 
-  it.each(fullStudies.map((study) => [study.slug, study] as const))(
-    "REQ-CNT-05 %s: a screenshot, diagram or excerpt still to come is a dashed box holding its marker",
-    (_slug, study) => {
-      const host = render(<FullStudy study={study} />);
-      for (const part of [study.screenshot, study.diagram, study.excerpt]) {
-        if (typeof part !== "string") continue;
-        const box = dashedBoxOf(host, part);
-        expect(box, part).toBeDefined();
-        expect(box?.querySelector("img, figure, pre")).toBeNull();
-      }
-      if (typeof study.screenshot === "string") {
-        expect(host.querySelector("img")).toBeNull();
-      }
-    },
-  );
+  it("REQ-CNT-05 a screenshot, diagram or excerpt still to come is a dashed box holding its marker, with no picture", () => {
+    // Every study has all three supplied now, so the markers are samples.
+    const study: FullContent = {
+      ...fullOf("coup-online"),
+      screenshot: `[${"FILL"}: the screenshot]`,
+      diagram: `[${"FILL"}: the diagram]`,
+      excerpt: `[${"FILL"}: the excerpt]`,
+    };
+    const host = render(<FullStudy study={study} />);
+    for (const part of [study.screenshot, study.diagram, study.excerpt]) {
+      if (typeof part !== "string") throw new Error("a sample is a marker");
+      const box = dashedBoxOf(host, part);
+      expect(box, part).toBeDefined();
+      expect(box?.querySelector("img, figure, pre")).toBeNull();
+    }
+    expect(host.querySelector("img")).toBeNull();
+  });
 
   it("REQ-CNT-03 a supplied screenshot is a framed picture with its alt text, its size and its caption", () => {
     const study = drawnStudy();
@@ -432,7 +434,7 @@ describe("FullStudy", () => {
     ).toEqual(["A player", `${studyPage.permission} The player, 11 Nov 2026.`]);
   });
 
-  it("REQ-CNT-12 ArcheLab says it is unofficial fan work before the first part, and shows no picture until its own interface is supplied", () => {
+  it("REQ-CNT-12 ArcheLab says it is unofficial fan work before the first part, and shows only its own interface, never a picture before it is supplied", () => {
     const study = fullOf("archelab");
     if (!study.notice) throw new Error("ArcheLab has no notice");
     const host = render(<FullStudy study={study} />);
@@ -445,9 +447,24 @@ describe("FullStudy", () => {
       notice.compareDocumentPosition(firstPart) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    // Supplied: the one picture is the site's own interface, under its own
+    // name (REQ-HYG-05: no game art).
     if (typeof study.screenshot === "string") {
-      expect(host.querySelector("img")).toBeNull();
+      throw new Error("ArcheLab's screenshot is supplied");
     }
+    expect(
+      [...host.querySelectorAll("img")].map((image) =>
+        image.getAttribute("src"),
+      ),
+    ).toEqual([study.screenshot.src]);
+    expect(study.screenshot.src.startsWith("/work/archelab")).toBe(true);
+    // Before it was supplied, no picture at all.
+    const waiting = render(
+      <FullStudy
+        study={{ ...study, screenshot: `[${"FILL"}: its own interface]` }}
+      />,
+    );
+    expect(waiting.querySelector("img")).toBeNull();
   });
 });
 
@@ -736,6 +753,21 @@ describe("study page links", () => {
         if (isMarker(link.href)) expect(host.textContent).toContain(link.href);
       }
     }
+    // Every address is supplied now, so a marker is a sample.
+    const marker = `[${"FILL"}: the live address]` as const;
+    const base = fullOf("coup-online");
+    const host = render(
+      <FullStudy
+        study={{
+          ...base,
+          links: { ...base.links, live: { label: "Live site", href: marker } },
+        }}
+      />,
+    );
+    expect(host.textContent).toContain(`Live site ${marker}`);
+    for (const anchor of host.querySelectorAll("a")) {
+      expect(isMarker(anchor.getAttribute("href") ?? "")).toBe(false);
+    }
   });
 
   it("REQ-CNT-04 links to other sites carry the up-right arrow", () => {
@@ -856,6 +888,18 @@ describe("StudyRow", () => {
           `${secondary.label} ${secondary.href}`,
         );
       }
+    }
+    // Every second link is supplied now, so a marker is a sample.
+    const marker = `[${"FILL"}: the repository]` as const;
+    const base = fullOf("coup-online");
+    const study: FullContent = {
+      ...base,
+      listing: { ...base.listing, secondary: { label: "Repo", href: marker } },
+    };
+    const host = render(<StudyRow study={study} readLabel={readFull} />);
+    expect(host.textContent).toContain(`Repo ${marker}`);
+    for (const anchor of host.querySelectorAll("a")) {
+      expect(isMarker(anchor.getAttribute("href") ?? "")).toBe(false);
     }
   });
 

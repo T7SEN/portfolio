@@ -4,24 +4,29 @@
 // buffer of their own (REQ-ENG-05). No three.js here: the runtime makes the
 // texture from this data.
 
-import { WORK_SHAPES, type ShapeId } from "../story";
+import { WORK_SHAPES } from "../story";
 import { fillShare, layers, sampleLayers, type ShapeSample } from "./shapes";
 import type { Layer } from "./shapes/draw";
+import type { MarkId } from "./shapes/marks";
 import { layerEdgeWeights } from "./shapes/edge";
 import type { ShapeExtent } from "./story";
 
-/** Every shape in the atlas, in row order: the field chapter's two, then the studies'. */
-export const ATLAS_SHAPES: readonly ShapeId[] = [
+/**
+ * Every shape in the atlas, in row order: the field chapter's two, the
+ * studies', then the letters GG, which only the gg easter egg forms.
+ */
+export const ATLAS_SHAPES: readonly MarkId[] = [
   "logo",
   "wordmark",
   ...WORK_SHAPES,
+  "gg",
 ];
 
 // Sixteen thousand points per shape; a small jitter from each particle's
 // seed fills the area between them for a million particles. At 4,096 the
 // gaps between random points showed as clumps. 1,024 texels a row stays
 // inside the 2,048 that every WebGL2 device must allow, and the whole atlas
-// is 1,024 x 80 float texels, about 1.3 MB on the GPU, made on the CPU.
+// is 1,024 x 96 float texels, about 1.6 MB on the GPU, made on the CPU.
 export const POINTS_PER_SHAPE = 16_384;
 export const ATLAS_WIDTH = 1024;
 export const ROWS_PER_SHAPE = POINTS_PER_SHAPE / ATLAS_WIDTH;
@@ -37,12 +42,15 @@ const AREA_GRID = 64;
  * five times wider than it is tall, so its strokes are thin in that space
  * and its rim is shallow, or the whole word would count as rim.
  */
-export const RIM_DEPTH: Readonly<Record<ShapeId, number>> = {
+export const RIM_DEPTH: Readonly<Record<MarkId, number>> = {
   logo: 0.045,
   wordmark: 0.022,
   "making-of": 0.05,
   "coup-online": 0.05,
   archelab: 0.05,
+  // Drawn about 1.5 times the logo's size per sample unit, so a cell and a
+  // half is shallower in this space.
+  gg: 0.03,
 };
 
 export interface Atlas {
@@ -60,9 +68,9 @@ export interface Atlas {
    * (shapes/index.ts), so the light a formation gets brings its front
    * layer's fill to the glow tone.
    */
-  extents: Record<ShapeId, ShapeExtent>;
+  extents: Record<MarkId, ShapeExtent>;
   /** The atlas row band of each shape, as the index the compute node reads. */
-  index: Record<ShapeId, number>;
+  index: Record<MarkId, number>;
 }
 
 function extentOf(points: Float32Array): {
@@ -122,16 +130,16 @@ function extentOf(points: Float32Array): {
  */
 export function packAtlas(
   sample: (
-    id: ShapeId,
+    id: MarkId,
     count: number,
   ) => Pick<ShapeSample, "points" | "layer"> = sampleLayers,
-  shapeLayers: (id: ShapeId) => Layer[] = layers,
-  share: (id: ShapeId) => number = fillShare,
+  shapeLayers: (id: MarkId) => Layer[] = layers,
+  share: (id: MarkId) => number = fillShare,
 ): Atlas {
   const height = ROWS_PER_SHAPE * ATLAS_SHAPES.length;
   const data = new Float32Array(ATLAS_WIDTH * height * 4);
-  const extents = {} as Record<ShapeId, ShapeExtent>;
-  const index = {} as Record<ShapeId, number>;
+  const extents = {} as Record<MarkId, ShapeExtent>;
+  const index = {} as Record<MarkId, number>;
 
   ATLAS_SHAPES.forEach((id, shape) => {
     const { points, layer } = sample(id, POINTS_PER_SHAPE);

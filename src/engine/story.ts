@@ -39,6 +39,23 @@ export const LIVE_PASSES: Readonly<Record<1 | 2, readonly PassId[]>> = {
 export type WorkShape = (typeof WORK_SHAPES)[number];
 
 /**
+ * The easter eggs the field plays (REQ-NAV-05, T7SEN 9 Nov 2026): gg, the
+ * field spells GG and then falls apart; mark, it re-forms into the T7 mark;
+ * flip, its gravity turns over and the particles pour upward for a few
+ * seconds. Each plays once over whatever the story shows, then hands back.
+ */
+export const EGGS = ["gg", "mark", "flip"] as const;
+
+export type EggId = (typeof EGGS)[number];
+
+/**
+ * The sound's loudness in the bands the about chapter's three strands follow
+ * (REQ-SND-03): the low, middle and high band, each 0 to 1, in the order of
+ * the strands (runtime/story.ts STRANDS).
+ */
+export type AudioLevels = readonly [low: number, mid: number, high: number];
+
+/**
  * Every shape the field can form from a sampled outline: the T7 mark and the
  * T7SEN wordmark of the field chapter, then the work shapes.
  */

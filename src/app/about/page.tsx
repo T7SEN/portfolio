@@ -8,6 +8,7 @@ import {
   SkillGroups,
 } from "@/components/pages";
 import { Container, PillLink, TextLink } from "@/components/site";
+import { AboutWaveform } from "@/components/sound/about-waveform";
 import { about } from "@/content/about";
 import { pages } from "@/content/pages";
 import { services } from "@/content/services";
@@ -82,8 +83,8 @@ export default function AboutPage() {
           <ElsewhereList links={about.elsewhere} cv={about.cv} />
         </section>
       </div>
-      {/* TODO(REQ-SND-03): the waveform panel arrives here with Sound at P5;
-          its caption speaks of sound, so it waits for sound to exist. */}
+      {/* With sound on, its bars follow the sound (REQ-SND-03). */}
+      <AboutWaveform />
     </Container>
   );
 }

@@ -183,7 +183,7 @@ describe("study listings", () => {
     ).toEqual([
       [
         ["Frame time per tier", "Under 4.2 ms, capped by a 240 Hz display"],
-        ["3D payload", "238.9 KB on desktop"],
+        ["3D payload", "239.0 KB on desktop"],
       ],
       [
         ["Accounts", "6,713"],
@@ -283,7 +283,7 @@ describe("hero copy", () => {
       expect(headline).toMatch(/^Real-time worlds, /);
       expect(headlineLines[0]).toBe("Real-time worlds,");
       expect(rest).toEqual({
-        eyebrow: "WebGPU developer",
+        eyebrow: "Software Architect",
         subLine:
           "Interactive 3D, campaigns and web games, shipped to every screen.",
         primaryAction: "See the work",
@@ -454,12 +454,14 @@ describe("study pages", () => {
     }
   });
 
-  it("REQ-CNT-12 ArcheLab's screenshot, while still to come, asks for its own interface with no game art", () => {
+  it("REQ-CNT-12 REQ-HYG-05 ArcheLab's screenshot is its own interface, kept with the site's own pictures", () => {
     const { screenshot } = full("archelab");
     if (typeof screenshot === "string") {
-      expect(screenshot).toContain("own interface");
-      expect(screenshot).toContain("no game art");
+      throw new Error("ArcheLab's screenshot is supplied");
     }
+    expect(screenshot.src).toBe("/work/archelab.webp");
+    expect(screenshot.phone.src).toBe("/work/archelab-phone.webp");
+    expect(screenshot.alt).toContain("ArcheLab's message window");
   });
 
   it("REQ-CNT-03 REQ-CNT-04 the study pages name the seven parts and the four short parts in order", () => {
@@ -578,6 +580,11 @@ describe("recorded facts", () => {
     expect(frames).toContain(`| 1 | desktop | ${desktop} |`);
     expect(frames).toContain(`| 2 | phone | ${phone} |`);
     expect(frames).toContain(`| 3 | phone | ${still} |`);
+    // The home page's row shows the same desktop figure as the study page.
+    const listed = full("making-of").listing.metrics.find(
+      (metric) => metric.label === "3D payload",
+    );
+    expect(listed?.value).toBe(`${desktop} on desktop`);
     for (const row of sized) {
       expect(row.source).toContain("docs/results/2026-11-12-making-of.md");
     }
@@ -663,8 +670,8 @@ describe("about", () => {
   it("REQ-CNT-08 the streamer thread is told in T7SEN's accepted words", () => {
     expect(about.heading).toBe("Real time, on and off stream.");
     expect(about.paragraphs).toEqual([
-      "I'm T7SEN, a software developer who also streams competitive games. Streaming is real time with an audience: every frame has to land, and people leave the moment it stalls.",
-      "I build for the web the same way.",
+      "I'm T7SEN, a software architect who also streams competitive games. Streaming is real time with an audience: every frame has to land, and people leave the moment it stalls.",
+      "I build for the web the same way, with a pull towards security, WebGPU and three.js.",
     ]);
     // Live performance, real-time systems and a sense for audiences.
     const thread = about.paragraphs.join(" ");
@@ -725,8 +732,9 @@ describe("services", () => {
       "Interactive centrepieces for a brand or product, with a fallback for every device.",
       "Playable, shareable and built to load fast.",
     ]);
+    // The lead role [T7SEN, 16 Nov 2026] (D-178).
     expect(services.hiring).toBe(
-      "Hiring for a creative or WebGPU frontend role? Same form.",
+      "Hiring a software architect? Send a message the same way.",
     );
   });
 });

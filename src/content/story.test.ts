@@ -132,6 +132,15 @@ describe("scene descriptions", () => {
     expect(story.scenes.about).toContain("three thin strands");
     expect(story.scenes.contact).toContain("stars over AlUla");
   });
+
+  it("REQ-A11Y-05 REQ-SND-03 A14 the about scene ties the strands to the sound only while sound is on", () => {
+    // The strands follow the audio only with sound on, and only where the
+    // field is live: the line keeps the live opening and names the condition.
+    expect(story.scenes.about).toContain(
+      "with sound on, they follow the sound",
+    );
+    expect(story.scenes.about).not.toMatch(/always|music|beat/i);
+  });
 });
 
 describe("making-of scene", () => {

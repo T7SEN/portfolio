@@ -5,6 +5,7 @@ import {
   abs,
   cos,
   float,
+  floor,
   fract,
   instanceIndex,
   instancedArray,
@@ -28,6 +29,36 @@ import { Vector2, Vector3, type DataTexture, type Node } from "three/webgpu";
 import type { ShapeId } from "../story";
 import { ATLAS_WIDTH, POINTS_PER_SHAPE, ROWS_PER_SHAPE } from "./atlas";
 import {
+  CHUNK_SCATTER,
+  CHUNK_SOFT,
+  EGG_DRAG,
+  FALL_FLOOR,
+  FALL_GRAVITY,
+  FALL_REST_DRAG,
+  LET_GO_ORDER,
+  LET_GO_SOFT,
+  EGG_RECALL_DRAG,
+  EGG_RECALL_PULL,
+  RAIN_APEX_OWN,
+  RAIN_COLUMNS,
+  RAIN_FALL,
+  RAIN_HANG,
+  RAIN_HASHES,
+  RAIN_HASH_SCALE,
+  RAIN_HIGH,
+  RAIN_LIT_IN,
+  RAIN_LIT_OUT,
+  RAIN_LOW,
+  RAIN_PACE_OWN,
+  RAIN_RISE_MAX,
+  RAIN_RISE_MIN,
+  RAIN_SCATTER,
+  RAIN_START_SPREAD,
+  RAIN_STILL,
+  type EggFrame,
+  type Levels,
+} from "./eggs";
+import {
   FLOW_DEPTH,
   FLOW_FROM,
   FLOW_LINES,
@@ -36,11 +67,7 @@ import {
   FLOW_RELEASE_DONE,
   FLOW_SHARE,
   FLOW_WIDTH,
-  NARROW_ASPECT,
-  ORBIT_ASPECT,
-  ORBIT_HEIGHT,
-  ORBIT_WIDTH,
-  ORBIT_WIDTH_NARROW,
+  orbitAxes,
   SHEET_FIT,
   SKY_DIM,
   SKY_FORMED_SHARE,
@@ -50,7 +77,6 @@ import {
   STRANDS,
   STRANDS_CENTRE,
   STRANDS_REACH,
-  STRANDS_SPEED,
   STRAND_THICKNESS,
   TRAITS,
   flowClockStep,
@@ -205,7 +231,10 @@ export function releasedFor(
  * thousand points serve every particle; the compute node and the material
  * read the same texel.
  */
-export function shapeTexel(atlas: DataTexture, shape: Node<"float">) {
+export function shapeTexel(
+  atlas: DataTexture,
+  shape: Node<"float"> | Node<"int">,
+) {
   const point = int(instanceIndex).mod(int(POINTS_PER_SHAPE));
   const column = point.mod(int(ATLAS_WIDTH));
   const row = point.div(int(ATLAS_WIDTH));
@@ -316,6 +345,10 @@ export function createSimulation(
   const stepSeconds = uniform(0);
   const elapsedSeconds = uniform(0);
   const frame = uniform(new Vector2(view.halfWidth, view.halfHeight));
+  // The field chapter's ellipse, its half axes in world units (story.ts
+  // orbitAxes): the runtime sets them for the wordmark on every resize.
+  const firstOrbit = orbitAxes(view);
+  const orbit = uniform(new Vector2(firstOrbit.a, firstOrbit.b));
   const pointer = uniform(new Vector3());
   const pointerStrength = uniform(0);
   // 1 for one step puts every particle on its target with no speed. A still
@@ -360,6 +393,32 @@ export function createSimulation(
   const dotSeed = uniform(new Vector2());
   const rankScale = uniform(Math.SQRT1_2);
   const shapeCentre = uniform(new Vector2());
+  // An easter egg as eggs.ts eggFrame gives it, and the atlas band and scale
+  // of its formation, which sits at the middle of the screen: all at rest
+  // while none plays, so the field is the story's alone.
+  const eggForm = uniform(0);
+  const eggFree = uniform(0);
+  const eggGravity = uniform(0);
+  const eggLoose = uniform(0);
+  const eggTrail = uniform(0);
+  const eggKeep = uniform(0);
+  const eggRecall = uniform(0);
+  const eggShown = uniform(0);
+  const eggRain = uniform(0);
+  const eggShape = uniform(0);
+  const eggScale = uniform(1);
+  // How far a particle's height in the egg's shape sets when it lets go
+  // (eggs.ts letGoShare), and 1 over the shape's height in sample space.
+  const eggOrder = uniform(0);
+  const eggRank = uniform(0);
+  // The size of the pieces the shape breaks into, in sample space, 0 for
+  // none (eggs.ts chunkOf).
+  const eggChunk = uniform(0);
+  // The about strands' answer to the sound (eggs.ts, strandLifts and
+  // stepPhases): each strand's amplitude as a multiple of the one drawn, and
+  // its wave's phase, one component per strand in STRANDS order.
+  const strandLift = uniform(new Vector3(1, 1, 1));
+  const strandPhase = uniform(new Vector3());
 
   const texelAt = (texture: DataTexture, index: Node<"int">) =>
     textureLoad(
@@ -459,6 +518,57 @@ export function createSimulation(
     };
   };
 
+  /**
+   * A particle's share of an easter egg (eggs.ts, letGoShare): free, how far
+   * it has let go, at its own moment along the clock, which its height in the
+   * egg's shape (its texel's y) moves earlier near the bottom; part, how much
+   * of the egg's formation it takes; kept, how much of the formation's look
+   * it keeps once let go (EggFrame keep). All 0 while no egg plays. With
+   * pieces (eggChunk), the trait and the height are its piece's, from its
+   * texel alone (eggs.ts chunkOf), so a piece lets go whole.
+   */
+  const eggFor = (seed: Node<"vec3">, texel: Node<"vec4">) => {
+    const own = traitOf(TRAITS.egg, seed);
+    const size = eggChunk.max(0.01);
+    const cell = floor(texel.xy.div(size));
+    const pieceTrait = fract(
+      sin(cell.x.mul(127.1).add(cell.y.mul(311.7))).mul(43758.5453),
+    );
+    const inPieces = step(1e-6, eggChunk);
+    const trait = mix(own, mix(pieceTrait, own, CHUNK_SCATTER), inPieces);
+    const height = mix(texel.y, cell.y.add(0.5).mul(size), inPieces);
+    const rank = height.mul(eggRank).add(0.5).clamp(0, 1);
+    const soft = mix(float(LET_GO_SOFT), float(CHUNK_SOFT), inPieces);
+    const start = mix(trait, rank, eggOrder).mul(soft.oneMinus());
+    const free = smoothstep(start, start.add(soft), eggFree);
+    return {
+      free,
+      part: eggForm.mul(free.oneMinus()),
+      kept: free.mul(eggKeep),
+    };
+  };
+
+  /**
+   * A particle's texel of the egg's formation, read only while one forms, so
+   * the field pays nothing for it otherwise.
+   */
+  const eggTexel = () =>
+    Fn(() => {
+      const texel = vec4(0, 0, 0, 0).toVar();
+      If(eggForm.greaterThan(0), () => {
+        texel.assign(shapeTexel(atlas, eggShape));
+      });
+      return texel;
+    })();
+
+  /** A strand's own value of a vec3 uniform, one component per strand. */
+  const perStrand = (values: Node<"vec3">, strand: Node<"float">) =>
+    mix(
+      mix(values.x, values.y, step(0.5, strand)),
+      values.z,
+      step(1.5, strand),
+    );
+
   /** How far the flow lines have taken over from the noise homes. */
   const flowIn = smoothstep(FLOW_FROM, FLOW_RELEASE_DONE, release);
 
@@ -509,15 +619,12 @@ export function createSimulation(
       depth,
     );
 
-    // The ellipse closes round the formation's stage, at the focus plane;
-    // wider on a narrow frame (story.ts, orbitAxes).
+    // The ellipse closes round the formation's stage, at the focus plane,
+    // its half axes the runtime's for this frame (story.ts, orbitAxes).
     const angle = place.mul(TAU);
     const radial = vec2(cos(angle), sin(angle));
-    const narrow = float(1).sub(step(NARROW_ASPECT, frame.x.div(frame.y)));
-    const a = frame.x.mul(
-      mix(float(ORBIT_WIDTH), float(ORBIT_WIDTH_NARROW), narrow),
-    );
-    const b = frame.y.mul(ORBIT_HEIGHT).min(a.mul(ORBIT_ASPECT));
+    const a = orbit.x;
+    const b = orbit.y;
     const wobble = wave(0, angle).add(1);
     const ellipse = vec3(
       radial
@@ -581,6 +688,13 @@ export function createSimulation(
       shapePoint.add(shapeCentre),
       focusZ.add(seed.z.mul(SHAPE_DEPTH)),
     );
+    // The egg's formation at the middle of the screen (eggs.ts eggPlacement).
+    const texel = eggTexel();
+    const egg = eggFor(seed, texel);
+    const eggPoint = vec3(
+      texel.xy.add(jitter).mul(eggScale),
+      focusZ.add(seed.z.mul(SHAPE_DEPTH)),
+    );
 
     const sheet = vec3(
       seed.xy.mul(frame).mul(SHEET_FIT),
@@ -607,7 +721,7 @@ export function createSimulation(
             strand,
           ),
         )
-        .sub(elapsedSeconds.mul(STRANDS_SPEED)),
+        .sub(perStrand(strandPhase, strand)),
     );
     const strands = vec3(
       strandX,
@@ -618,6 +732,7 @@ export function createSimulation(
             strand,
           ),
         )
+        .mul(perStrand(strandLift, strand))
         .add(traits.across.mul(STRAND_THICKNESS))
         .add(STRANDS_CENTRE)
         .mul(frame.y),
@@ -661,7 +776,18 @@ export function createSimulation(
     // piles light to white.
     const released = releasedFor(seed, release, dotSeed, rankScale);
     const leaving = step(1e-4, released);
-    const target = mix(dot, formed, leaving);
+    // An egg takes its share of every particle, the dot's own too, and a
+    // particle that has let go keeps only part of the story's pull, so
+    // gravity can carry it (eggs.ts EggFrame). A falling piece keeps its
+    // formation's point as its target while it lets go, so the fading pull
+    // never drags its particles apart toward their places in the story.
+    const target = mix(
+      mix(dot, formed, leaving),
+      eggPoint,
+      egg.part.add(egg.kept).min(1),
+    );
+    const loosened = egg.free.mul(eggLoose);
+    const recalled = egg.free.mul(eggRecall);
 
     const offset = target.sub(position);
     const recall = smoothstep(RECALL_NEAR, RECALL_FAR, offset.length());
@@ -675,21 +801,44 @@ export function createSimulation(
       float(FLOW_DRAG),
       onLine,
     );
-    const pull = mix(
+    const storyPull = mix(
       float(DOT_PULL),
       mix(ambientPull, float(FORM_PULL), forms.form),
       leaving,
+    )
+      .mul(loosened.oneMinus())
+      .mul(recalled.mul(EGG_RECALL_PULL).add(1));
+    const storyDrag = mix(
+      mix(
+        float(DOT_DRAG),
+        mix(ambientDrag, float(FORM_DRAG), forms.form),
+        leaving,
+      ),
+      float(EGG_DRAG),
+      loosened,
+    ).mul(recalled.mul(EGG_RECALL_DRAG).add(1));
+    // gg's fall: a particle that has fallen under the screen comes to rest
+    // there while gravity holds (eggs.ts FALL_FLOOR), so the story calls it
+    // back from just below the screen.
+    const fallen = step(position.y, frame.y.mul(-FALL_FLOOR)).mul(
+      eggGravity.div(FALL_GRAVITY).clamp(0, 1),
     );
-    const drag = mix(
-      float(DOT_DRAG),
-      mix(ambientDrag, float(FORM_DRAG), forms.form),
-      leaving,
+    const pull = mix(storyPull, float(FORM_PULL), egg.part);
+    const drag = mix(storyDrag, float(FORM_DRAG), egg.part).add(
+      fallen.mul(egg.free).mul(FALL_REST_DRAG),
     );
+    const lift = vec3(0, eggGravity.mul(egg.free).mul(fallen.oneMinus()), 0);
 
+    // A falling piece keeps the formation's share of the noise, so it holds
+    // together as it falls.
     const noiseShare = mix(
-      mix(float(1), float(FLOW_NOISE), onLine),
+      mix(
+        mix(float(1), float(FLOW_NOISE), onLine),
+        float(FORM_NOISE),
+        forms.form,
+      ),
       float(FORM_NOISE),
-      forms.form,
+      egg.part.add(egg.kept).min(1),
     );
     const drift = mx_noise_vec3(
       position
@@ -709,7 +858,9 @@ export function createSimulation(
       pointerStrength.mul(skyWeight.oneMinus()).div(reach.mul(reach)),
     );
 
-    velocity.addAssign(drift.add(offset.mul(pull)).add(push).mul(stepSeconds));
+    velocity.addAssign(
+      drift.add(offset.mul(pull)).add(push).add(lift).mul(stepSeconds),
+    );
     velocity.mulAssign(stepSeconds.mul(drag).oneMinus());
     position.addAssign(velocity.mul(stepSeconds));
 
@@ -726,6 +877,7 @@ export function createSimulation(
     stepSeconds,
     elapsedSeconds,
     frame,
+    orbit,
     pointer,
     pointerStrength,
     reseat,
@@ -751,6 +903,8 @@ export function createSimulation(
     dotSeed,
     rankScale,
     shapeCentre,
+    eggShown,
+    eggRain,
     atlas,
     update,
 
@@ -793,6 +947,106 @@ export function createSimulation(
     },
 
     /**
+     * An easter egg's moment (eggs.ts eggFrame), the atlas band of the shape
+     * it forms, that shape's scale and its half height in sample space, by
+     * which it lets go from the bottom up (0 for none, as the flip forms
+     * none), and the size of the pieces it breaks into (eggs.ts EGG_CHUNK,
+     * 0 for none); the rest values end it.
+     */
+    applyEgg(
+      frame: EggFrame,
+      shape: number,
+      scale: number,
+      halfHeight = 0,
+      chunk = 0,
+    ): void {
+      eggOrder.value = halfHeight > 0 ? LET_GO_ORDER : 0;
+      eggRank.value = halfHeight > 0 ? 0.5 / halfHeight : 0;
+      eggChunk.value = chunk > 0 ? chunk : 0;
+      eggForm.value = frame.form;
+      eggFree.value = frame.free;
+      eggGravity.value = frame.gravity;
+      eggLoose.value = frame.loose;
+      eggTrail.value = frame.trail;
+      eggKeep.value = frame.keep;
+      eggRecall.value = frame.recall;
+      eggShown.value = frame.shown;
+      eggRain.value = frame.rain;
+      eggShape.value = shape;
+      eggScale.value = scale;
+    },
+
+    /**
+     * The flip's rain on one particle (eggs.ts rainAt), from its seed and its
+     * place in the story, read in the vertex stage: x, how far above that
+     * place it is drawn, in world units; y, the share of the rain's light it
+     * takes. Both 0 while no rain falls, when it costs one test of a uniform.
+     * Its place on the screen is its height and its place across, each over
+     * the half height at its depth, so the rain's highest points and its
+     * columns are the screen's whatever the depth.
+     */
+    rainFor(seed: Node<"vec3">, position: Node<"vec3">) {
+      return Fn(() => {
+        const out = vec2(0, 0).toVar();
+        If(eggRain.greaterThan(0), () => {
+          const unit = frame.y.mul(
+            float(view.cameraDistance)
+              .add(focusZ)
+              .sub(position.z)
+              .div(view.cameraDistance),
+          );
+          const across = position.x.div(unit);
+          const y = position.y.div(unit);
+          // The column's numbers, each mixed with the particle's own.
+          const column = floor(across.mul(RAIN_COLUMNS));
+          const own = (
+            hash: number,
+            mixes: readonly [number, number, number],
+            share: number,
+          ) =>
+            mix(
+              fract(sin(column.mul(hash)).mul(RAIN_HASH_SCALE)),
+              traitOf(mixes, seed),
+              share,
+            );
+          const start = own(RAIN_HASHES[0], TRAITS.egg, RAIN_SCATTER).mul(
+            RAIN_START_SPREAD,
+          );
+          const pick = own(RAIN_HASHES[1], TRAITS.rise, RAIN_APEX_OWN)
+            .mul(RAIN_HIGH - RAIN_LOW)
+            .add(RAIN_LOW);
+          const height = pick.sub(y).max(0);
+          const riseSeconds = own(RAIN_HASHES[2], TRAITS.pace, RAIN_PACE_OWN)
+            .mul(RAIN_RISE_MAX - RAIN_RISE_MIN)
+            .add(RAIN_RISE_MIN);
+          const since = eggRain.sub(start);
+          const rising = since.div(riseSeconds).clamp(0, 1);
+          const left = rising.oneMinus();
+          const risen = left.mul(left).oneMinus();
+          const falling = since
+            .sub(riseSeconds)
+            .sub(RAIN_HANG)
+            .div(RAIN_FALL)
+            .clamp(0, 1);
+          const settled = smoothstep(0, 1, falling);
+          const lit = smoothstep(0, RAIN_LIT_IN, rising)
+            .mul(smoothstep(RAIN_LIT_OUT, 1, falling).oneMinus())
+            .mul(smoothstep(0, RAIN_STILL, height));
+          out.assign(
+            vec2(height.mul(risen).mul(settled.oneMinus()).mul(unit), lit),
+          );
+        });
+        return out;
+      })();
+    },
+
+    /** Each about strand's amplitude multiple and wave phase (eggs.ts). */
+    setStrands(lifts: Readonly<Levels>, phases: Readonly<Levels>): void {
+      strandLift.value.set(lifts[0], lifts[1], lifts[2]);
+      strandPhase.value.set(phases[0], phases[1], phases[2]);
+    },
+
+    /**
      * Per particle values for the material, read from the particle's seed
      * and its own index (use them in the vertex stage, as the rim is used
      * today). rim: 0 to 1, how near the particle sits to its formation's
@@ -801,18 +1055,27 @@ export function createSimulation(
      * the sky and every particle not in a formation. line: 0 to 1,
      * the light of the flow line the particle is streaming on, times flowIn
      * and the share not in a formation; 0 for the backdrop. form: how much
-     * of a formation the particle takes, 0 to 1. isFlow: 1 for a flow
+     * of a formation the particle takes, 0 to 1, lit by the formation's
+     * light: an easter egg's included, and its trail (eggs.ts EggFrame).
+     * carry: the share that is the story's shape, the one formation
+     * placed at the stage (shapeCentre), which the stage follow's trail
+     * and the making-of's stream carry; the sheet, the strands and the sky
+     * sit on the screen and stay where they are. isFlow: 1 for a flow
      * particle, 0 for the backdrop. flowIn: how far the lines have taken
      * over from the noise homes, 0 until the bloom's release nears its end.
      * gain: what the particle's light is multiplied by, 1 outside the sky; in
      * the contact sky a star's light by its magnitude, a line's shown light,
-     * and the faint dust between (story.ts, SKY_DIM).
+     * and the faint dust between (story.ts, SKY_DIM). steady: 0 to 1, how
+     * much of an egg's falling piece the particle is, which keeps its light
+     * at any speed (EggFrame keep).
      */
     look(seed: Node<"vec3">) {
       const traits = traitsFor(seed);
       const star = starFor(traits);
       const skyLine = lineFor(traits);
       const forms = formsFor(traits, skyFoundFor(traits, star, skyLine));
+      const texel = eggTexel();
+      const egg = eggFor(seed, texel);
       const texelFrom = shapeTexel(atlas, shapeFrom);
       const texelTo = shapeTexel(atlas, shapeTo);
       const shapeRim = mix(texelFrom.z, texelTo.z, shapeMix);
@@ -826,19 +1089,27 @@ export function createSimulation(
         STRANDS.map((entry) => entry.light),
         traits.strand,
       );
-      const rim = shapeRim
+      const storyRim = shapeRim
         .mul(forms.shape)
         .add(sheetRim.mul(forms.sheet))
         .min(1);
-      const layer = shapeLayer
+      const storyLayer = shapeLayer
         .mul(forms.shape)
         .add(forms.sheet)
         .add(strandLight.mul(forms.strands))
         .add(forms.sky)
         .add(forms.form.oneMinus());
+      // An egg's formation is one front layer with its own rim. A particle
+      // that has let go keeps the trail's share of its light (eggs.ts
+      // litShare), so it is seen falling or flying back, and gg's falling
+      // pieces keep their outline too (EggFrame keep).
+      const lit = egg.part.add(egg.free.mul(eggTrail)).min(1);
+      const rim = mix(storyRim, texel.z, egg.part.add(egg.kept).min(1));
+      const layer = mix(storyLayer, float(1), lit);
+      const form = mix(forms.form, float(1), lit);
       const line = traits.isFlow
         .mul(flowIn)
-        .mul(forms.form.oneMinus())
+        .mul(form.oneMinus())
         .mul(lineValue((entry) => entry.light, traits.line));
       // In the sky a star's light by its magnitude and boost, a line's shown
       // light; outside it the dust dims while the sky holds.
@@ -846,15 +1117,17 @@ export function createSimulation(
       const outside = float(1).sub(skyWeight.mul(SKY_DIM));
       // With the particle's own sky form, so the sky's light grows with
       // its weight from its first frame instead of jumping (D-146).
-      const gain = mix(outside, skyGain, forms.sky);
+      const gain = mix(mix(outside, skyGain, forms.sky), float(1), lit);
       return {
         rim,
         layer,
         line,
-        form: forms.form,
+        form,
+        carry: forms.shape.mul(lit.oneMinus()),
         isFlow: traits.isFlow,
         flowIn,
         gain,
+        steady: egg.kept,
       };
     },
   };

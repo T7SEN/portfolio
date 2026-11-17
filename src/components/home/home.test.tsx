@@ -13,6 +13,7 @@ import {
   headlines,
   heroCopy,
   STATIC_TIER,
+  tierChangeHint,
   tierLabel,
 } from "@/content/hero";
 import { isMarker } from "@/content/markers";
@@ -276,13 +277,12 @@ describe("Hero", () => {
     }
   });
 
-  it("REQ-NAV-01 the hero fills the screen below the bar at each of the bar's heights", () => {
+  it("REQ-NAV-01 the hero fills the screen below the bar at each of the bar's heights: one row of 68 px, 100 px from 1024 px", () => {
     const box = render(<Hero />).querySelector("section > div");
     const heights = classesOf(box).filter((name) => /min-h-\[calc/.test(name));
     expect(heights.sort()).toEqual([
       "lg:min-h-[calc(100svh_-_6.25rem)]",
-      "min-h-[calc(100svh_-_7.5rem)]",
-      "sm:min-h-[calc(100svh_-_4.25rem)]",
+      "min-h-[calc(100svh_-_4.25rem)]",
     ]);
   });
 
@@ -702,12 +702,42 @@ describe("TierReadout with the tier store", () => {
       await report({ type: "tierChosen", tier, reason: "forced" });
       expect(status?.textContent).toBe("");
       await report(ready(tier));
-      expect(status?.textContent).toBe(tierLabel(tier));
+      expect(status?.textContent).toBe(
+        `${tierLabel(tier)} · ${tierChangeHint(null)}`,
+      );
       const dot = status?.firstElementChild;
       expect(dot?.getAttribute("aria-hidden")).toBe("true");
       expect(classesOf(dot)).toContain("bg-violet");
     },
   );
+
+  it("REQ-NAV-04 A14 the field readout says where to change the tier: Ctrl K with a mouse, the search button on touch, muted after the tier", async () => {
+    stubPointer(true);
+    await mount(<TierReadout variant="field" />);
+    await report({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    await report(ready(1));
+    const hint = container.querySelector('[data-part="tier-change"]');
+    expect(text()).toBe("Tier 1 · WebGPU · change in Ctrl K");
+    expect(spokenText(hint).trim()).toBe("change in Ctrl K");
+    expect(classesOf(hint)).toContain("text-muted");
+    await act(async () => {
+      root.unmount();
+    });
+
+    root = createRoot(container);
+    stubPointer(false);
+    await mount(<TierReadout variant="field" />);
+    expect(text()).toBe("Tier 1 · WebGPU · change in search");
+  });
+
+  it("REQ-NAV-04 on an Apple device the readout names Command K", async () => {
+    stubPointer(true);
+    vi.stubGlobal("navigator", { platform: "MacIntel" });
+    await mount(<TierReadout variant="field" />);
+    await report({ type: "tierChosen", tier: 2, reason: "no-webgpu" });
+    await report(ready(2));
+    expect(text()).toBe("Tier 2 · WebGL2 · change in ⌘ K");
+  });
 });
 
 describe("FieldNote", () => {
@@ -993,7 +1023,8 @@ describe("BloomSection, the field chapter", () => {
   it("REQ-SCR-01 is the section named The particle field, its mono label heading read as Field", () => {
     const field = section();
     expect(field?.dataset.chapter).toBe("bloom");
-    expect(field?.id).toBe("bloom");
+    // Its address is "/#field" (REQ-NAV-06, D-170).
+    expect(field?.id).toBe("field");
     expect(field?.getAttribute("aria-label")).toBe(site.names.field);
     const heading = field?.querySelector("h2");
     expect(heading?.textContent).toBe(
@@ -1179,21 +1210,23 @@ describe("MakingOfSection", () => {
     expect(heightClasses(section)).toEqual([]);
   });
 
-  it("REQ-ENG-09 REQ-CNT-01 its words in the page's column, then the pass viewer across the whole width, then one panel with the link to the full study and the tier table", () => {
+  it("REQ-ENG-09 REQ-CNT-01 the pass viewer across the whole width, headed by its words in the page's column, then one panel with the link to the full study and the tier table", () => {
     const section = render(<MakingOfSection />).querySelector("section");
-    const [words, viewer, closing, ...rest] = [...(section?.children ?? [])];
+    const [viewer, closing, ...rest] = [...(section?.children ?? [])];
     expect(rest).toEqual([]);
 
+    // No column round the viewer: its row runs from edge to edge. Its words
+    // head it in the page's column [T7SEN, 16 Nov 2026], so they can stay
+    // in view with the cards.
+    expect(viewer?.hasAttribute("data-pass-viewer")).toBe(true);
+    expect(viewer?.getAttribute("class")).toBeNull();
+    expect(viewer?.querySelectorAll("a, dl")).toHaveLength(0);
+    const words = viewer?.querySelector("h2")?.closest(".max-w-7xl");
     expect(classesOf(words)).toEqual(
       expect.arrayContaining(["mx-auto", "max-w-7xl"]),
     );
     expect(words?.querySelector("h2")?.id).toBe("making-of-heading");
     expect(words?.querySelector("[data-story-intro]")).not.toBeNull();
-
-    // No column round the viewer: its row runs from edge to edge.
-    expect(viewer?.hasAttribute("data-pass-viewer")).toBe(true);
-    expect(viewer?.getAttribute("class")).toBeNull();
-    expect(viewer?.querySelectorAll("a, dl")).toHaveLength(0);
 
     expect(classesOf(closing)).toEqual(
       expect.arrayContaining(["mx-auto", "max-w-7xl"]),

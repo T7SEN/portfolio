@@ -417,8 +417,48 @@ describe("/about", () => {
     );
   });
 
-  it("REQ-SND-03 the waveform panel waits for Sound at P5", () => {
-    expect(page().textContent).not.toMatch(/waveform|sound/i);
+  it("REQ-SND-03 the waveform panel closes the page: a framed figure, its bars drawn in the static HTML beside the caption", () => {
+    const host = page();
+    const figure = host.querySelector("figure");
+    const bars = figure?.querySelector('[data-part="waveform-bars"]');
+    const caption = figure?.querySelector("figcaption");
+
+    // Last on the page, after the skills and links.
+    expect(host.firstElementChild?.lastElementChild).toBe(figure);
+    expect(classesOf(figure)).toEqual(
+      expect.arrayContaining(["rounded-2xl", "border", "bg-surface"]),
+    );
+    expect(caption?.textContent).toBe(
+      "With the background sound on, this waveform follows it",
+    );
+    expect(classesOf(caption)).toEqual(
+      expect.arrayContaining(["font-mono", "uppercase", "text-muted"]),
+    );
+    expect(bars?.getAttribute("aria-hidden")).toBe("true");
+    expect(bars?.children).toHaveLength(12);
+    expect(spokenText(figure)).toBe(caption?.textContent);
+  });
+
+  it("REQ-SND-03 the bars are thin and rounded, some violet and some muted, in the artboard's heights", () => {
+    const bars = [
+      ...page().querySelectorAll('[data-part="waveform-bars"] > span'),
+    ];
+    const heights = bars.map((bar) =>
+      Number(/height:(\d+)px/.exec(bar.getAttribute("style") ?? "")?.[1]),
+    );
+    expect(heights).toEqual([30, 70, 100, 54, 110, 80, 40, 96, 60, 24, 88, 46]);
+    for (const bar of bars) {
+      expect(classesOf(bar)).toEqual(
+        expect.arrayContaining(["w-[5px]", "rounded-full"]),
+      );
+    }
+    const tones = bars.map((bar) =>
+      classesOf(bar).find((name) => name.startsWith("bg-")),
+    );
+    expect(tones.filter((tone) => tone === "bg-violet")).toHaveLength(4);
+    expect(new Set(tones)).toEqual(
+      new Set(["bg-violet", "bg-glow/70", "bg-glow/50"]),
+    );
   });
 });
 

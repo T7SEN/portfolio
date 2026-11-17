@@ -6,6 +6,7 @@ import {
   ContactSection,
   Hero,
   MakingOfSection,
+  SectionAddress,
   WorkSection,
 } from "@/components/home";
 import { StoryDriver } from "@/components/story";
@@ -35,6 +36,10 @@ export const metadata: Metadata = {
 // their own once the page's script runs, on a screen with room for a card
 // and with calm off (home/pass-viewer.tsx, D-119); otherwise they lie still
 // in a grid, as tall as its content.
+//
+// Once the page scrolls, the address follows the chapter being read:
+// "/#field", "/#work", "/#making-of", "/#about", "/#contact", and the plain
+// "/" on the hero (section-address.tsx, D-170).
 export default function HomePage() {
   return (
     <>
@@ -44,6 +49,7 @@ export default function HomePage() {
       <MakingOfSection />
       <AboutSection />
       <ContactSection />
+      <SectionAddress />
       <StoryDriver />
     </>
   );

@@ -31,7 +31,7 @@ const LINES = [
 ].join("\n");
 
 describe("sky data", () => {
-  it("D-146 reads quoted CSV fields with commas and doubled quotes", () => {
+  it("REQ-SCR-08 D-146 reads quoted CSV fields with commas and doubled quotes", () => {
     expect(parseCsvLine('1,"a, b","say ""hi""",,x')).toEqual([
       "1",
       "a, b",
@@ -41,7 +41,7 @@ describe("sky data", () => {
     ]);
   });
 
-  it("D-146 reads the line file, more than one row a constellation, and maps the doubles", () => {
+  it("REQ-SCR-08 D-146 reads the line file, more than one row a constellation, and maps the doubles", () => {
     const lines = parseLines(
       "Ori  2 1 596\nOri  2 596 3\nCru  1 5506",
       DOUBLES,
@@ -54,7 +54,7 @@ describe("sky data", () => {
     expect(() => parseLines("Ori  3 1 2")).toThrow(/Bad line row/);
   });
 
-  it("D-146 keeps stars to the magnitude limit and every line star, drops the Sun and duplicates", () => {
+  it("REQ-SCR-08 D-146 keeps stars to the magnitude limit and every line star, drops the Sun and duplicates", () => {
     const { constellations, stars } = buildCatalogue(HYG, LINES);
     expect(constellations).toEqual(["Aaa", "Bbb"]);
     // HR 1 and 2 (bright), 3 and 4 (line stars past the limit), the
@@ -68,7 +68,7 @@ describe("sky data", () => {
     ]);
   });
 
-  it("D-146 writes each constellation line once, in order, as star indices", () => {
+  it("REQ-SCR-08 D-146 writes each constellation line once, in order, as star indices", () => {
     const { segments } = buildCatalogue(HYG, LINES);
     expect(segments).toEqual([
       [0, 1, 0, 0],
@@ -76,11 +76,11 @@ describe("sky data", () => {
     ]);
   });
 
-  it("D-146 refuses a line star the stars do not hold", () => {
+  it("REQ-SCR-08 D-146 refuses a line star the stars do not hold", () => {
     expect(() => buildCatalogue(HYG, "Ccc  2 1 9")).toThrow(/missing.*9/);
   });
 
-  it("D-146 the written module names both sources and their licences", () => {
+  it("REQ-SCR-08 D-146 the written module names both sources and their licences", () => {
     const source = catalogueSource(buildCatalogue(HYG, LINES));
     expect(source).toMatch(/HYG database v4\.4/);
     expect(source).toMatch(/CC BY-SA 4\.0/);

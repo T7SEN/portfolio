@@ -28,7 +28,7 @@ export const VOID = rgbOf(colors.void);
  * The hole itself: the void with all its light gone, as the mockup draws it,
  * so the disc reads against the void before its ring has drawn. Black needs
  * no token: black and dark greys carry everything that is not marked
- * (references/visual-system.md).
+ * (D-142).
  */
 export const HOLE = mix(VOID, [0, 0, 0], 1);
 export const VIOLET = rgbOf(colors.violet);

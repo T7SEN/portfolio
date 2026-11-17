@@ -2,15 +2,19 @@
 
 import { useSyncExternalStore } from "react";
 
+import { useShortcutKeys } from "@/components/interface/menu-shortcut";
 import { cx } from "@/components/site/class-names";
 import { DotJoined } from "@/components/study/dot-joined";
-import { tierLabel, tierReadout } from "@/content/hero";
+import { tierChangeHint, tierLabel, tierReadout } from "@/content/hero";
 import { tierStore } from "@/lib/tier-store";
+
+import { useFinePointer } from "./use-fine-pointer";
 
 /**
  * hero: the phone hero's line under See the work, with the count the field
  * really draws ("Tier 2 · WebGL2 · 100K particles"). field: the field
- * chapter's readout at its top end, a small violet dot and the tier.
+ * chapter's readout at its top end, a small violet dot, the tier and, muted,
+ * where to change it.
  */
 export type TierReadoutVariant = "hero" | "field";
 
@@ -63,9 +67,25 @@ export function TierReadout({ variant, className }: TierReadoutProps) {
           />
           <span>
             <DotJoined parts={tierLabel(tier).split(" · ")} />
+            <TierChangeHint />
           </span>
         </>
       )}
     </p>
+  );
+}
+
+// Where to change the tier, muted after it (phase P5): the
+// palette's keys where the pointer is a mouse, so a keyboard is likely; the
+// bar's search button on touch, where no key opens the palette.
+function TierChangeHint() {
+  const keys = useShortcutKeys();
+  const finePointer = useFinePointer();
+  return (
+    <span data-part="tier-change" className="text-muted">
+      {" "}
+      <span aria-hidden="true">·</span>{" "}
+      {tierChangeHint(finePointer ? keys : null)}
+    </span>
   );
 }

@@ -346,6 +346,39 @@ describe("the page's text, for the plates", () => {
     expect(lines).toEqual([{ top: 10, bottom: 30, left: 0, right: 200 }]);
   });
 
+  it("REQ-A11Y-06 text in a box fixed or stuck to the screen adds no line: a plate in page coordinates could not follow it", () => {
+    root.innerHTML = `
+      <a id="skip" href="#main" style="position: fixed">Skip to content</a>
+      <div role="dialog" style="position: fixed"><div><p id="row">Work</p></div></div>
+      <div style="position: sticky"><p id="stuck">Held words</p></div>
+      <p id="free">Free words</p>`;
+    for (const id of ["skip", "row", "stuck", "free"]) {
+      place(root.querySelector(`#${id}`)!, {
+        top: 10,
+        bottom: 30,
+        left: 0,
+        right: 200,
+      });
+    }
+
+    const { lines } = measureLayout(root, view(0));
+    expect(lines).toEqual([{ top: 10, bottom: 30, left: 0, right: 200 }]);
+  });
+
+  it("REQ-A11Y-06 the page's own end is the body's bottom in page coordinates, and none where nothing is laid out", () => {
+    root.innerHTML = `<p id="free">Free words</p>`;
+    expect(measureLayout(root, view(0)).end).toBeUndefined();
+    const body = document.body;
+    const before = body.getBoundingClientRect;
+    body.getBoundingClientRect = () =>
+      ({ top: -8000, bottom: 900, height: 8900 }) as DOMRect;
+    try {
+      expect(measureLayout(root, view(8000)).end).toBe(8900);
+    } finally {
+      body.getBoundingClientRect = before;
+    }
+  });
+
   it("REQ-A11Y-06 D-146 text that is not the page's own, the loader's label and the sky's name, adds no line", () => {
     root.innerHTML = `
       <div data-plate="none"><p id="cover">Field ready</p></div>

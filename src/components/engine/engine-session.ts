@@ -1,4 +1,9 @@
-import type { ChapterId, Engine, EngineEvent } from "@/engine/types";
+import type {
+  ChapterId,
+  Engine,
+  EngineEvent,
+  EngineOptions,
+} from "@/engine/types";
 import { calmStore, type CalmStore } from "@/lib/calm-store";
 import { loaderStore, type LoaderStore } from "@/lib/loader-store";
 import {
@@ -6,6 +11,11 @@ import {
   type StoryBridge,
   type StoryTarget,
 } from "@/lib/story-bridge";
+import {
+  tierChoiceStore,
+  type TierChoice,
+  type TierChoiceStore,
+} from "@/lib/tier-choice-store";
 import { tierStore } from "@/lib/tier-store";
 
 import { afterFirstContent } from "./after-first-content";
@@ -28,7 +38,15 @@ export type EngineSessionOptions = {
   bridge?: Pick<StoryBridge, "connect">;
   /** The home page's loader, fed the loading steps. Replaced in unit tests. */
   loader?: Pick<LoaderStore, "engineLoaded" | "apply" | "reset">;
+  /** The palette's tier choice (REQ-TIER-04). Replaced in unit tests. */
+  choice?: Pick<TierChoiceStore, "getSnapshot" | "subscribe">;
 };
+
+/**
+ * The field's fade, as engine-host.tsx draws it (duration-700): a tier the
+ * palette asks for is built once the field on screen has faded out.
+ */
+export const FIELD_FADE_MS = 700;
 
 function logFailure(code: string, error: unknown) {
   if (process.env.NODE_ENV !== "production") {
@@ -51,6 +69,7 @@ export function createEngineSession(
     calm = calmStore,
     bridge = storyBridge,
     loader = loaderStore,
+    choice = tierChoiceStore,
   }: EngineSessionOptions = {},
 ): EngineSession {
   let engine: Engine | null = null;
@@ -60,6 +79,10 @@ export function createEngineSession(
   let disposing: Promise<void> | null = null;
   let isCalm: boolean | null = null;
   let unsubscribeCalm: (() => void) | null = null;
+  let tierChoice: TierChoice | null = null;
+  let unsubscribeChoice: (() => void) | null = null;
+  // Set while a tier the palette asked for waits for the field's fade.
+  let choiceTimer: ReturnType<typeof setTimeout> | null = null;
   // The veil the page asks for (story-veil.ts), null for the wrapper's own.
   let pageVeil: number | null = null;
 
@@ -83,6 +106,14 @@ export function createEngineSession(
 
   function report(event: EngineEvent) {
     if (isDisposed) return;
+    // While a new tier waits for the fade, the flow on screen is ending: its
+    // last choice or ready would bring the field back for a moment.
+    if (
+      choiceTimer !== null &&
+      (event.type === "tierChosen" || event.type === "ready")
+    ) {
+      return;
+    }
 
     if (event.type === "frameRate") {
       wrapper.dataset.fps = String(event.fps);
@@ -112,19 +143,23 @@ export function createEngineSession(
   }
 
   // Before the engine exists, and when it cannot load, the chapter is still
-  // mirrored, so the wrapper says where the story is on every tier.
+  // mirrored, so the wrapper says where the story is on every tier. An egg
+  // sent then has no field to reach and is dropped; the bridge keeps the
+  // latest sound levels and hands them to the engine once it connects.
   const mirrorOnly: StoryTarget = {
     setStory: (chapter) => mirrorChapter(chapter),
     setStage: () => undefined,
     setPasses: () => undefined,
     setSky: () => undefined,
     setPointer: () => undefined,
+    playEgg: () => undefined,
+    setAudio: () => undefined,
     setVeil,
   };
 
   // The engine keeps the latest story, stage, passes, sky and pointer itself,
   // tier 3 included, and hands them to a GPU tier that a later setTier
-  // brings back.
+  // brings back. Tier 3 and calm ignore eggs and sound levels by themselves.
   function forwardTo(live: Engine): StoryTarget {
     return {
       setStory(chapter, progress) {
@@ -135,6 +170,8 @@ export function createEngineSession(
       setPasses: (cards) => live.setPasses(cards),
       setSky: (view) => live.setSky(view),
       setPointer: (x, y, active) => live.setPointer(x, y, active),
+      playEgg: (egg) => live.playEgg(egg),
+      setAudio: (levels) => live.setAudio(levels),
       setVeil,
     };
   }
@@ -155,6 +192,28 @@ export function createEngineSession(
     engine?.setCalm(next);
   }
 
+  // A forced tier from the palette, or null for Auto, which hands the choice
+  // back to the decision table and the probe. The field on screen fades out
+  // first, and the headline, the readout and the palette hear at once that
+  // no tier is drawn (A14); the new tier is built after the fade, so the old
+  // canvas never vanishes in view, and fades in at its own ready. A second
+  // choice during the fade replaces the first.
+  function onChoiceChange() {
+    const next = choice.getSnapshot();
+    if (next === tierChoice) return;
+    tierChoice = next;
+    const live = engine;
+    if (live === null) return;
+    tierStore.unready();
+    wrapper.dataset.ready = "false";
+    if (choiceTimer !== null) clearTimeout(choiceTimer);
+    choiceTimer = setTimeout(() => {
+      choiceTimer = null;
+      if (isDisposed || tierChoice === null) return;
+      live.setTier(tierChoice === "auto" ? null : tierChoice);
+    }, FIELD_FADE_MS);
+  }
+
   async function begin() {
     if (hasBegun || isDisposed) return;
     hasBegun = true;
@@ -168,7 +227,12 @@ export function createEngineSession(
       // nobody listened is already counted.
       unsubscribeCalm = calm.subscribe(onCalmChange);
       isCalm = calm.getSnapshot().calm;
-      engine = createEngine(host, { calm: isCalm });
+      unsubscribeChoice = choice.subscribe(onChoiceChange);
+      tierChoice = choice.getSnapshot();
+      const options: EngineOptions = { calm: isCalm };
+      // A tier chosen earlier in the visit holds from the first frame.
+      if (tierChoice !== "auto") options.forcedTier = tierChoice;
+      engine = createEngine(host, options);
       engine.on(report);
       // The latest story, stage, passes and pointer reach the engine before
       // it starts.
@@ -188,6 +252,10 @@ export function createEngineSession(
     cancelPending?.();
     unsubscribeCalm?.();
     unsubscribeCalm = null;
+    unsubscribeChoice?.();
+    unsubscribeChoice = null;
+    if (choiceTimer !== null) clearTimeout(choiceTimer);
+    choiceTimer = null;
     // The bridge keeps its values: the page owns them, not the session.
     disconnectBridge();
     tierStore.reset();

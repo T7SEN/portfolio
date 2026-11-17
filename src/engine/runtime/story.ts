@@ -525,11 +525,60 @@ export function isNarrow(frame: Frame): boolean {
   return frame.halfWidth / Math.max(frame.halfHeight, 1e-6) < NARROW_ASPECT;
 }
 
-/** The ellipse's half axes in world units for a frame. */
-export function orbitAxes(frame: Frame): { a: number; b: number } {
+/**
+ * How far into the ellipse's inner edge the wordmark's corners may reach,
+ * as the sum of their squared shares of its two half axes: under 1, every
+ * corner is inside the line at the lowest point of its wobble.
+ */
+export const ORBIT_CLEAR = 0.98;
+/** The most the ellipse grows to close round the wordmark. */
+export const ORBIT_GROWTH_MAX = 1.6;
+
+/**
+ * The ellipse's half axes in world units for a frame. With the wordmark's
+ * extent it is grown, both axes alike, until the wordmark's corners sit
+ * inside the line's inner edge at the lowest point of its wobble
+ * (ORBIT_CLEAR), its half width kept on the screen at the wobble's highest;
+ * where that holds the half width back (a phone, where the wordmark takes
+ * the width), the half height grows on alone. The runtime works it out on
+ * each resize and hands it to the simulation, so the shader and these
+ * numbers are one (the review of 16 Nov 2026: at 1280 by 800 the line
+ * crossed the wordmark's corners by about 15 px at the wobble's low point,
+ * which the calm still always showed).
+ */
+export function orbitAxes(
+  frame: Frame,
+  wordmark?: ShapeExtent,
+): { a: number; b: number } {
   const a =
     (isNarrow(frame) ? ORBIT_WIDTH_NARROW : ORBIT_WIDTH) * frame.halfWidth;
-  return { a, b: Math.min(ORBIT_HEIGHT * frame.halfHeight, ORBIT_ASPECT * a) };
+  const b = Math.min(ORBIT_HEIGHT * frame.halfHeight, ORBIT_ASPECT * a);
+  if (wordmark === undefined) return { a, b };
+
+  const staged = stagedFrame(
+    bloomStage(frame.halfWidth / frame.halfHeight),
+    frame,
+  );
+  const scale = fitScale(wordmark, staged.frame);
+  const halfWidth = wordmark.halfWidth * scale;
+  const halfHeight = wordmark.halfHeight * scale;
+  const line = FLOW_WIDTH * shortHalf(frame);
+  const amplitude =
+    FLOW_LINES.find((entry) => entry.closed)?.waves[0].amplitude ?? 0;
+  const low = 1 - amplitude;
+  const wide = Math.max(a, (frame.halfWidth - line) / (1 + amplitude));
+  const reach = (axis: number, half: number) => {
+    const inner = axis * low - line;
+    return inner > 0 ? (half / inner) ** 2 : Number.POSITIVE_INFINITY;
+  };
+  for (let step = 0; step <= 60; step += 1) {
+    const growth = Math.min(1 + step / 100, ORBIT_GROWTH_MAX);
+    const grown = { a: Math.min(a * growth, wide), b: b * growth };
+    if (reach(grown.a, halfWidth) + reach(grown.b, halfHeight) <= ORBIT_CLEAR) {
+      return grown;
+    }
+  }
+  return { a: Math.min(a * ORBIT_GROWTH_MAX, wide), b: b * ORBIT_GROWTH_MAX };
 }
 
 /**
@@ -554,6 +603,15 @@ export const TRAITS = {
   sky: [29.37, 67.19, 83.41],
   /** The start of its seeded picks of a star or a line (SKY_STAR_TRIES). */
   skyTry: [61.13, 17.57, 47.83],
+  /**
+   * When it lets go of an easter egg (eggs.ts, letGoShare), or starts to
+   * rise inside its column's start in the flip's rain (eggs.ts, rainAt).
+   */
+  egg: [47.17, 89.29, 3.41],
+  /** Where its highest point is in the flip's rain (eggs.ts, rainAt). */
+  rise: [11.83, 31.79, 59.23],
+  /** How quick its rise is in the flip's rain (eggs.ts, rainAt). */
+  pace: [83.17, 13.91, 67.43],
 } as const;
 
 export function trait(
@@ -792,7 +850,7 @@ export const SKY_DIM = 0.85;
  * little brighter than the field without packing light.
  */
 export const FORMED_GAIN = 1.6;
-const MIN_LIGHT = 0.04;
+export const MIN_LIGHT = 0.04;
 
 function strandsArea(frame: Frame): number {
   const samples = 64;

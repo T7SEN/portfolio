@@ -9,7 +9,7 @@ import {
 } from "./contrast";
 import type { ContrastPair } from "./contrast";
 
-// The ratios recorded in visual-system.md section 2, to two decimals.
+// The ratios recorded for each pair in use, to two decimals.
 const documented: Readonly<Record<string, number>> = {
   "text on void": 17.24,
   "text on surface": 16.13,
@@ -27,6 +27,7 @@ const documented: Readonly<Record<string, number>> = {
   "logo-blue on void": 5.47,
   "danger on void": 7.27,
   "danger on surface": 6.81,
+  "danger on raised": 6.12,
   "edge on void": 3.6,
   "edge on surface": 3.37,
   "edge on raised": 3.03,
@@ -40,7 +41,7 @@ const label = (pair: ContrastPair) =>
 const toTwoDecimals = (ratio: number) => Math.round(ratio * 100) / 100;
 
 describe("colour tokens", () => {
-  it("REQ-A11Y-06 holds the twelve tokens of visual-system.md section 2 as six-digit hex", () => {
+  it("REQ-A11Y-06 holds the twelve colour tokens as six-digit hex", () => {
     expect(Object.keys(colors)).toEqual([
       "void",
       "surface",

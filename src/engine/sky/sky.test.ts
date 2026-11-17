@@ -55,7 +55,7 @@ const SIRIUS = starNear(6.7525, -16.716);
 const POLARIS = starNear(2.5303, 89.264);
 
 describe("the contact sky over AlUla (D-146)", () => {
-  it("D-146 the catalogue holds every star a line uses and all 88 constellations", () => {
+  it("REQ-SCR-08 D-146 the catalogue holds every star a line uses and all 88 constellations", () => {
     const count = SKY_STARS.length / 4;
     expect(Number.isInteger(count)).toBe(true);
     expect(SKY_SEGMENTS.length % 4).toBe(0);
@@ -69,7 +69,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     expect(SKY_STARS[POLARIS * 4 + 2]).toBeCloseTo(1.97, 1);
   });
 
-  it("D-146 Sirius crosses the south at 46.67 degrees over AlUla, as its declination gives", () => {
+  it("REQ-SCR-08 D-146 Sirius crosses the south at 46.67 degrees over AlUla, as its declination gives", () => {
     const sky = prepareSky(catalogue, JAN_15);
     const placed = createPlaced(sky.count);
     let highest = -90;
@@ -89,7 +89,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     expect(Math.abs(xAtHighest - FRAME.width / 2)).toBeLessThan(3);
   });
 
-  it("D-146 Polaris stands within 0.7 degrees of AlUla's latitude", () => {
+  it("REQ-SCR-08 D-146 Polaris stands within 0.7 degrees of AlUla's latitude", () => {
     const sky = prepareSky(catalogue, JAN_15);
     const placed = placeSky(
       sky,
@@ -103,7 +103,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     ).toBeLessThan(0.7);
   });
 
-  it("D-146 the view faces south with east on the left, the horizon on its line", () => {
+  it("REQ-SCR-08 D-146 the view faces south with east on the left, the horizon on its line", () => {
     const sky = prepareSky(catalogue, JAN_15);
     const placed = placeSky(
       sky,
@@ -125,7 +125,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     }
   });
 
-  it("D-146 the band's horizon sits at 0.6 of the height on any screen, the screen's top never past 80 degrees up", () => {
+  it("REQ-SCR-08 D-146 the band's horizon sits at 0.6 of the height on any screen, the screen's top never past 80 degrees up", () => {
     for (const [width, height] of [
       [1280, 800],
       [1920, 1080],
@@ -155,7 +155,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     );
   });
 
-  it("D-146 a phone draws the same stars per screen as a desktop: the brighter ones and every constellation's own", () => {
+  it("REQ-SCR-08 D-146 a phone draws the same stars per screen as a desktop: the brighter ones and every constellation's own", () => {
     const sky = prepareSky(catalogue, JAN_15);
     const density = (width: number, height: number) => {
       const frame = skyFrame(width, height);
@@ -215,7 +215,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     expect(eased).toBeNull();
   });
 
-  it("D-146 a constellation's lines show where the pointer settles near it", () => {
+  it("REQ-SCR-08 D-146 a constellation's lines show where the pointer settles near it", () => {
     const near = revealTarget(
       { x: 500, y: 100 },
       { x: 510, y: 100, presence: 1 },
@@ -229,7 +229,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     expect(revealTarget({ x: 500, y: 100 }, null)).toBe(0);
   });
 
-  it("D-146 the trace keeps its constellation while it stays whole, else takes the brightest whole one", () => {
+  it("REQ-SCR-08 D-146 the trace keeps its constellation while it stays whole, else takes the brightest whole one", () => {
     const view = (
       index: number,
       light: number,
@@ -253,7 +253,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     expect(chooseTrace(-1, [view(4, 9, true, 2)])).toBe(-1);
   });
 
-  it("D-146 the words trace one line each; three letters draw the next", () => {
+  it("REQ-SCR-08 D-146 the words trace one line each; three letters draw the next", () => {
     expect(traceProgress(0, 0, 10)).toEqual({ done: 0, partial: 0 });
     expect(traceProgress(1, 2, 10)).toEqual({ done: 0, partial: 2 / 3 });
     expect(traceProgress(4, 0, 10)).toEqual({ done: 4, partial: 0 });
@@ -261,7 +261,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     expect(traceProgress(30, 0, 10)).toEqual({ done: 10, partial: 0 });
   });
 
-  it("D-146 a whole constellation in view lists every line it has", () => {
+  it("REQ-SCR-08 D-146 a whole constellation in view lists every line it has", () => {
     const sky = prepareSky(catalogue, JAN_15);
     const placed = placeSky(
       sky,
@@ -280,7 +280,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     );
   });
 
-  it("D-146 the sky gathers over the contact chapter's first quarter, eased", () => {
+  it("REQ-SCR-08 D-146 the sky gathers over the contact chapter's first quarter, eased", () => {
     expect(skyGather(0)).toBe(0);
     expect(skyGather(SKY_GATHER / 2)).toBeCloseTo(0.5, 9);
     expect(skyGather(SKY_GATHER)).toBe(1);
@@ -289,7 +289,7 @@ describe("the contact sky over AlUla (D-146)", () => {
     expect(skyGather(Number.NaN)).toBe(0);
   });
 
-  it("D-146 light follows magnitude and the air dims the horizon", () => {
+  it("REQ-SCR-08 D-146 light follows magnitude and the air dims the horizon", () => {
     expect(starLight(-1.46)).toBeGreaterThan(starLight(1));
     expect(starLight(1)).toBeCloseTo(0.9, 5);
     expect(starLight(9)).toBe(0.07);

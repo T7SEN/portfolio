@@ -5,7 +5,7 @@ import { colors } from "@/tokens/colors";
 // across the whole field, opens to VEIL_OPEN while the story runs on a live
 // tier, so a formation with nothing written over it shows its light. Behind
 // every block of the page's text a soft plate of void brings the veil there
-// to VEIL_TEXT (accessibility.md section 7). The plates sit in the page, so
+// to VEIL_TEXT (REQ-A11Y-06). The plates sit in the page, so
 // they scroll with the text natively, and outside header, main and footer,
 // so the contrast spec, which hides those three, still sees them. A study
 // frame holds no text and is where the field forms the study's shape, so no
@@ -193,13 +193,19 @@ export function plateClip(
 export function plates(
   lines: readonly PageRect[],
   pageWidth = Number.POSITIVE_INFINITY,
+  pageEnd = Number.POSITIVE_INFINITY,
 ): PageRect[] {
-  let blocks = lines.map((line) => ({
-    top: Math.max(line.top - PLATE_PAD, 0),
-    bottom: line.bottom + PLATE_PAD,
-    left: Math.max(line.left - PLATE_PAD, 0),
-    right: Math.min(line.right + PLATE_PAD, pageWidth),
-  }));
+  // Never past the page's own end: a plate there would hold the page long,
+  // an empty stretch under the footer (16 Nov 2026). Its soft shadow may
+  // reach on; a shadow moves no scroll height.
+  let blocks = lines
+    .filter((line) => line.top < pageEnd)
+    .map((line) => ({
+      top: Math.max(line.top - PLATE_PAD, 0),
+      bottom: Math.min(line.bottom + PLATE_PAD, pageEnd),
+      left: Math.max(line.left - PLATE_PAD, 0),
+      right: Math.min(line.right + PLATE_PAD, pageWidth),
+    }));
   let merged = true;
   while (merged) {
     merged = false;

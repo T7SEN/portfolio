@@ -4,9 +4,9 @@
 // file imports only types, which compile away, so app code can read it
 // without pulling three.js into the first load.
 
-import type { PassId } from "./story";
+import type { AudioLevels, EggId, PassId } from "./story";
 
-export type { PassId };
+export type { AudioLevels, EggId, PassId };
 
 export type Tier = 1 | 2 | 3;
 
@@ -162,8 +162,12 @@ export interface Engine {
    * and a tierChosen event that says why (REQ-ENG-08).
    */
   start(): Promise<void>;
-  /** Forces a tier for the rest of the visit (REQ-TIER-04). */
-  setTier(tier: Tier): void;
+  /**
+   * Forces a tier for the rest of the visit (REQ-TIER-04), or with null
+   * hands the choice back to the decision table and the probe, as on a
+   * first load (the palette's Auto, P5).
+   */
+  setTier(tier: Tier | null): void;
   /** Scroll position: the chapter in view and how far through it, 0 to 1. */
   setStory(chapter: ChapterId, progress: number): void;
   /**
@@ -173,9 +177,12 @@ export interface Engine {
    * layout changes and on every scroll frame while the work row or the
    * making-of row moves; each call replaces the last. A stage that moves a
    * little between frames is taken at once, so a shape stays inside its
-   * frame or card while the page scrolls; a jump, such as the next card
-   * reaching the middle, glides (REQ-SCR-05). The making-of forms its mark
-   * only while its stage is sent.
+   * frame or card while the page scrolls; a work frame's jump, such as the
+   * next row, glides (REQ-SCR-05). In the making-of every move is taken at
+   * once: when the next card reaches the middle the mark forms there and
+   * its particles stream over from the card it left (D-127). The making-of
+   * forms its mark only while its stage is sent, gathered from the flow
+   * into its card whenever it forms anew.
    */
   setStage(stages: Stages): void;
   /**
@@ -193,6 +200,20 @@ export interface Engine {
    * the last. The engine draws the stars and lines it says.
    */
   setSky(view: SkyView | null): void;
+  /**
+   * Plays one easter egg (story.ts EGGS, REQ-NAV-05) over whatever the story
+   * shows, then hands the field back to it. Only a live tier with calm off
+   * plays it; tier 3 and calm ignore it, and so does a call while an egg
+   * still plays. Nothing comes back: the page reads the tier and calm from
+   * its own stores before it sends one.
+   */
+  playEgg(egg: EggId): void;
+  /**
+   * The sound's band levels while sound is on (REQ-SND-03), sent on every
+   * frame by the page's sound module; null when sound is off. The about
+   * chapter's strands follow them; calm and tier 3 ignore them.
+   */
+  setAudio(levels: AudioLevels | null): void;
   /** Pointer in normalised device coordinates: -1 to 1 on both axes, y up. */
   setPointer(x: number, y: number, active: boolean): void;
   /** Calm mode and reduced motion: the field freezes to one still frame. */
@@ -284,6 +305,8 @@ export interface Runtime {
   setStage(stages: Stages): void;
   setPasses(cards: readonly PassCard[] | null): void;
   setSky(view: SkyView | null): void;
+  playEgg(egg: EggId): void;
+  setAudio(levels: AudioLevels | null): void;
   dispose(): Promise<void>;
 }
 

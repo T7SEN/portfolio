@@ -12,10 +12,14 @@ import type {
 import { calmStore, createCalmStore } from "@/lib/calm-store";
 import { loaderStore } from "@/lib/loader-store";
 import { createStoryBridge, storyBridge } from "@/lib/story-bridge";
+import {
+  createTierChoiceStore,
+  tierChoiceStore,
+} from "@/lib/tier-choice-store";
 import { tierStore } from "@/lib/tier-store";
 
 import { EngineHost } from "./engine-host";
-import { createEngineSession } from "./engine-session";
+import { createEngineSession, FIELD_FADE_MS } from "./engine-session";
 
 const mocks = vi.hoisted(() => {
   // The OS reduced motion setting that the host's calm store reads.
@@ -100,6 +104,8 @@ function createFakeEngine(host: HTMLElement, options?: EngineOptions) {
     setPasses: vi.fn(),
     setSky: vi.fn(),
     setPointer: vi.fn(),
+    playEgg: vi.fn(),
+    setAudio: vi.fn(),
     setCalm: vi.fn(),
     on: (listener) => {
       calls.push("on");
@@ -147,6 +153,24 @@ function fakeCalm({ system = false } = {}) {
   };
 }
 
+/** A tier choice store of its own for one session, over a storage it holds. */
+function fakeChoice() {
+  const stored = new Map<string, string>();
+  const store = createTierChoiceStore({
+    sessionStorage: {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        stored.set(key, value);
+      },
+      removeItem: (key: string) => {
+        stored.delete(key);
+      },
+    },
+  } as unknown as Window);
+  const subscribe = vi.spyOn(store, "subscribe");
+  return { store, subscribe };
+}
+
 /** Runs what afterFirstContent was given, as the browser would when idle. */
 async function passFirstContent() {
   const due = mocks.scheduled.filter((entry) => !entry.isCancelled);
@@ -176,6 +200,7 @@ afterEach(() => {
   tierStore.reset();
   loaderStore.reset();
   storyBridge.reset();
+  tierChoiceStore.set("auto");
   mocks.setSystemCalm(false);
   calmStore.setChosen(false);
   vi.restoreAllMocks();
@@ -184,15 +209,20 @@ afterEach(() => {
 });
 
 describe("engine session", () => {
-  function setUp({ calm = fakeCalm(), bridge = createStoryBridge() } = {}) {
+  function setUp({
+    calm = fakeCalm(),
+    bridge = createStoryBridge(),
+    choice = fakeChoice(),
+  } = {}) {
     const wrapper = document.createElement("div");
     const host = document.createElement("div");
     wrapper.append(host);
     const session = createEngineSession(wrapper, host, {
       calm: calm.store,
       bridge,
+      choice: choice.store,
     });
-    return { wrapper, host, calm, bridge, session };
+    return { wrapper, host, calm, bridge, choice, session };
   }
 
   it("REQ-PERF-04 loads nothing until the field is asked for and first content has passed", async () => {
@@ -351,6 +381,8 @@ describe("engine session", () => {
       setPasses: vi.fn(),
       setSky: vi.fn(),
       setPointer: vi.fn(),
+      playEgg: vi.fn(),
+      setAudio: vi.fn(),
       setVeil: vi.fn(),
     };
     bridge.connect(later);
@@ -404,6 +436,153 @@ describe("engine session", () => {
     bridge.setPointer(-0.5, 0.5, false);
     expect(engine.setStory).toHaveBeenLastCalledWith("work", 0.25);
     expect(engine.setPointer).toHaveBeenLastCalledWith(-0.5, 0.5, false);
+  });
+
+  it("REQ-TIER-04 on Auto the engine is created with no forced tier", async () => {
+    const { session } = setUp();
+    session.request();
+    await passFirstContent();
+    expect(engines[0]?.options).toEqual({ calm: false });
+    expect(engines[0]?.setTier).not.toHaveBeenCalled();
+  });
+
+  it("REQ-TIER-04 a tier chosen before the engine loads is forced from its first frame", async () => {
+    const choice = fakeChoice();
+    const { session } = setUp({ choice });
+    session.request();
+    choice.store.set(2);
+    await passFirstContent();
+    expect(engines[0]?.options).toEqual({ calm: false, forcedTier: 2 });
+    expect(engines[0]?.setTier).not.toHaveBeenCalled();
+  });
+
+  it("REQ-TIER-04 a later choice reaches the live engine after the field's fade, Auto as null, and an unchanged one sends nothing", async () => {
+    const choice = fakeChoice();
+    choice.store.set(3);
+    const { session } = setUp({ choice });
+    session.request();
+    await passFirstContent();
+    expect(engines[0]?.options).toEqual({ calm: false, forcedTier: 3 });
+    vi.useFakeTimers();
+    try {
+      choice.store.set(3);
+      choice.store.set(1);
+      vi.advanceTimersByTime(FIELD_FADE_MS - 1);
+      expect(engines[0]?.setTier).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      // A second choice during the fade replaces the first.
+      choice.store.set("auto");
+      choice.store.set(2);
+      vi.advanceTimersByTime(FIELD_FADE_MS / 2);
+      choice.store.set("auto");
+      vi.advanceTimersByTime(FIELD_FADE_MS);
+      expect(vi.mocked(engines[0]?.setTier ?? vi.fn()).mock.calls).toEqual([
+        [1],
+        [null],
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("REQ-TIER-04 A14 a choice takes the field out of view at once: the store is not ready, and the old flow's last reports are ignored until the new tier is asked for", async () => {
+    const choice = fakeChoice();
+    const { wrapper, session } = setUp({ choice });
+    session.request();
+    await passFirstContent();
+    const engine = engines[0];
+    if (engine === undefined) throw new Error("No engine was created");
+    engine.emit({
+      type: "tierChosen",
+      tier: 2,
+      reason: "webgpu-init-fallback",
+    });
+    engine.emit({ type: "ready", tier: 2, particles: 250_000 });
+    expect(wrapper.dataset.ready).toBe("true");
+    vi.useFakeTimers();
+    try {
+      choice.store.set(3);
+      expect(wrapper.dataset.ready).toBe("false");
+      expect(tierStore.getSnapshot()).toMatchObject({ tier: 2, ready: false });
+      engine.emit({ type: "ready", tier: 2, particles: 250_000 });
+      expect(wrapper.dataset.ready).toBe("false");
+      expect(tierStore.getSnapshot().ready).toBe(false);
+      vi.advanceTimersByTime(FIELD_FADE_MS);
+      expect(engine.setTier).toHaveBeenCalledExactlyOnceWith(3);
+      engine.emit({ type: "tierChosen", tier: 3, reason: "forced" });
+      engine.emit({ type: "ready", tier: 3, particles: 0 });
+      expect(wrapper.dataset.ready).toBe("true");
+      expect(tierStore.getSnapshot()).toMatchObject({
+        tier: 3,
+        reason: "forced",
+        ready: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("REQ-TIER-04 REQ-ENG-07 a choice waiting for the fade is dropped on dispose", async () => {
+    const choice = fakeChoice();
+    const { session } = setUp({ choice });
+    session.request();
+    await passFirstContent();
+    vi.useFakeTimers();
+    try {
+      choice.store.set(2);
+      await session.dispose();
+      vi.advanceTimersByTime(FIELD_FADE_MS);
+      expect(engines[0]?.setTier).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("REQ-TIER-04 REQ-ENG-07 the session subscribes to the choice before it reads it, and dispose unsubscribes", async () => {
+    const choice = fakeChoice();
+    const read = vi.spyOn(choice.store, "getSnapshot");
+    const { session } = setUp({ choice });
+    session.request();
+    await passFirstContent();
+    const [subscribed] = choice.subscribe.mock.invocationCallOrder;
+    const [first] = read.mock.invocationCallOrder;
+    expect(subscribed).toBeLessThan(first ?? 0);
+
+    await session.dispose();
+    choice.store.set(2);
+    expect(engines[0]?.setTier).not.toHaveBeenCalled();
+  });
+
+  it("REQ-NAV-05 REQ-SND-03 eggs and sound levels reach the live engine; before it exists an egg goes nowhere and the latest levels are replayed", async () => {
+    const { bridge, session } = setUp();
+    bridge.playEgg("gg");
+    bridge.setAudio([0.2, 0.4, 0.6]);
+    session.request();
+    await passFirstContent();
+
+    const engine = engines[0];
+    if (engine === undefined) throw new Error("No engine was created");
+    // The latest levels are replayed; the egg sent before was a moment.
+    expect(engine.playEgg).not.toHaveBeenCalled();
+    expect(engine.setAudio).toHaveBeenCalledExactlyOnceWith([0.2, 0.4, 0.6]);
+
+    bridge.playEgg("flip");
+    bridge.setAudio(null);
+    expect(engine.playEgg).toHaveBeenCalledExactlyOnceWith("flip");
+    expect(engine.setAudio).toHaveBeenLastCalledWith(null);
+  });
+
+  it("REQ-ENG-08 REQ-NAV-05 when the engine cannot load, eggs and sound levels are dropped", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mocks.loadEngine.mockRejectedValue(new Error("chunk failed"));
+    const { bridge, session } = setUp();
+    session.request();
+    await passFirstContent();
+    expect(() => {
+      bridge.playEgg("mark");
+      bridge.setAudio([1, 1, 1]);
+    }).not.toThrow();
+    expect(engines).toHaveLength(0);
   });
 
   it("REQ-SCR-01 the wrapper mirrors the chapter from the first story sent, before the engine loads and on tier 3", async () => {
@@ -892,6 +1071,14 @@ describe("EngineHost", () => {
     }
   });
 
+  it("REQ-TIER-04 the field fades for as long as a tier change waits", () => {
+    const html = document.createElement("div");
+    html.innerHTML = renderToStaticMarkup(<EngineHost />);
+    const classes = html.firstElementChild?.className.split(" ") ?? [];
+    expect(classes).toContain("transition-opacity");
+    expect(classes).toContain(`duration-${FIELD_FADE_MS}`);
+  });
+
   it("REQ-A11Y-01 the veil takes its strength from the one custom property set on the wrapper", () => {
     const html = document.createElement("div");
     html.innerHTML = renderToStaticMarkup(<EngineHost />);
@@ -1124,6 +1311,19 @@ describe("EngineHost", () => {
       mocks.setSystemCalm(false);
     });
     expect(engines[0]?.setCalm).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("REQ-TIER-04 the palette's shared choice reaches the host's engine at creation and live", async () => {
+    tierChoiceStore.set(1);
+    await render();
+    await passFirstContent();
+    expect(engines[0]?.options).toEqual({ calm: false, forcedTier: 1 });
+
+    await act(async () => {
+      tierChoiceStore.set("auto");
+      await new Promise((resolve) => setTimeout(resolve, FIELD_FADE_MS));
+    });
+    expect(engines[0]?.setTier).toHaveBeenCalledExactlyOnceWith(null);
   });
 
   it("REQ-A11Y-04 the calm toggle's choice reaches the live engine", async () => {

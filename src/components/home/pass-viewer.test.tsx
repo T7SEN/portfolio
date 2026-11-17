@@ -3,13 +3,15 @@ import { createRoot, hydrateRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup, renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { SECTION_GLIDE_EVENT } from "@/components/motion/scroll-to-section";
 import { FACE_CORNERS } from "@/components/story/pass-face";
-import { passPosition, passViewer } from "@/content/passes";
+import { passHint, passPosition, passViewer } from "@/content/passes";
 import { pages } from "@/content/pages";
 import { story } from "@/content/story";
 import { LIVE_PASSES, PASSES, type PassId } from "@/engine/story";
 import type { EngineEvent } from "@/engine/types";
 import { calmStore } from "@/lib/calm-store";
+import { overlayStore } from "@/lib/overlay-store";
 import { tierStore } from "@/lib/tier-store";
 import { wheelSteps } from "@/lib/wheel-steps";
 import { colors, type ColorName } from "@/tokens/colors";
@@ -19,7 +21,11 @@ import { findPhysicalClasses } from "../../../scripts/class-scan-lib.mjs";
 
 import { MakingOfSection } from "./making-of-section";
 import {
+  CATCH_HOLD_MS,
+  MOMENTUM_QUIET_MS,
+  progressAt,
   restProgress,
+  SECTION_GLIDE_MS,
   SETTLE_DELAY_MS,
   SLIDE_MOVE,
   SLIDE_MOVED,
@@ -31,6 +37,7 @@ import {
 } from "./pass-slide";
 import { PASS_STILLS } from "./pass-stills";
 import { isPassLive, PASS_STRETCH, PassViewer } from "./pass-viewer";
+import { FINE_POINTER_QUERY } from "./use-fine-pointer";
 
 function render() {
   const host = document.createElement("div");
@@ -65,6 +72,20 @@ function part(host: ParentNode, name: string) {
   return host.querySelector<HTMLElement>(`[data-part="${name}"]`);
 }
 
+/** The viewer as the chapter hands it its heading and the line under it. */
+function viewerElement() {
+  return (
+    <PassViewer
+      heading={
+        <h2 id="making-of-heading" data-story-title="">
+          {pages.home.makingOf.title}
+        </h2>
+      }
+      intro={pages.home.makingOf.intro}
+    />
+  );
+}
+
 describe("the pass viewer in the static HTML", () => {
   it("REQ-ENG-09 REQ-CNT-01 a still grid of the five cards in the frame's order, each with its place, name and breakdown on its own surface", () => {
     const host = render();
@@ -74,6 +95,9 @@ describe("the pass viewer in the static HTML", () => {
       expect.arrayContaining(["grid", "sm:grid-cols-2", "lg:grid-cols-3"]),
     );
     expect(items(host).map((item) => item.dataset.pass)).toEqual([...PASSES]);
+    // The grid scrolls with the page, so it has no hint and no skip link.
+    expect(host.querySelector('[data-part="pass-hint"]')).toBeNull();
+    expect(host.querySelector('[data-part="pass-skip"]')).toBeNull();
 
     for (const item of items(host)) {
       expect(item.parentElement).toBe(list);
@@ -173,6 +197,10 @@ describe("the pass viewer in the static HTML", () => {
       expect(
         classesOf(item?.querySelector("[data-plate]")?.parentElement),
       ).toContain("w-full");
+      // The grid's cards keep their own heights; only the row stretches.
+      expect(
+        classesOf(item?.querySelector("[data-plate]")?.parentElement),
+      ).not.toContain("flex-1");
     }
   });
 
@@ -211,7 +239,7 @@ describe("the pass viewer in the static HTML", () => {
     expect(findPhysicalClasses(allClasses(render()))).toEqual([]);
   });
 
-  it("REQ-SCR-01 REQ-A11Y-05 the chapter itself sets no height, and holds its label, revealed title, intro and scene line before the viewer", () => {
+  it("REQ-SCR-01 REQ-A11Y-05 the chapter itself sets no height, and its viewer is headed by its label, revealed title, intro and scene line, before the cards, each with its own plate", () => {
     const section = render().querySelector("section");
     expect(section?.dataset.chapter).toBe("making-of");
     expect(heightClasses(section)).toEqual([]);
@@ -224,7 +252,28 @@ describe("the pass viewer in the static HTML", () => {
     expect(
       section?.querySelector('[data-scene="making-of"]')?.textContent,
     ).toBe(story.scenes["making-of"]);
-    expect(section?.querySelector("[data-pass-viewer]")).not.toBeNull();
+    const viewer = section?.querySelector("[data-pass-viewer]");
+    expect(viewer).not.toBeNull();
+    // The heading is the viewer's, before its cards, and holds its plates.
+    const title = viewer?.querySelector("h2");
+    const cards = viewer?.querySelector("ol");
+    expect(title).not.toBeNull();
+    expect(
+      title && cards
+        ? title.compareDocumentPosition(cards) &
+            Node.DOCUMENT_POSITION_FOLLOWING
+        : 0,
+    ).toBeTruthy();
+    expect(
+      title
+        ?.closest('[data-plate="own"]')
+        ?.querySelector('[data-part="own-plate"]'),
+    ).not.toBeNull();
+    expect(
+      viewer
+        ?.querySelector("[data-story-intro]")
+        ?.closest('[data-plate="own"]'),
+    ).not.toBeNull();
   });
 });
 
@@ -281,6 +330,7 @@ describe("the pass viewer, running", () => {
   let lastFrame: number;
   let stretchBox: { top: number; height: number };
   let isReduced: boolean;
+  let isFinePointer: boolean;
   let hasRoom: boolean;
   let roomListeners: Set<() => void>;
   let scrollTo: ReturnType<typeof vi.fn>;
@@ -325,7 +375,7 @@ describe("the pass viewer, running", () => {
     document.body.append(container);
     root = createRoot(container);
     await act(async () => {
-      root?.render(<PassViewer />);
+      root?.render(viewerElement());
     });
   }
 
@@ -412,10 +462,16 @@ describe("the pass viewer, running", () => {
     scrollTo = vi.fn();
     vi.stubGlobal("scrollTo", scrollTo);
     isReduced = false;
+    isFinePointer = false;
     hasRoom = true;
     roomListeners = new Set();
     vi.stubGlobal("matchMedia", (query: string) => ({
-      matches: query === SLIDE_ROOM ? hasRoom : query === REDUCE && isReduced,
+      matches:
+        query === SLIDE_ROOM
+          ? hasRoom
+          : query === FINE_POINTER_QUERY
+            ? isFinePointer
+            : query === REDUCE && isReduced,
       media: query,
       addEventListener: (_type: string, listener: () => void) => {
         if (query === SLIDE_ROOM) roomListeners.add(listener);
@@ -580,7 +636,7 @@ describe("the pass viewer, running", () => {
 
   it("REQ-CNT-01 REQ-SCR-02 the static HTML takes over as the still grid with no mismatch, then becomes the sliding row once the script runs", async () => {
     container = document.createElement("div");
-    container.innerHTML = renderToString(<PassViewer />);
+    container.innerHTML = renderToString(viewerElement());
     document.body.append(container);
     expect(part(container, "pass-stretch")).toBeNull();
     expect(container.querySelector("ol")?.className).toContain("grid");
@@ -588,7 +644,7 @@ describe("the pass viewer, running", () => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
 
     await act(async () => {
-      root = hydrateRoot(container, <PassViewer />, { onRecoverableError });
+      root = hydrateRoot(container, viewerElement(), { onRecoverableError });
     });
     expect(onRecoverableError).not.toHaveBeenCalled();
     expect(errors).not.toHaveBeenCalled();
@@ -599,7 +655,9 @@ describe("the pass viewer, running", () => {
     ).toBe(true);
     expect(part(container, "pass-stretch")).not.toBeNull();
     expect(container.querySelectorAll("ol")).toHaveLength(1);
-    expect(container.querySelectorAll("button")).toHaveLength(PASSES.length);
+    expect(container.querySelectorAll("ol button")).toHaveLength(PASSES.length);
+    expect(part(container, "pass-previous")).not.toBeNull();
+    expect(part(container, "pass-next")).not.toBeNull();
   });
 
   it("REQ-ENG-09 REQ-SCR-02 the row is held in a sticky screen inside a stretch STRETCH_SCREENS screens tall, which clips sideways and never scrolls sideways", async () => {
@@ -627,11 +685,47 @@ describe("the pass viewer, running", () => {
         "overflow-x-clip",
         "flex",
         "flex-col",
-        "justify-center-safe",
+        "isolate",
       ]),
     );
-    expect(track()?.parentElement).toBe(screen);
-    expect(track()?.nextElementSibling).toBe(part(container, "pass-rail"));
+    // The chapter's heading heads the held screen [T7SEN, 16 Nov 2026], so
+    // it stays in view with the cards; the row fills the rest, centred.
+    const [heading, row] = [...(screen?.children ?? [])];
+    expect(heading?.querySelector("h2")?.textContent).toBe(
+      pages.home.makingOf.title,
+    );
+    expect(heading?.querySelector("[data-story-intro]")).not.toBeNull();
+    expect(row).toBe(part(container, "pass-row"));
+    expect(classesOf(row)).toEqual(
+      expect.arrayContaining(["flex-1", "flex-col", "justify-center-safe"]),
+    );
+    expect(track()?.parentElement).toBe(row);
+    const controls = part(container, "pass-controls");
+    expect(track()?.nextElementSibling).toBe(controls);
+    const [previous, middleColumn, next] = [...(controls?.children ?? [])];
+    expect(controls?.children).toHaveLength(3);
+    expect(previous).toBe(part(container, "pass-previous"));
+    expect(next).toBe(part(container, "pass-next"));
+    // Under the ticks, the hint (D-175): seen, not read aloud, on its own
+    // plate; the touch words here, as the stub matches no fine pointer.
+    const hint = part(container, "pass-hint");
+    expect(middleColumn?.firstElementChild).toBe(part(container, "pass-rail"));
+    expect(middleColumn?.contains(hint ?? null)).toBe(true);
+    expect(hint?.getAttribute("aria-hidden")).toBe("true");
+    expect(hint?.closest('[data-plate="own"]')).not.toBeNull();
+    expect(hint?.textContent).toBe(passHint(0, false));
+    // On the label's row, the way past the cards: a link to About, on its
+    // own plate, before the cards in the reading and Tab order.
+    const skip = part(container, "pass-skip");
+    expect(skip?.tagName).toBe("A");
+    expect(skip?.getAttribute("href")).toBe("#about");
+    expect(skip?.textContent).toBe(passViewer.skip);
+    expect(heading?.contains(skip ?? null)).toBe(true);
+    expect(skip?.closest('[data-plate="own"]')).not.toBeNull();
+    expect(
+      (skip?.compareDocumentPosition(track() as Node) ?? 0) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
 
     // No scrollbar and no snap points of its own: the page's own scroll
     // moves the row.
@@ -639,6 +733,18 @@ describe("the pass viewer, running", () => {
       /\boverflow-(?:x-)?(?:auto|scroll)\b|\bsnap-/,
     );
     expect(container.querySelector('[data-part="pass-snap"]')).toBeNull();
+  });
+
+  it("REQ-ENG-09 REQ-SCR-02 the hint under the ticks follows the card in the middle, with the words for a mouse or for touch, and on the last card says the page goes on", async () => {
+    isFinePointer = true;
+    layOut();
+    await mount();
+    const hint = () => part(container, "pass-hint")?.textContent;
+    expect(hint()).toBe("1 of 5 · Scroll or use the arrows");
+    await scrollAt(restProgress(2));
+    expect(hint()).toBe("3 of 5 · Scroll or use the arrows");
+    await scrollAt(restProgress(PASSES.length - 1));
+    expect(hint()).toBe("5 of 5 · Keep scrolling");
   });
 
   /** Puts the page at a scroll position, the stretch where it then shows. */
@@ -677,38 +783,51 @@ describe("the pass viewer, running", () => {
     return event;
   }
 
-  it("REQ-SCR-02 REQ-A11Y-02 a scroll key in the slide glides a card, a second key on from where the first is heading; at an end, or on a button, the key does as ever", async () => {
+  it("REQ-SCR-02 REQ-A11Y-02 a scroll key up or down in the slide glides one card while a card lies its way; at an end, on a button or away from it the key does as ever", async () => {
     layOut();
     await mount();
-    placeAt(restAt(1));
-    const down = key("ArrowDown");
-    expect(down.defaultPrevented).toBe(true);
-    expect(scrollTo).toHaveBeenLastCalledWith({
-      top: restAt(2),
-      behavior: "smooth",
-    });
-    key("PageDown");
+    for (const [name, shiftKey, way] of [
+      ["ArrowDown", false, 1],
+      ["PageDown", false, 1],
+      [" ", false, 1],
+      ["ArrowUp", false, -1],
+      ["PageUp", false, -1],
+      [" ", true, -1],
+    ] as const) {
+      await stopAt(restAt(2));
+      expect(key(name, { shiftKey }).defaultPrevented, name).toBe(true);
+      expect(scrollTo, name).toHaveBeenCalledExactlyOnceWith({
+        top: restAt(2 + way),
+        behavior: "smooth",
+      });
+    }
+    // A second key during the glide goes on from the card it heads for.
+    await stopAt(restAt(1));
+    key("ArrowDown");
+    key("ArrowDown");
     expect(scrollTo).toHaveBeenLastCalledWith({
       top: restAt(3),
       behavior: "smooth",
     });
-    // Once the keys' glide has come to rest the next key goes from the page.
-    await stopAt(restAt(3));
-    key(" ", { shiftKey: true });
-    expect(scrollTo).toHaveBeenLastCalledWith({
-      top: restAt(2),
-      behavior: "smooth",
-    });
-    key("PageUp");
+
+    // On the first card a key up leaves the slide, and on the last a key
+    // down does; the other way steps a card.
+    await stopAt(restAt(0));
+    expect(key("ArrowUp").defaultPrevented).toBe(false);
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(key("PageDown").defaultPrevented).toBe(true);
     expect(scrollTo).toHaveBeenLastCalledWith({
       top: restAt(1),
       behavior: "smooth",
     });
-
-    // On the last card a key down leaves the slide as ever.
     await stopAt(restAt(PASSES.length - 1));
     expect(key("ArrowDown").defaultPrevented).toBe(false);
+    expect(scrollTo).not.toHaveBeenCalled();
     expect(key("ArrowUp").defaultPrevented).toBe(true);
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(PASSES.length - 2),
+      behavior: "smooth",
+    });
     // Space presses a focused button; Ctrl with an arrow, and Home, are
     // the browser's.
     await stopAt(restAt(2));
@@ -719,6 +838,193 @@ describe("the pass viewer, running", () => {
     // Away from the slide nothing is taken.
     await stopAt(-2_000);
     expect(key("ArrowDown").defaultPrevented).toBe(false);
+    expect(key("ArrowRight").defaultPrevented).toBe(false);
+    expect(key("PageDown").defaultPrevented).toBe(false);
+  });
+
+  it("REQ-SCR-02 a key that pages the screen from outside stops on the end card it reaches, as the wheel and a flick do; from an end card it leaves", async () => {
+    layOut();
+    await mount();
+    // Just above the slide: Page Down and Space would page past the first
+    // card into the middle of the row.
+    for (const press of [() => key("PageDown"), () => key(" ")]) {
+      await stopAt(restAt(0) - 80);
+      scrollTo.mockClear();
+      expect(press().defaultPrevented).toBe(true);
+      expect(scrollTo).toHaveBeenLastCalledWith({
+        top: restAt(0),
+        behavior: "smooth",
+      });
+    }
+    // Just below it: Page Up and Shift Space stop on the last card.
+    for (const press of [
+      () => key("PageUp"),
+      () => key(" ", { shiftKey: true }),
+    ]) {
+      await stopAt(restAt(PASSES.length - 1) + 80);
+      scrollTo.mockClear();
+      expect(press().defaultPrevented).toBe(true);
+      expect(scrollTo).toHaveBeenLastCalledWith({
+        top: restAt(PASSES.length - 1),
+        behavior: "smooth",
+      });
+    }
+    // More than a screen away the key pages as ever, and an end card's key
+    // out of the slide leaves it.
+    await stopAt(restAt(0) - HEIGHT - 80);
+    expect(key("PageDown").defaultPrevented).toBe(false);
+    await stopAt(restAt(PASSES.length - 1));
+    scrollTo.mockClear();
+    expect(key("PageDown").defaultPrevented).toBe(false);
+    await stopAt(restAt(0));
+    expect(key("PageUp").defaultPrevented).toBe(false);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("REQ-SCR-02 REQ-A11Y-02 Space on a focused link steps a card as Space on the page does, and stops on the first card from above: a link answers Enter only (D-180)", async () => {
+    layOut();
+    await mount();
+    const skip = part(container, "pass-skip");
+    expect(skip?.tagName).toBe("A");
+    await stopAt(restAt(2));
+    expect(key(" ", {}, skip!).defaultPrevented).toBe(true);
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith({
+      top: restAt(3),
+      behavior: "smooth",
+    });
+    await stopAt(restAt(0) - 80);
+    expect(key(" ", {}, skip!).defaultPrevented).toBe(true);
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith({
+      top: restAt(0),
+      behavior: "smooth",
+    });
+  });
+
+  it("REQ-SCR-02 a key held down steps one card: its repeats are taken and move nothing, and the next press steps on (D-180)", async () => {
+    layOut();
+    await mount();
+    await stopAt(restAt(1));
+    key("ArrowDown");
+    for (const name of ["ArrowDown", "ArrowDown", "ArrowRight", " "]) {
+      expect(key(name, { repeat: true }).defaultPrevented, name).toBe(true);
+    }
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith({
+      top: restAt(2),
+      behavior: "smooth",
+    });
+    key("ArrowDown");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(3),
+      behavior: "smooth",
+    });
+    // A held Page Down from just above stops on the first card once.
+    await stopAt(restAt(0) - 80);
+    key("PageDown");
+    key("PageDown", { repeat: true });
+    key("PageDown", { repeat: true });
+    expect(scrollTo).toHaveBeenCalledExactlyOnceWith({
+      top: restAt(0),
+      behavior: "smooth",
+    });
+  });
+
+  it("REQ-SCR-02 a key pressed while a face's click or the settle glides goes on from the card that glide heads for (D-180)", async () => {
+    layOut();
+    await mount();
+    const between = (from: number, share: number) =>
+      restAt(from) + share * (restAt(from + 1) - restAt(from));
+
+    await stopAt(restAt(1));
+    await act(async () => {
+      button("density").click();
+    });
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: expect.closeTo(restAt(2), 6),
+      behavior: "smooth",
+    });
+    placeAt(between(1, 0.4));
+    await act(async () => {
+      window.dispatchEvent(new Event("scroll"));
+    });
+    key("ArrowRight");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(3),
+      behavior: "smooth",
+    });
+
+    // The settle's own glide, from half way between two cards.
+    await stopAt(restAt(1));
+    placeAt(between(1, 0.5));
+    await act(async () => {
+      window.dispatchEvent(new Event("scroll"));
+    });
+    await waitOut();
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(2),
+      behavior: "smooth",
+    });
+    key("ArrowDown");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(3),
+      behavior: "smooth",
+    });
+  });
+
+  it("REQ-NAV-01 REQ-SCR-02 a glide to a part of the page passing through the slide is never settled on a card, until the visitor takes over or SECTION_GLIDE_MS has passed (D-180)", async () => {
+    layOut();
+    await mount();
+    const stallBetween = async () => {
+      placeAt(restAt(2) + 0.5 * (restAt(3) - restAt(2)));
+      await act(async () => {
+        window.dispatchEvent(new Event("scroll"));
+      });
+      await waitOut();
+    };
+    const glideStarts = async () => {
+      await act(async () => {
+        window.dispatchEvent(new Event(SECTION_GLIDE_EVENT));
+      });
+    };
+
+    await stopAt(restAt(1));
+    await glideStarts();
+    await stallBetween();
+    expect(scrollTo).not.toHaveBeenCalled();
+    await act(async () => {
+      vi.advanceTimersByTime(SECTION_GLIDE_MS);
+    });
+    await stallBetween();
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+
+    for (const [name, take] of [
+      ["wheel", () => window.dispatchEvent(new Event("wheel"))],
+      ["touch", () => hold("touchstart", { touches: [] })],
+      ["press", () => hold("pointerdown", { pointerType: "touch" })],
+      ["key", () => key("Tab")],
+    ] as const) {
+      await stopAt(restAt(1));
+      await glideStarts();
+      await act(async () => {
+        take();
+      });
+      await stallBetween();
+      expect(scrollTo, name).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("REQ-NAV-03 REQ-A11Y-02 while the menu or the palette is open, the slide leaves the keys to the dialog", async () => {
+    layOut();
+    await mount();
+    await stopAt(restAt(1));
+    for (const kind of ["menu", "palette"] as const) {
+      overlayStore.open(kind);
+      expect(key("ArrowDown").defaultPrevented).toBe(false);
+      expect(key("PageDown").defaultPrevented).toBe(false);
+      expect(key("ArrowRight").defaultPrevented).toBe(false);
+      overlayStore.close();
+    }
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(key("ArrowDown").defaultPrevented).toBe(true);
   });
 
   /** Sends a touch event to the stretch with these fingers' heights. */
@@ -731,15 +1037,103 @@ describe("the pass viewer, running", () => {
     return event;
   }
 
-  it("REQ-SCR-02 a swipe in the slide moves the page with the finger and, when it lifts, glides a card its way; a touch goes back", async () => {
+  it("REQ-SCR-02 a swipe up or down in the slide moves the row with the finger, a card at most, and glides one card when it lifts; a short one goes back; from an end card away from the cards it is the page's", async () => {
     layOut();
     await mount();
-    placeAt(restAt(1));
+    // Up and down, a card takes the page's scroll between two rests.
+    const span = restAt(1) - restAt(0);
+    await stopAt(restAt(2));
     finger("touchstart", 500);
-    const move = finger("touchmove", 470);
-    expect(move.defaultPrevented).toBe(true);
+    expect(finger("touchmove", 470).defaultPrevented).toBe(true);
     expect(scrollTo).toHaveBeenLastCalledWith({
-      top: restAt(1) + 30,
+      top: progressAt(2 + 30 / span) * TRAVEL,
+      behavior: "instant",
+    });
+    finger("touchmove", 500 - span * 3);
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(3),
+      behavior: "instant",
+    });
+    finger("touchend");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(3),
+      behavior: "smooth",
+    });
+
+    // Down the screen, up the page: a card back.
+    await stopAt(restAt(2));
+    finger("touchstart", 300);
+    expect(finger("touchmove", 420).defaultPrevented).toBe(true);
+    finger("touchend");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(1),
+      behavior: "smooth",
+    });
+
+    // A swipe shorter than SWIPE_PX goes back to its card.
+    await stopAt(restAt(2));
+    finger("touchstart", 500);
+    expect(finger("touchmove", 490).defaultPrevented).toBe(true);
+    finger("touchend");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(2),
+      behavior: "smooth",
+    });
+
+    // From the first card up the screen steps on; down the screen, up the
+    // page, the swipe is the page's and leaves the slide. The last card the
+    // other way round.
+    await stopAt(restAt(0));
+    finger("touchstart", 500);
+    expect(finger("touchmove", 400).defaultPrevented).toBe(true);
+    finger("touchend");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(1),
+      behavior: "smooth",
+    });
+    await stopAt(restAt(0));
+    finger("touchstart", 300);
+    expect(finger("touchmove", 400).defaultPrevented).toBe(false);
+    finger("touchend");
+    await stopAt(restAt(PASSES.length - 1));
+    finger("touchstart", 500);
+    expect(finger("touchmove", 400).defaultPrevented).toBe(false);
+    finger("touchend");
+    expect(scrollTo).not.toHaveBeenCalled();
+    finger("touchstart", 300);
+    expect(finger("touchmove", 400).defaultPrevented).toBe(true);
+    finger("touchend");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(PASSES.length - 2),
+      behavior: "smooth",
+    });
+  });
+
+  /** Sends a touch event to the stretch with one finger at a point. */
+  function fingerAt(type: string, x: number, y: number) {
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperty(event, "touches", {
+      value: [{ clientX: x, clientY: y }],
+    });
+    part(container, "pass-stretch")?.dispatchEvent(event);
+    return event;
+  }
+
+  it("REQ-SCR-02 a sideways swipe moves the row with the finger, a card at most, and glides on one card when it lifts; a short one goes back", async () => {
+    layOut();
+    await mount();
+    // jsdom lays nothing out, so a card's width is the window's.
+    const step = window.innerWidth;
+    placeAt(restAt(1));
+    fingerAt("touchstart", 300, 500);
+    expect(fingerAt("touchmove", 100, 505).defaultPrevented).toBe(true);
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: progressAt(1 + 200 / step) * TRAVEL,
+      behavior: "instant",
+    });
+    fingerAt("touchmove", 100 - step * 3, 505);
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(2),
       behavior: "instant",
     });
     finger("touchend");
@@ -748,34 +1142,179 @@ describe("the pass viewer, running", () => {
       behavior: "smooth",
     });
 
-    // Up the screen is up the page: the card before.
-    placeAt(restAt(2));
-    finger("touchstart", 300);
-    finger("touchmove", 320);
+    // To the right: the card before.
+    await stopAt(restAt(2));
+    fingerAt("touchstart", 100, 500);
+    fingerAt("touchmove", 400, 500);
     finger("touchend");
     expect(scrollTo).toHaveBeenLastCalledWith({
       top: restAt(1),
       behavior: "smooth",
     });
 
-    // A touch that moves less than SWIPE_PX goes back to its card.
-    placeAt(restAt(2));
-    finger("touchstart", 500);
-    finger("touchmove", 495);
+    // Less than SWIPE_PX, and past the first card: back to its card.
+    await stopAt(restAt(2));
+    fingerAt("touchstart", 300, 500);
+    fingerAt("touchmove", 290, 501);
+    finger("touchend");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(2),
+      behavior: "smooth",
+    });
+    await stopAt(restAt(0));
+    fingerAt("touchstart", 100, 500);
+    fingerAt("touchmove", 400, 500);
+    finger("touchend");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(0),
+      behavior: "smooth",
+    });
+
+    // Away from the slide a sideways swipe is the browser's.
+    await stopAt(-2_000);
+    fingerAt("touchstart", 300, 500);
+    expect(fingerAt("touchmove", 100, 500).defaultPrevented).toBe(false);
+    finger("touchend");
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it("REQ-SCR-02 REQ-A11Y-02 REQ-I18N-01 Arrow Right and Arrow Left glide a card on and back, a second key on from where the first is heading, mirrored right to left; at an end they do nothing", async () => {
+    layOut();
+    await mount();
+    await stopAt(restAt(1));
+    expect(key("ArrowRight").defaultPrevented).toBe(true);
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(2),
+      behavior: "smooth",
+    });
+    // A second key while the glide runs goes on from where it is heading.
+    key("ArrowRight");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(3),
+      behavior: "smooth",
+    });
+    // Once the glide has come to rest the next key goes from the page.
+    await stopAt(restAt(3));
+    key("ArrowLeft");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(2),
+      behavior: "smooth",
+    });
+    await stopAt(restAt(0));
+    expect(key("ArrowLeft").defaultPrevented).toBe(false);
+    await stopAt(restAt(PASSES.length - 1));
+    expect(key("ArrowRight").defaultPrevented).toBe(false);
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    document.documentElement.dir = "rtl";
+    try {
+      await stopAt(restAt(1));
+      key("ArrowLeft");
+      expect(scrollTo).toHaveBeenLastCalledWith({
+        top: restAt(2),
+        behavior: "smooth",
+      });
+    } finally {
+      document.documentElement.removeAttribute("dir");
+    }
+  });
+
+  it("REQ-SCR-02 REQ-A11Y-02 the previous and next buttons glide a card back and on, each off at its end, where it keeps its focus", async () => {
+    layOut();
+    await mount();
+    const previous = part(container, "pass-previous") as HTMLButtonElement;
+    const next = part(container, "pass-next") as HTMLButtonElement;
+    expect(previous.getAttribute("aria-label")).toBe(passViewer.previous);
+    expect(next.getAttribute("aria-label")).toBe(passViewer.next);
+    expect(previous.type).toBe("button");
+
+    await stopAt(restAt(0));
+    await runFrames();
+    expect(previous.getAttribute("aria-disabled")).toBe("true");
+    expect(next.getAttribute("aria-disabled")).toBe("false");
+    scrollTo.mockClear();
+    await act(async () => {
+      previous.click();
+    });
+    expect(scrollTo).not.toHaveBeenCalled();
+    await act(async () => {
+      next.click();
+    });
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(1),
+      behavior: "smooth",
+    });
+
+    // Next pressed by keys to the last card: off there, still focused.
+    next.focus();
+    await stopAt(restAt(PASSES.length - 1));
+    await runFrames();
+    expect(next.getAttribute("aria-disabled")).toBe("true");
+    expect(next.disabled).toBe(false);
+    expect(document.activeElement).toBe(next);
+    expect(previous.getAttribute("aria-disabled")).toBe("false");
+    await act(async () => {
+      previous.click();
+    });
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(PASSES.length - 2),
+      behavior: "smooth",
+    });
+  });
+
+  it("REQ-SCR-02 a sideways swipe while a glide runs goes on from the card that glide heads for; one from the last card but one ends on the last card", async () => {
+    layOut();
+    await mount();
+    const step = window.innerWidth;
+    const span = restAt(1) - restAt(0);
+    await stopAt(restAt(1));
+    fingerAt("touchstart", 300, 500);
+    fingerAt("touchmove", 100, 500);
     finger("touchend");
     expect(scrollTo).toHaveBeenLastCalledWith({
       top: restAt(2),
       behavior: "smooth",
     });
 
-    // A long swipe crosses a card for each card's length.
-    const span = restAt(1) - restAt(0);
-    placeAt(restAt(1));
-    finger("touchstart", 600);
-    finger("touchmove", 600 - span * 2.2);
+    // A second swipe before that glide ends: the page is part way, and the
+    // swipe steps on from card 2 to card 3.
+    placeAt(restAt(1) + span * 0.6);
+    fingerAt("touchstart", 300, 500);
+    fingerAt("touchmove", 300 - step * 3, 500);
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(3),
+      behavior: "instant",
+    });
     finger("touchend");
     expect(scrollTo).toHaveBeenLastCalledWith({
       top: restAt(3),
+      behavior: "smooth",
+    });
+
+    // From the last card but one, a long swipe ends on the last card; from
+    // the last card, a swipe on goes back to it.
+    await stopAt(restAt(PASSES.length - 2));
+    fingerAt("touchstart", 300, 500);
+    fingerAt("touchmove", 300 - step * 4, 500);
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(PASSES.length - 1),
+      behavior: "instant",
+    });
+    finger("touchend");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(PASSES.length - 1),
+      behavior: "smooth",
+    });
+    await stopAt(restAt(PASSES.length - 1));
+    fingerAt("touchstart", 300, 500);
+    fingerAt("touchmove", 100, 500);
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(PASSES.length - 1),
+      behavior: "instant",
+    });
+    finger("touchend");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(PASSES.length - 1),
       behavior: "smooth",
     });
   });
@@ -783,17 +1322,22 @@ describe("the pass viewer, running", () => {
   it("REQ-SCR-02 a swipe off the slide's end, a second finger and a swipe from away are the browser's", async () => {
     layOut();
     await mount();
-    // Up the page from the first card: no card that way.
+    // Up the page from the first card and down it from the last: no card
+    // that way, so the page leaves the slide.
     placeAt(restAt(0));
     finger("touchstart", 300);
     expect(finger("touchmove", 340).defaultPrevented).toBe(false);
+    finger("touchend");
+    placeAt(restAt(PASSES.length - 1));
+    finger("touchstart", 500);
+    expect(finger("touchmove", 400).defaultPrevented).toBe(false);
     finger("touchend");
     expect(scrollTo).not.toHaveBeenCalled();
 
     // A second finger ends the row's swipe as a lift does.
     placeAt(restAt(1));
-    finger("touchstart", 500);
-    finger("touchmove", 480);
+    fingerAt("touchstart", 300, 500);
+    fingerAt("touchmove", 270, 500);
     scrollTo.mockClear();
     finger("touchstart", 480, 300);
     expect(scrollTo).toHaveBeenLastCalledWith({
@@ -811,7 +1355,178 @@ describe("the pass viewer, running", () => {
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
-  it("REQ-SCR-02 while the row slides a wheel notch from a card's rest sends the page to the next card's rest; calm and unmounting take the step away", async () => {
+  /** Moves the page to a position and sends the scroll that says so. */
+  async function scrolled(y: number) {
+    placeAt(y);
+    await act(async () => {
+      window.dispatchEvent(new Event("scroll"));
+    });
+  }
+
+  const overflow = () =>
+    document.documentElement.style.getPropertyValue("overflow");
+
+  it("REQ-SCR-02 a flick's momentum is held on the first card it reaches: overflow hidden and a glide to its rest, let go by a touch or after CATCH_HOLD_MS", async () => {
+    layOut();
+    await mount();
+    // A swipe above the slide is the browser's: it scrolls the page, and
+    // its lift leaves momentum.
+    placeAt(restAt(0) - 600);
+    finger("touchstart", 600);
+    expect(finger("touchmove", 400).defaultPrevented).toBe(false);
+    await scrolled(restAt(0) - 400);
+    finger("touchend");
+    await scrolled(restAt(0) - 300);
+    expect(overflow()).toBe("");
+    await scrolled(restAt(0) + 40);
+    expect(overflow()).toBe("hidden");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(0),
+      behavior: "smooth",
+    });
+    // The next touch lets go at once.
+    finger("touchstart", 500);
+    expect(overflow()).toBe("");
+    finger("touchend");
+
+    // From below, the last card; and the hold ends by itself.
+    await stopAt(restAt(PASSES.length - 1) + 500);
+    finger("touchstart", 200);
+    finger("touchmove", 400);
+    await scrolled(restAt(PASSES.length - 1) + 300);
+    finger("touchend");
+    await scrolled(restAt(PASSES.length - 1) - 30);
+    expect(overflow()).toBe("hidden");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(PASSES.length - 1),
+      behavior: "smooth",
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(CATCH_HOLD_MS);
+    });
+    expect(overflow()).toBe("");
+  });
+
+  it("REQ-SCR-02 a finger that lifts after the page crossed the first card's rest, before the scroll that says so, is still held on that card", async () => {
+    layOut();
+    await mount();
+    placeAt(restAt(0) - 600);
+    finger("touchstart", 600);
+    finger("touchmove", 200);
+    await scrolled(restAt(0) - 100);
+    expect(overflow()).toBe("");
+    // The browser has moved the page past the rest; its scroll event comes
+    // after the lift.
+    placeAt(restAt(0) + 60);
+    finger("touchend");
+    await scrolled(restAt(0) + 80);
+    expect(overflow()).toBe("hidden");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(0),
+      behavior: "smooth",
+    });
+  });
+
+  it("REQ-SCR-02 momentum leaving the slide from an end card, the row's own glide and a scroll after the momentum is quiet are never held", async () => {
+    layOut();
+    await mount();
+    // Up the page from the first card: the browser's, and it leaves.
+    await stopAt(restAt(0));
+    finger("touchstart", 300);
+    finger("touchmove", 400);
+    await scrolled(restAt(0) - 100);
+    finger("touchend");
+    await scrolled(restAt(0) - 200);
+    expect(overflow()).toBe("");
+
+    // The row's swipe glides on past nothing it may not.
+    await stopAt(restAt(1));
+    fingerAt("touchstart", 300, 500);
+    fingerAt("touchmove", 270, 500);
+    await scrolled(restAt(1) + 30);
+    finger("touchend");
+    await scrolled(restAt(2) + 1);
+    expect(overflow()).toBe("");
+
+    // A lift that leaves no momentum: a later scroll is not the lift's.
+    await stopAt(restAt(0) - 600);
+    finger("touchstart", 600);
+    finger("touchmove", 400);
+    await scrolled(restAt(0) - 400);
+    finger("touchend");
+    await act(async () => {
+      vi.advanceTimersByTime(MOMENTUM_QUIET_MS + 1);
+    });
+    await scrolled(restAt(0) + 40);
+    expect(overflow()).toBe("");
+
+    // A tap scrolls nothing: the glide it starts, past the slide, is free.
+    await stopAt(restAt(0) - 2_000);
+    finger("touchstart", 500);
+    finger("touchend");
+    await scrolled(restAt(0) - 1_000);
+    await scrolled(restAt(PASSES.length - 1) + 400);
+    expect(overflow()).toBe("");
+  });
+
+  it("REQ-SCR-02 a finger dragging the page in from above is held on the first card until CATCH_HOLD_MS after it lifts; a drag away from that card is free", async () => {
+    layOut();
+    await mount();
+    placeAt(restAt(0) - 330);
+    finger("touchstart", 680);
+    finger("touchmove", 500);
+    await scrolled(restAt(0) - 150);
+    expect(overflow()).toBe("");
+    finger("touchmove", 300);
+    await scrolled(restAt(0) + 30);
+    expect(overflow()).toBe("hidden");
+    expect(scrollTo).toHaveBeenLastCalledWith({
+      top: restAt(0),
+      behavior: "smooth",
+    });
+    // Held while the finger stays down, however long.
+    await act(async () => {
+      vi.advanceTimersByTime(CATCH_HOLD_MS * 2);
+    });
+    expect(overflow()).toBe("hidden");
+    finger("touchend");
+    await act(async () => {
+      vi.advanceTimersByTime(CATCH_HOLD_MS - 1);
+    });
+    expect(overflow()).toBe("hidden");
+    await act(async () => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(overflow()).toBe("");
+
+    // On the first card, half a pixel past its rest, a drag up the page
+    // leaves the slide.
+    await scrolled(restAt(0) + 0.5);
+    finger("touchstart", 300);
+    finger("touchmove", 400);
+    await scrolled(restAt(0) - 100);
+    expect(overflow()).toBe("");
+    finger("touchend");
+  });
+
+  it("REQ-ENG-07 unmounting during a hold gives the page its overflow back", async () => {
+    layOut();
+    await mount();
+    placeAt(restAt(0) - 600);
+    finger("touchstart", 600);
+    finger("touchmove", 400);
+    await scrolled(restAt(0) - 400);
+    finger("touchend");
+    await scrolled(restAt(0) + 40);
+    expect(overflow()).toBe("hidden");
+    await act(async () => {
+      root?.unmount();
+    });
+    root = null;
+    expect(overflow()).toBe("");
+  });
+
+  it("REQ-SCR-02 while the row slides a wheel notch from a card's rest sends the page to the next card's rest, the one up and down move a desktop keeps; calm and unmounting take the step away", async () => {
     layOut();
     await mount();
     const at = (index: number) => restTop(PASSES[index] as PassId, 0);
@@ -844,7 +1559,8 @@ describe("the pass viewer, running", () => {
     expect(classesOf(list)).toEqual(
       expect.arrayContaining([
         "flex",
-        "items-center",
+        // Every card as tall as the tallest, so none sits lower (D-177).
+        "items-stretch",
         "gap-(--pass-gap)",
         "[--pass-w:min(84vw,24rem)]",
         "lg:[--pass-w:min(84vw,52rem)]",
@@ -917,19 +1633,22 @@ describe("the pass viewer, running", () => {
     }
   });
 
-  it("REQ-ENG-09 in the sliding row each face is up to 25rem high from 1024 px, beside its words, and as on phones below it", async () => {
+  it("REQ-ENG-09 in the sliding row each face is up to 25rem high from 1024 px, beside its words, and as on phones below it, always leaving room for the held heading", async () => {
     await mount();
     for (const item of items(container)) {
       const pass = item.dataset.pass as PassId;
-      expect(classesOf(faceOf(container, pass))).toEqual(
+      const classes = classesOf(faceOf(container, pass));
+      expect(classes).toEqual(
         expect.arrayContaining([
           "aspect-[4/5]",
-          "h-[32svh]",
+          "h-[min(32svh,calc(100svh-36rem))]",
           "max-h-65",
-          "lg:h-[min(52svh,25rem)]",
+          "lg:h-[min(25rem,calc(100svh-20rem))]",
           "lg:max-h-none",
         ]),
       );
+      // One height for each width, never two that fight.
+      expect(classes.filter((name) => /^h-/.test(name))).toHaveLength(1);
       expect(classesOf(item)).toEqual(
         expect.arrayContaining([
           "flex-col",
@@ -938,9 +1657,11 @@ describe("the pass viewer, running", () => {
           "lg:gap-10",
         ]),
       );
+      // The words panel fills the card: down it below 1024 px, so every
+      // face and panel sit in the same place (D-177), across it above.
       expect(
         classesOf(item.querySelector("[data-plate]")?.parentElement),
-      ).toEqual(expect.arrayContaining(["lg:max-w-[28rem]", "lg:flex-1"]));
+      ).toEqual(expect.arrayContaining(["flex-1", "lg:max-w-[28rem]"]));
     }
   });
 
@@ -1454,7 +2175,7 @@ describe("colour", () => {
     document.body.append(container);
     const root = createRoot(container);
     await act(async () => {
-      root.render(<PassViewer />);
+      root.render(viewerElement());
     });
     const sliding = allClasses(container);
     expect(sliding).toContain("border-glow");
@@ -1468,7 +2189,18 @@ describe("colour", () => {
     // Each class without its variants, then the colour of every text,
     // background, border and ring utility; sizes, sides and alignments are
     // not colours.
-    const NOT_COLOURS = new Set(["base", "sm", "xs", "start", "center", "b"]);
+    // The heading is the viewer's from 16 Nov 2026: its title and label
+    // sizes come from the type scale (globals.css), not the colours.
+    const NOT_COLOURS = new Set([
+      "base",
+      "sm",
+      "xs",
+      "start",
+      "center",
+      "b",
+      "title",
+      "label",
+    ]);
     const colourNames = `${grid} ${sliding}`
       .split(/\s+/)
       .map((name) => name.slice(name.lastIndexOf(":") + 1))

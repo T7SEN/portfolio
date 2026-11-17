@@ -31,6 +31,7 @@ import {
 import { colors } from "@/tokens/colors";
 
 import type { FieldLook } from "../types";
+import { rainLight } from "./eggs";
 import {
   BACKDROP_GAIN,
   LINE_GAIN,
@@ -180,30 +181,64 @@ export function createField(
   const motion = simulation.velocities.toAttribute();
   const speed = motion.length();
   const seed = simulation.seeds.toAttribute();
-  const { release, pulse, dotCentre, dotSeed, rankScale, elapsedSeconds } =
-    simulation;
+  const {
+    release,
+    pulse,
+    dotCentre,
+    dotSeed,
+    rankScale,
+    elapsedSeconds,
+    eggShown,
+    eggRain,
+  } = simulation;
 
   const released = releasedFor(seed, release, dotSeed, rankScale);
-  const isDot = step(float(instanceIndex), DOT_PARTICLES - 0.5);
-  const dotness = isDot.mul(smoothstep(0, DOT_FADE, release).oneMinus());
-  const blooming = smoothstep(BLOOM_LIFTS, 1, release).oneMinus();
+  const leaving = step(1e-4, released);
   const home = homeFor(seed, simulation.frame, CAMERA_DISTANCE);
+  // The flip's rain (eggs.ts rainAt): how far above its place in the story a
+  // particle is drawn, and its share of the rain's light. The simulation
+  // keeps every particle where the story holds it meanwhile, so the rain
+  // settles into the story exactly. A particle the hero's dot still holds
+  // rains from its home in the field instead, so the hero rains too: it is
+  // unseen until it rises and again once it has settled, so the move from
+  // the dot never shows.
+  const rainsFrom = mix(home, position, max(leaving, step(eggRain, 0)));
+  const rain = simulation.rainFor(seed, rainsFrom);
+  const rainLit = rain.y;
+  // An easter egg also shows the particles the hero's dot still holds, while
+  // they form it and fall (eggs.ts EggFrame, shown), and the rain each one
+  // while it rises; the soft look's dot sprites step aside meanwhile.
+  const seen = max(released, eggShown, rainLit);
+  const isDot = step(float(instanceIndex), DOT_PARTICLES - 0.5);
+  const dotness = isDot
+    .mul(smoothstep(0, DOT_FADE, release).oneMinus())
+    .mul(eggShown.oneMinus());
+  const blooming = smoothstep(BLOOM_LIFTS, 1, release).oneMinus();
   const arrival = position.xy
     .sub(dotCentre)
     .length()
     .div(home.xy.sub(dotCentre).length().max(ARRIVAL_NEAR))
     .min(1);
-  const arrived = mix(float(1), arrival.mul(arrival), blooming);
-  const flight = smoothstep(FLIGHT_SLOW, FLIGHT_FAST, speed)
-    .mul(FLIGHT_DIM)
-    .oneMinus();
-
+  const arrived = mix(
+    float(1),
+    arrival.mul(arrival),
+    blooming.mul(max(eggShown, rainLit).oneMinus()),
+  );
   // The particle's own values from the simulation: rim, layer, line, form,
   // the sky's gain, whether it streams on a flow line and how far the lines have taken over
   // (simulation.ts look). They read the atlas by the instance index, so
   // they are worked out in the vertex stage and carried to the fragments.
   const traits = simulation.look(seed);
-  const back = traits.layer.oneMinus().clamp(0, 1);
+  // A raining particle is in the front layer and has no rim.
+  const back = traits.layer.oneMinus().clamp(0, 1).mul(rainLit.oneMinus());
+  const rim = traits.rim.mul(rainLit.oneMinus());
+
+  // An egg's falling piece keeps its light however fast it falls.
+  const flight = mix(
+    smoothstep(FLIGHT_SLOW, FLIGHT_FAST, speed).mul(FLIGHT_DIM).oneMinus(),
+    float(1),
+    traits.steady,
+  );
 
   // halftone-rules particleWeight: a formed particle at the formation's
   // light, a line particle at its line's, and the backdrop by the look's
@@ -223,16 +258,23 @@ export function createField(
     .add(isFlow.mul(flowIn.oneMinus()));
   // The contact sky's gain (simulation.ts look): a star's light by its
   // magnitude, a line's shown light, the dust dimmed between; 1 elsewhere.
-  const share = traits.form
-    .mul(light)
-    .add(traits.form.oneMinus().mul(free))
-    .add(traits.line.mul(LINE_GAIN))
-    .mul(traits.gain);
-  const weight = share.mul(released).mul(arrived).mul(flight);
+  // A raining particle leans from its own light to the rain's.
+  const share = mix(
+    traits.form
+      .mul(light)
+      .add(traits.form.oneMinus().mul(free))
+      .add(traits.line.mul(LINE_GAIN))
+      .mul(traits.gain),
+    float(rainLight(look)),
+    rainLit,
+  );
+  const weight = share.mul(seen).mul(arrived).mul(flight);
 
   // The drawn place: formed particles carried by the stage follow's offset,
   // then every particle turned about the pointer (halftone-rules swirlTurn).
-  const leaving = step(1e-4, released);
+  // The trail and the stream carry the story's shape alone, the formation
+  // placed at the stage: never an egg's, which sits at the middle of the
+  // screen, nor the sheet, the strands or the sky, which sit on the screen.
   // story.ts streamShare: each formed particle leaves the card at its own
   // moment and is drawn back toward it by the share of its way to go.
   const streamed = streamSeconds
@@ -241,9 +283,9 @@ export function createField(
     .clamp(0, 1);
   const left = streamed.oneMinus();
   const toGo = left.mul(left).mul(left);
-  const carried = position.xy.add(
-    drawOffset.add(streamFrom.mul(toGo)).mul(traits.form.mul(leaving)),
-  );
+  const carried = rainsFrom.xy
+    .add(drawOffset.add(streamFrom.mul(toGo)).mul(traits.carry.mul(leaving)))
+    .add(vec2(0, rain.x));
   const around = carried.sub(swirlCentre);
   const reach = around.length().div(SWIRL_RADIUS);
   const closeness = exp(reach.mul(reach).negate()).mul(swirl);
@@ -256,12 +298,14 @@ export function createField(
     around.x.mul(cos(turn)).sub(around.y.mul(sin(turn))),
     around.x.mul(sin(turn)).add(around.y.mul(cos(turn))),
   );
-  const drawn = vec3(turned.add(swirlCentre), position.z);
+  const drawn = vec3(turned.add(swirlCentre), rainsFrom.z);
 
-  // halftone-rules speedShare, with the swirl leaning toward glow.
+  // halftone-rules speedShare, with the swirl leaning toward glow, and the
+  // rain in the glow tone while it rises and falls.
   const fast = max(
     smoothstep(0, SPEED_FOR_GLOW, speed),
     closeness.mul(SWIRL_GLOW),
+    rainLit,
   );
 
   let material: SpriteNodeMaterial;
@@ -275,27 +319,25 @@ export function createField(
     // each times the weight, and alpha sums the weight, and halftone.ts
     // reads means.
     // halftone-rules rimWeight: each layer's outline splats heavier.
-    const splatWeight = weight.mul(traits.rim.mul(RIM_WEIGHT).add(1));
-    const channels = vertexStage(vec4(fast, traits.rim, back, splatWeight));
+    const splatWeight = weight.mul(rim.mul(RIM_WEIGHT).add(1));
+    const channels = vertexStage(vec4(fast, rim, back, splatWeight));
     material = new SpriteNodeMaterial();
     material.positionNode = drawn;
     material.sizeAttenuation = false;
     material.fragmentNode = channels;
-    // Parked particles, the dot's own among them, are never drawn: the
-    // halftone pass draws the dot as one disc.
-    material.scaleNode = splatScale.mul(step(1e-3, released));
+    // Parked particles, the dot's own among them, are drawn only while an
+    // egg shows them: the halftone pass draws the dot as one disc.
+    material.scaleNode = splatScale.mul(step(1e-3, seen));
   } else {
-    const fieldAlpha = spriteOpacity
-      .mul(weight)
-      .mul(traits.rim.mul(RIM_GAIN).add(1));
+    const fieldAlpha = spriteOpacity.mul(weight).mul(rim.mul(RIM_GAIN).add(1));
     const dotAlpha = pulse.mul(DOT_PULSE_LIGHT).add(1).mul(DOT_OPACITY);
-    const shown = step(1e-3, released.max(dotness));
+    const shown = step(1e-3, seen.max(dotness));
     material = new SpriteNodeMaterial();
     material.positionNode = drawn;
     material.colorNode = mix(
       color(new Color(colors.violet)),
       color(new Color(colors.glow)),
-      max(fast, vertexStage(traits.rim).mul(RIM_GLOW)),
+      max(vertexStage(fast), vertexStage(rim).mul(RIM_GLOW)),
     );
     material.opacityNode = smoothstep(0.1, 0.5, uv().sub(0.5).length())
       .oneMinus()
@@ -353,7 +395,7 @@ export function createField(
     );
     velocityMaterial.scaleNode = splatScale
       .mul(SPLAT_SUB / VELOCITY_SUB)
-      .mul(step(1e-3, released));
+      .mul(step(1e-3, seen));
     velocityMaterial.blending = AdditiveBlending;
     velocityMaterial.depthTest = false;
     velocityMaterial.depthWrite = false;

@@ -9,7 +9,7 @@ import ts from "typescript";
 // such as "left-hand" or "right-to-left" in a string is not a hit.
 const VALUE = String.raw`(?:\d+(?:\.\d+)?|\d+/\d+|px|auto|full|\[[^\]]+\]|\([^)]+\))`;
 
-// The banned list in code-style.md section 7 and i18n-rtl.md section 2.
+// The physical utilities REQ-I18N-01 bans, as the class scan matches them.
 // inset-x, px, mx and the rest of the two-sided utilities are allowed.
 export const PHYSICAL_UTILITIES = [
   new RegExp(`^(?:ml|mr|pl|pr)-${VALUE}$`),

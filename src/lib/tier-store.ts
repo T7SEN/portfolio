@@ -20,6 +20,12 @@ export type TierStore = {
   getServerSnapshot(): TierSnapshot;
   subscribe(listener: () => void): () => void;
   apply(event: EngineEvent): void;
+  /**
+   * A new tier was asked for (the palette): the field on screen is going, so
+   * nothing reads as drawn until the new flow has chosen and drawn (A14).
+   * The tier stays as the last one chosen.
+   */
+  unready(): void;
   reset(): void;
 };
 
@@ -92,6 +98,11 @@ export function createTierStore(): TierStore {
           return unsorted;
         }
       }
+    },
+
+    unready() {
+      if (!snapshot.ready) return;
+      set({ ...snapshot, ready: false, particles: null, look: null });
     },
 
     reset() {

@@ -115,6 +115,24 @@ describe("plates at the page's edges", () => {
     expect(wide).toEqual({ top: 484, bottom: 556, left: 0, right: 375 });
     expect(top?.top).toBe(0);
   });
+
+  it("REQ-A11Y-06 a plate never reaches past the page's own end, so it can never hold the page long under its footer", () => {
+    const blocks = plates(
+      [
+        { top: 9700, bottom: 9760, left: 0, right: 200 },
+        // Measured past the end, as a box fixed to the screen was while the
+        // page shrank.
+        { top: 10500, bottom: 10560, left: 0, right: 190 },
+      ],
+      1910,
+      9770,
+    );
+    // The last line's plate is cut at the end; the one past it is gone.
+    expect(blocks).toEqual([{ top: 9684, bottom: 9770, left: 0, right: 216 }]);
+    expect(
+      plates([{ top: 100, bottom: 140, left: 0, right: 10 }]),
+    ).toHaveLength(1);
+  });
 });
 
 describe("the study frames stay open", () => {

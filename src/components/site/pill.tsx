@@ -13,8 +13,8 @@ export type PillVariant = "primary" | "outline" | "quiet";
 
 /**
  * lg: 52 px, the hero's actions. md: 44 px, Geist 14 px. sm: 44 px, Geist
- * Mono 12 px (Skip intro, the corner and footer pills). bar: the header's
- * links, tighter below 640 px so the bar's row holds at 320 px.
+ * Mono 12 px (Skip intro, the corner and footer pills). bar: 44 px, Geist
+ * 14 px medium, the bar's and the menu's controls (Menu, Close).
  */
 export type PillSize = "lg" | "md" | "sm" | "bar";
 
@@ -41,7 +41,7 @@ const SIZES: Record<PillSize, string> = {
   lg: "min-h-13 px-6.5 py-2 text-[0.9375rem]",
   md: "min-h-11 px-4 py-1.5 text-sm",
   sm: "min-h-11 px-4 py-1.5 font-mono text-xs tracking-[0.06em]",
-  bar: "min-h-11 px-2 py-1.5 text-[0.8125rem] font-medium sm:px-4 sm:text-sm",
+  bar: "min-h-11 px-4 py-1.5 text-sm font-medium",
 };
 
 const GAPS: Record<PillSize, string> = {

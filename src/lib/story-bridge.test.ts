@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { PassCard, SkyView, Stages } from "@/engine/types";
+import type {
+  AudioLevels,
+  EggId,
+  PassCard,
+  SkyView,
+  Stages,
+} from "@/engine/types";
 
 import { createStoryBridge, type StoryTarget } from "./story-bridge";
 
@@ -27,6 +33,12 @@ function recorder() {
     }),
     setSky: vi.fn((view: SkyView | null) => {
       calls.push(`sky ${view === null ? "none" : view.at}`);
+    }),
+    playEgg: vi.fn((egg: EggId) => {
+      calls.push(`egg ${egg}`);
+    }),
+    setAudio: vi.fn((levels: AudioLevels | null) => {
+      calls.push(`audio ${levels === null ? "none" : levels.join(",")}`);
     }),
   } satisfies StoryTarget;
   return { calls, target };
@@ -218,7 +230,7 @@ describe("story bridge", () => {
     expect(second.calls).toEqual(["story contact 0.9"]);
   });
 
-  it("D-147 the sky reaches the target clamped, a broken view is dropped, and a later target hears the latest", () => {
+  it("REQ-SCR-08 REQ-ENG-03 D-147 the sky reaches the target clamped, a broken view is dropped, and a later target hears the latest", () => {
     const bridge = createStoryBridge();
     const { calls, target } = recorder();
     bridge.connect(target);
@@ -245,7 +257,7 @@ describe("story bridge", () => {
     expect(later.calls).toEqual(["sky 2000"]);
   });
 
-  it("D-147 a trace reaches the target cleaned: whole lines, a part clamped, and a broken trace dropped", () => {
+  it("REQ-SCR-08 REQ-ENG-03 D-147 a trace reaches the target cleaned: whole lines, a part clamped, and a broken trace dropped", () => {
     const bridge = createStoryBridge();
     const { target } = recorder();
     bridge.connect(target);
@@ -332,6 +344,80 @@ describe("story bridge", () => {
     expect(second.calls).toContain("passes none");
   });
 
+  it("REQ-NAV-05 an egg reaches the target connected now and is never replayed to a later one", () => {
+    const bridge = createStoryBridge();
+    bridge.playEgg("gg");
+    const first = recorder();
+    bridge.connect(first.target);
+    expect(first.calls).toEqual([]);
+
+    bridge.playEgg("mark");
+    bridge.playEgg("flip");
+    expect(first.calls).toEqual(["egg mark", "egg flip"]);
+
+    const second = recorder();
+    bridge.connect(second.target);
+    expect(second.calls).toEqual([]);
+  });
+
+  it("REQ-NAV-05 an id that is not an egg is dropped", () => {
+    const bridge = createStoryBridge();
+    const { target } = recorder();
+    bridge.connect(target);
+    bridge.playEgg("konami" as EggId);
+    expect(target.playEgg).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      [0.2, 0.5, 1],
+      [0.2, 0.5, 1],
+    ],
+    [
+      [-0.5, 1.5, 0],
+      [0, 1, 0],
+    ],
+    [
+      [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY],
+      [0, 0, 0],
+    ],
+  ])("REQ-SND-03 levels %j reach the target as %j", (sent, expected) => {
+    const bridge = createStoryBridge();
+    const { target } = recorder();
+    bridge.connect(target);
+    bridge.setAudio(sent as unknown as AudioLevels);
+    expect(target.setAudio).toHaveBeenLastCalledWith(expected);
+  });
+
+  it("REQ-SND-03 sound off sends null; a later target hears the latest levels, and nothing while sound is off", () => {
+    const bridge = createStoryBridge();
+    const first = recorder();
+    bridge.connect(first.target);
+    bridge.setAudio(null);
+    expect(first.target.setAudio).toHaveBeenLastCalledWith(null);
+
+    bridge.setAudio([0.1, 0.2, 0.3]);
+    const second = recorder();
+    bridge.connect(second.target);
+    expect(second.calls).toEqual(["audio 0.1,0.2,0.3"]);
+
+    bridge.setAudio(null);
+    const third = recorder();
+    bridge.connect(third.target);
+    expect(third.calls).toEqual([]);
+  });
+
+  it("REQ-SND-03 a late target hears the levels after the pointer and before the veil", () => {
+    const bridge = createStoryBridge();
+    bridge.setVeil(0.5);
+    bridge.setAudio([1, 0, 0.5]);
+    bridge.setPointer(0, 0, false);
+
+    const { calls, target } = recorder();
+    bridge.connect(target);
+    expect(calls).toEqual(["pointer 0 0 false", "audio 1,0,0.5", "veil 0.5"]);
+  });
+
   it("REQ-ENG-07 reset forgets the values and the target", () => {
     const bridge = createStoryBridge();
     const first = recorder();
@@ -341,6 +427,7 @@ describe("story bridge", () => {
     bridge.setStage({});
     bridge.setPasses([card("final")]);
     bridge.setVeil(0.4);
+    bridge.setAudio([0.5, 0.5, 0.5]);
     first.calls.length = 0;
 
     bridge.reset();

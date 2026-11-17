@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { readEnvironment } from "./environment";
+import { adapterPowerPreference, readEnvironment } from "./environment";
 
 const SAVE_DATA_QUERY = "(prefers-reduced-data: reduce)";
 const COARSE_POINTER_QUERY = "(pointer: coarse)";
@@ -202,6 +202,43 @@ describe("readEnvironment, matchMedia failures", () => {
 
     expect(environment.adapter).not.toBeNull();
     expect(requestAdapter).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("adapterPowerPreference", () => {
+  it("REQ-TIER-01 asks for the faster GPU, but on Windows, where Chrome ignores it with a console warning, asks for nothing", () => {
+    const mac = {
+      userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+    };
+    const windows = { userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" };
+    expect(adapterPowerPreference(mac as Navigator)).toBe("high-performance");
+    expect(adapterPowerPreference(windows as Navigator)).toBeUndefined();
+    // Chromium's own platform wins over the string.
+    expect(
+      adapterPowerPreference({
+        ...windows,
+        userAgentData: { platform: "macOS" },
+      } as unknown as Navigator),
+    ).toBe("high-performance");
+    expect(
+      adapterPowerPreference({
+        ...mac,
+        userAgentData: { platform: "Windows" },
+      } as unknown as Navigator),
+    ).toBeUndefined();
+    expect(adapterPowerPreference(undefined)).toBe("high-performance");
+    expect(adapterPowerPreference({} as Navigator)).toBe("high-performance");
+  });
+
+  it("REQ-TIER-01 on Windows the adapter is asked for with no options", async () => {
+    const requestAdapter = adapterRequest(capableAdapter());
+    stubNavigator({
+      gpu: { requestAdapter },
+      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+    });
+    stubMatchMedia();
+    await readEnvironment();
+    expect(requestAdapter).toHaveBeenCalledExactlyOnceWith(undefined);
   });
 });
 

@@ -221,8 +221,12 @@ export function startCoverSession({
   function beginLift() {
     if (isOver || view.leaving) return;
     const live = scene;
+    // The ripple is drawn by the scene, so a scene that never drew a frame
+    // (no 2D context, or not yet painted) fades the cover, as no scene does.
     const kind: CoverExit =
-      live === null || calm.getSnapshot().calm ? "fade" : view.exit;
+      live === null || !view.drawn || calm.getSnapshot().calm
+        ? "fade"
+        : view.exit;
     stopFrames();
     update({ leaving: true, exit: kind });
     if (live === null || kind === "fade") {

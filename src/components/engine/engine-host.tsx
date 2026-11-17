@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useSyncExternalStore } from "react";
 
 import { calmStore } from "@/lib/calm-store";
+import { isFieldRoute as isOnFieldRoute } from "@/lib/field-routes";
 import { storyBridge } from "@/lib/story-bridge";
 import { tierStore } from "@/lib/tier-store";
 
@@ -12,11 +13,6 @@ import { startPointerInput } from "./pointer-input";
 import { TierSky } from "./tier-sky";
 import { TierStill } from "./tier-still";
 
-// The routes that show the field. Every other route hides the wrapper, so
-// the engine pauses by itself and a route that never had the field loads no
-// 3D code (REQ-CNT-02).
-const FIELD_ROUTES: readonly string[] = ["/"];
-
 /**
  * The field's place behind the page. The root layout renders it once, so the
  * engine's host element and its canvas survive every route change
@@ -24,7 +20,8 @@ const FIELD_ROUTES: readonly string[] = ["/"];
  * ready (REQ-PERF-07).
  */
 export function EngineHost() {
-  const isFieldRoute = FIELD_ROUTES.includes(usePathname());
+  // Every other route hides the wrapper (field-routes.ts, REQ-CNT-02).
+  const isFieldRoute = isOnFieldRoute(usePathname());
   const { tier } = useSyncExternalStore(
     tierStore.subscribe,
     tierStore.getSnapshot,

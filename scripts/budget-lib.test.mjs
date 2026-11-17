@@ -15,7 +15,11 @@ import {
   ENGINE_MARKER,
   FIRST_LOAD_LIMIT_BYTES,
   MOTION_LIBRARIES,
+  OVERLAY_LIBRARIES,
   SKY_CATALOGUE,
+  SOUND,
+  SOUND_FILE_LIMIT_BYTES,
+  SOUND_LIMIT_BYTES,
   chunkFiles,
   engineChunkBytes,
   findDeferredLibraries,
@@ -25,6 +29,10 @@ import {
   missingDeferred,
   pageRoutes,
   payloadFailures,
+  soundCheck,
+  soundFileCheck,
+  SOUND_FILES_DIR,
+  soundFilesNamed,
   staticFilePath,
   unprerenderedPages,
 } from "./budget-lib.mjs";
@@ -168,6 +176,32 @@ describe("libraries loaded after first content", () => {
     expect(
       missingDeferred(chunksWithout("ScrollTrigger"), MOTION_LIBRARIES),
     ).toEqual(["ScrollTrigger"]);
+  });
+});
+
+describe("libraries loaded on a dialog's first open", () => {
+  it("REQ-PERF-04 names the menu's and the palette's libraries, each found in its package and missed when its chunk is gone", () => {
+    const overlays = readFileSync(
+      "src/components/interface/overlays.tsx",
+      "utf8",
+    );
+    expect(overlays).toContain('import("./menu-dialog")');
+    expect(overlays).toContain('import("./palette-dialog")');
+    expect(OVERLAY_LIBRARIES).toEqual(["Radix Dialog", "cmdk"]);
+    const known = DEFERRED_LIBRARIES.map(({ name }) => name);
+    for (const name of OVERLAY_LIBRARIES) expect(known).toContain(name);
+    const builds = {
+      "Radix Dialog": "@radix-ui/react-dialog/dist/index.mjs",
+      cmdk: "cmdk/dist/index.mjs",
+    };
+    const chunksWithout = (left) =>
+      Object.entries(builds)
+        .filter(([name]) => name !== left)
+        .map(([, path]) => ({ libraries: findDeferredLibraries(read(path)) }));
+    expect(missingDeferred(chunksWithout(null), OVERLAY_LIBRARIES)).toEqual([]);
+    expect(missingDeferred(chunksWithout("cmdk"), OVERLAY_LIBRARIES)).toEqual([
+      "cmdk",
+    ]);
   });
 });
 
@@ -388,5 +422,175 @@ describe("3D payload", () => {
       engineJs + entryJs + skyJs,
       entryJs + skyJs,
     ]);
+  });
+});
+
+describe("sound", () => {
+  const source = (path) => readFileSync(path, "utf8");
+
+  it("REQ-SND-01 REQ-PERF-04 finds the sound by the output chain in voices.ts", () => {
+    expect(
+      findDeferredLibraries(source("src/components/sound/voices.ts")),
+    ).toEqual([SOUND]);
+    // Minified, the calls keep their method names.
+    expect(
+      findDeferredLibraries(
+        "const l=e.createDynamicsCompressor(),a=e.createAnalyser()",
+      ),
+    ).toEqual([SOUND]);
+  });
+
+  it("REQ-SND-01 REQ-PERF-04 does not take the code every page loads for the sound", () => {
+    for (const path of [
+      "src/lib/sound-store.ts",
+      "src/lib/sound-choice.ts",
+      "src/lib/sound-panel-store.ts",
+      "src/components/sound/sound-session.ts",
+      "src/components/sound/sound-toggle.tsx",
+      "src/components/sound/sound-panel.tsx",
+      "src/components/sound/interface-ticks.tsx",
+      "src/components/sound/sound-hint.tsx",
+      "src/components/sound/hint-moment.ts",
+      "src/components/sound/levels.ts",
+      "src/components/sound/spectrum-bars.ts",
+      "src/components/sound/waveform-cluster.tsx",
+      "src/content/sound.ts",
+    ]) {
+      expect(findDeferredLibraries(source(path))).toEqual([]);
+    }
+  });
+
+  it("REQ-SND-01 REQ-PERF-04 finds no sound in three.js, React DOM or the other deferred libraries", () => {
+    for (const path of [
+      "three/build/three.core.js",
+      "three/build/three.webgpu.js",
+      "react-dom/cjs/react-dom-client.production.js",
+      "gsap/dist/gsap.min.js",
+      "lenis/dist/lenis.mjs",
+      "posthog-js/dist/module.js",
+      "cmdk/dist/index.mjs",
+      "@radix-ui/react-dialog/dist/index.mjs",
+    ]) {
+      expect(findDeferredLibraries(read(path))).not.toContain(SOUND);
+    }
+  });
+
+  it("REQ-SND-01 the sound's own limit is 15 KB gzip [T7SEN, 9 Nov 2026]", () => {
+    expect(SOUND_LIMIT_BYTES).toBe(15 * 1024);
+  });
+
+  it("REQ-SND-01 each of the bed's recordings has a limit of 600 KB [T7SEN, 16 Nov 2026], and the largest is what a visitor downloads (D-179)", () => {
+    expect(SOUND_FILE_LIMIT_BYTES).toBe(600 * 1024);
+    const result = soundFileCheck([
+      { name: "bed.webm", bytes: 392_767 },
+      { name: "bed.m4a", bytes: 552_595 },
+    ]);
+    expect(result).toEqual({
+      count: 2,
+      largest: 552_595,
+      limit: SOUND_FILE_LIMIT_BYTES,
+      failures: [],
+    });
+    expect(
+      soundFileCheck([{ name: "bed.m4a", bytes: SOUND_FILE_LIMIT_BYTES }])
+        .failures,
+    ).toEqual([]);
+    expect(
+      soundFileCheck([{ name: "bed.m4a", bytes: SOUND_FILE_LIMIT_BYTES + 1 }])
+        .failures,
+    ).toEqual([
+      "sound file bed.m4a 600.0 KB is over its own limit of 600.0 KB",
+    ]);
+    // Nothing named and nothing there: no recording to measure.
+    expect(soundFileCheck([])).toEqual({
+      count: 0,
+      largest: 0,
+      limit: SOUND_FILE_LIMIT_BYTES,
+      failures: [],
+    });
+  });
+
+  it("REQ-SND-01 a recording the sound's code fetches that is missing fails, a folder gone or a file renamed alike; one there passes (D-180)", () => {
+    const named = ["bed.webm", "bed.m4a"];
+    expect(soundFileCheck([], named).failures).toEqual([
+      `sound file bed.webm is fetched by the sound's code but missing from ${SOUND_FILES_DIR}`,
+      `sound file bed.m4a is fetched by the sound's code but missing from ${SOUND_FILES_DIR}`,
+    ]);
+    expect(
+      soundFileCheck(
+        [
+          { name: "bed.webm", bytes: 1 },
+          { name: "old.m4a", bytes: 1 },
+        ],
+        named,
+      ).failures,
+    ).toEqual([
+      `sound file bed.m4a is fetched by the sound's code but missing from ${SOUND_FILES_DIR}`,
+    ]);
+    expect(
+      soundFileCheck(
+        [
+          { name: "bed.webm", bytes: 1 },
+          { name: "bed.m4a", bytes: 1 },
+        ],
+        named,
+      ).failures,
+    ).toEqual([]);
+  });
+
+  it("REQ-SND-01 reads the recordings' file names from the sound's source, each once", () => {
+    expect(
+      soundFilesNamed(
+        [
+          'files: [{ url: "/sound/rain-at-sea.webm" },',
+          "{ url: '/sound/rain-at-sea.m4a' }, { url: `/sound/rain-at-sea.webm` }]",
+          'const other = "/still/field.webp";',
+        ].join("\n"),
+      ),
+    ).toEqual(["rain-at-sea.webm", "rain-at-sea.m4a"]);
+    expect(soundFilesNamed("")).toEqual([]);
+  });
+
+  it("REQ-SND-01 sums the sound chunks and passes them under the limit", () => {
+    const result = soundCheck(
+      [
+        { bytes: 6000, libraries: [SOUND] },
+        { bytes: 3000, libraries: [SOUND] },
+        { bytes: 90_000, libraries: ["three.js"] },
+        { bytes: 50, libraries: [] },
+      ],
+      true,
+    );
+    expect(result).toEqual({
+      count: 2,
+      bytes: 9000,
+      limit: SOUND_LIMIT_BYTES,
+      failures: [],
+    });
+  });
+
+  it("REQ-SND-01 fails sound code over its own limit", () => {
+    const result = soundCheck(
+      [{ bytes: SOUND_LIMIT_BYTES + 1, libraries: [SOUND] }],
+      true,
+    );
+    expect(result.failures).toEqual([
+      "sound code 15.0 KB is over its own limit of 15.0 KB",
+    ]);
+    expect(
+      soundCheck([{ bytes: SOUND_LIMIT_BYTES, libraries: [SOUND] }], true)
+        .failures,
+    ).toEqual([]);
+  });
+
+  it("REQ-SND-01 fails when the sound has code and no chunk is detected as sound, so a stale signature cannot pass", () => {
+    expect(soundCheck([{ bytes: 10, libraries: [] }], true).failures).toEqual([
+      "the sound has code but no built chunk is detected as sound, so its size is unmeasured",
+    ]);
+    expect(soundCheck([], false).failures).toEqual([]);
+  });
+
+  it("REQ-SND-01 REQ-PERF-04 a sound chunk in a first load is a deferred library found there", () => {
+    expect(DEFERRED_LIBRARIES.map(({ name }) => name)).toContain(SOUND);
   });
 });

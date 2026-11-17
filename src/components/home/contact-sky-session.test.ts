@@ -149,7 +149,7 @@ function mount(
 }
 
 describe("the contact sky on the page (D-146, D-147)", () => {
-  it("D-147 sends the sky's view on every frame while the chapter is near, and null once it leaves", () => {
+  it("REQ-SCR-08 D-147 sends the sky's view on every frame while the chapter is near, and null once it leaves", () => {
     const sky = mount();
     sky.run();
     expect(sky.views).toEqual([]);
@@ -189,7 +189,7 @@ describe("the contact sky on the page (D-146, D-147)", () => {
     expect(settled?.tilt).toBeCloseTo(maths.SKY_VIEW.tiltDegrees, 1);
   });
 
-  it("D-146 a constellation's lines and name show where the pointer settles", () => {
+  it("REQ-SCR-08 D-146 a constellation's lines and name show where the pointer settles", () => {
     const sky = mount();
     const orion = orionCentre();
     sky.near(true);
@@ -211,7 +211,7 @@ describe("the contact sky on the page (D-146, D-147)", () => {
     expect(sky.label.style.opacity).toBe("0");
   });
 
-  it("D-146 nothing is named or drawn before the contact chapter, and names wait for the sky to gather there", () => {
+  it("REQ-SCR-08 D-146 nothing is named or drawn before the contact chapter, and names wait for the sky to gather there", () => {
     const orion = orionCentre();
     const sky = mount({ story: { chapter: "about", progress: 0.9 } });
     sky.near(true);
@@ -245,7 +245,7 @@ describe("the contact sky on the page (D-146, D-147)", () => {
     expect(sky.label.style.opacity).toBe("0");
   });
 
-  it("D-146 a constellation behind the contact panel or a plate behind text is not named, drawn or traced", () => {
+  it("REQ-SCR-08 D-146 a constellation behind the contact panel or a plate behind text is not named, drawn or traced", () => {
     const orion = orionCentre();
     const box = {
       left: orion.x - 40,
@@ -275,7 +275,7 @@ describe("the contact sky on the page (D-146, D-147)", () => {
     expect(sky.last()?.reveal[ORION]).toBeGreaterThan(0.9);
   });
 
-  it("D-146 the name sits above its constellation, or below it where something stands in front of the sky above", () => {
+  it("REQ-SCR-08 D-146 the name sits above its constellation, or below it where something stands in front of the sky above", () => {
     const orion = orionCentre();
     const sky = mount();
     sky.near(true);
@@ -303,7 +303,7 @@ describe("the contact sky on the page (D-146, D-147)", () => {
     expect(Math.abs(top() - (orion.bottom + 14))).toBeLessThan(3);
   });
 
-  it("D-146 a tap on the sky names the constellation there for a while; a tap on the form or a link does not", () => {
+  it("REQ-SCR-08 D-146 a tap on the sky names the constellation there for a while; a tap on the form or a link does not", () => {
     const sky = mount();
     const orion = orionCentre();
     sky.near(true);
@@ -368,7 +368,7 @@ describe("the contact sky on the page (D-146, D-147)", () => {
     expect(sky.last()?.trace?.done).toBe(4);
   });
 
-  it("D-146 the words trace the brightest whole constellation, and Send lights it and names it", () => {
+  it("REQ-SCR-08 D-146 the words trace the brightest whole constellation, and Send lights it and names it", () => {
     const sky = mount({ message: { words: 4, letters: 0, sentAt: null } });
     sky.near(true);
     sky.run(2);

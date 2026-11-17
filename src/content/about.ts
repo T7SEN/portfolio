@@ -37,8 +37,9 @@ const links = [
 export const about = {
   heading: "Real time, on and off stream.",
   paragraphs: [
-    "I'm T7SEN, a software developer who also streams competitive games. Streaming is real time with an audience: every frame has to land, and people leave the moment it stalls.",
-    "I build for the web the same way.",
+    // The lead role and its interests [T7SEN, 16 Nov 2026] (D-178).
+    "I'm T7SEN, a software architect who also streams competitive games. Streaming is real time with an audience: every frame has to land, and people leave the moment it stalls.",
+    "I build for the web the same way, with a pull towards security, WebGPU and three.js.",
   ],
   links,
   elsewhere: [...links, t7senUrlSite],

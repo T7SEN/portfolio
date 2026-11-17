@@ -231,11 +231,12 @@ function Cover({ from, loadScene, onGone }: CoverProps) {
       {/* Under the hole, as the scene lays it out (scene/world.ts): its
           centre 46 px above the screen's middle (40 px on phones), the
           label 178 px below that (150 px). The scene draws the label's dark
-          patch. */}
+          patch in px, so the label's place is in px too: in rem, a larger
+          root font size would carry the words off their patch. */}
       <div
         data-part="loader-label"
         data-plate="none"
-        className="absolute inset-x-0 top-[calc(50%+8.25rem)] px-4 text-center transition-opacity duration-300 ease-out group-data-[loader-state=leaving]/loader:opacity-0 max-sm:top-[calc(50%+6.875rem)]"
+        className="absolute inset-x-0 top-[calc(50%+132px)] px-4 text-center transition-opacity duration-300 ease-out group-data-[loader-state=leaving]/loader:opacity-0 max-sm:top-[calc(50%+110px)]"
       >
         <div role="status" className="flex flex-col items-center">
           <p

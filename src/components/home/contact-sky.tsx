@@ -13,6 +13,15 @@ import { storyBridge } from "@/lib/story-bridge";
  * (contact-sky-session.ts). The name is decoration, as the field is, so it
  * is hidden from screen readers; the chapter's scene line says the sky.
  */
+// A chunk that fails to load, or a session that cannot start, leaves the sky
+// unnamed and the field running (rule A11): the field draws the sky without
+// the page's view.
+function onFailure(error: unknown) {
+  if (process.env.NODE_ENV !== "production") {
+    console.warn("contact sky: no-session", error);
+  }
+}
+
 export function ContactSky() {
   const labelRef = useRef<HTMLDivElement>(null);
   const nameRef = useRef<HTMLSpanElement>(null);
@@ -39,40 +48,43 @@ export function ContactSky() {
         import("./contact-sky-session"),
         import("@/content/sky"),
         import("@/lib/sky-message"),
-      ]).then(([catalogue, maths, session, { sky }, { skyMessage }]) => {
-        if (isCancelled) return;
-        place.textContent = sky.place;
-        stop = session.startContactSky({
-          catalogue,
-          maths,
-          section,
-          label,
-          name,
-          names: sky.constellations,
-          // The sky band: the same horizon at every scroll (sky.ts).
-          horizon: (width, height) => maths.skyFrame(width, height).horizon,
-          covered: () => {
-            const boxes: DOMRect[] = [];
-            const panel = section.querySelector('[data-stage="contact"]');
-            if (panel !== null) boxes.push(panel.getBoundingClientRect());
-            // The story's plates behind text (story-runner.ts); none on
-            // tier 3, where the layer is hidden.
-            const plates = document.querySelector<HTMLElement>(
-              '[data-part="veil-plates"]',
-            );
-            if (plates !== null && !plates.hidden) {
-              for (const plate of plates.children) {
-                boxes.push(plate.getBoundingClientRect());
+      ])
+        .then(([catalogue, maths, session, { sky }, { skyMessage }]) => {
+          if (isCancelled) return;
+          place.textContent = sky.place;
+          stop = session.startContactSky({
+            catalogue,
+            maths,
+            section,
+            label,
+            name,
+            names: sky.constellations,
+            // The sky band: the same horizon at every scroll (sky.ts).
+            horizon: (width, height) => maths.skyFrame(width, height).horizon,
+            covered: () => {
+              const boxes: DOMRect[] = [];
+              const panel = section.querySelector('[data-stage="contact"]');
+              if (panel !== null) boxes.push(panel.getBoundingClientRect());
+              // The story's plates behind text (story-runner.ts); none on
+              // tier 3, where the layer is hidden.
+              const plates = document.querySelector<HTMLElement>(
+                '[data-part="veil-plates"]',
+              );
+              if (plates !== null && !plates.hidden) {
+                for (const plate of plates.children) {
+                  boxes.push(plate.getBoundingClientRect());
+                }
               }
-            }
-            return boxes;
-          },
-          story: storyBridge.getStory,
-          calm: () => calmStore.getSnapshot().calm,
-          message: skyMessage.getSnapshot,
-          send: storyBridge.setSky,
-        });
-      });
+              return boxes;
+            },
+            story: storyBridge.getStory,
+            calm: () => calmStore.getSnapshot().calm,
+            message: skyMessage.getSnapshot,
+            send: storyBridge.setSky,
+          });
+        })
+        // A chunk that fails to load, or a session that throws as it starts.
+        .catch(onFailure);
     });
 
     return () => {
@@ -82,10 +94,15 @@ export function ContactSky() {
     };
   }, []);
 
+  // The session places the label in px from the screen's left, as the field
+  // draws the stars, so the label lays out left to right on every page (as
+  // the pointer ring does): start-0 is then the left, and right to left it
+  // never pins the right edge as well.
   return (
     <div
       ref={labelRef}
       aria-hidden="true"
+      dir="ltr"
       data-part="sky-label"
       data-plate="none"
       className="pointer-events-none fixed start-0 top-0 z-10 -translate-x-1/2 text-center whitespace-nowrap opacity-0 transition-opacity duration-300 ease-out [text-shadow:0_0_2px_var(--color-void),0_0_6px_var(--color-void),0_0_12px_var(--color-void)] motion-reduce:transition-none"

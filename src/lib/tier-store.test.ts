@@ -87,6 +87,34 @@ describe("tier store", () => {
     expect(store.getSnapshot().particles).toBe(250_000);
   });
 
+  it("REQ-TIER-04 A14 unready takes a drawn tier out of view, keeping the tier; with nothing drawn it wakes no one", () => {
+    const store = createTierStore();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.unready();
+    expect(listener).not.toHaveBeenCalled();
+
+    store.apply({ type: "tierChosen", tier: 1, reason: "probe-pass" });
+    store.apply({
+      type: "ready",
+      tier: 1,
+      particles: 1_000_000,
+      look: "halftone",
+    });
+    listener.mockClear();
+    store.unready();
+    expect(store.getSnapshot()).toEqual({
+      tier: 1,
+      reason: "probe-pass",
+      ready: false,
+      particles: null,
+      look: null,
+    });
+    expect(listener).toHaveBeenCalledTimes(1);
+    store.unready();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
   it("REQ-ENG-03 frameRate changes nothing and wakes no listener", () => {
     const store = createTierStore();
     store.apply({ type: "tierChosen", tier: 1, reason: "probe-pass" });

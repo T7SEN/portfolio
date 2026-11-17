@@ -18,6 +18,23 @@ export const ENGINE_ENTRY = "engine entry";
 export const SKY_CATALOGUE = "sky catalogue";
 export const SKY_SIGNATURE = '["And","Ant","Aps","Aql"';
 
+// The site's sound (P5, REQ-SND-01): the code the first switch turned on
+// loads, src/components/sound/voices.ts and the session that plays it. Found
+// by the Web Audio calls only the output chains make (their limiter and the
+// ticks' room), which survive minification as method names; the pill and the
+// store that load with every page call neither. Sound has its own limit,
+// outside the 3D payload [T7SEN, 9 Nov 2026]: 15 KB gzip of that code.
+export const SOUND = "sound";
+export const SOUND_SIGNATURES = ["createDynamicsCompressor", "createConvolver"];
+export const SOUND_LIMIT_BYTES = 15 * 1024;
+
+// The bed's recording (D-179), fetched when the background is first turned
+// on: a visitor downloads one of its files, Opus in WebM or AAC in MP4, so
+// each file has the limit [T7SEN, 16 Nov 2026: "Go with the sound file now",
+// on files of about 0.3 to 0.6 MB].
+export const SOUND_FILES_DIR = "public/sound";
+export const SOUND_FILE_LIMIT_BYTES = 600 * 1024;
+
 // Strings that survive minification in each library that must load after
 // first content. Each one was checked against the pinned package source and
 // against a Turbopack production build that imported the library.
@@ -33,6 +50,7 @@ export const DEFERRED_LIBRARIES = [
   { name: "three.js", signatures: ["__THREE__", "THREE.WebGPURenderer"] },
   { name: ENGINE_ENTRY, signatures: [ENGINE_MARKER] },
   { name: SKY_CATALOGUE, signatures: [SKY_SIGNATURE] },
+  { name: SOUND, signatures: SOUND_SIGNATURES },
   { name: "GSAP", signatures: ["GSAP target"] },
   {
     name: "ScrollTrigger",
@@ -88,6 +106,10 @@ export function findDeferredLibraries(source) {
 // in some built chunk, or a signature that stopped matching would let the
 // first-load check pass without testing anything.
 export const MOTION_LIBRARIES = ["GSAP", "ScrollTrigger", "SplitText", "Lenis"];
+
+// What src/components/interface/overlays.tsx loads on a dialog's first open
+// (the menu's Radix Dialog, the palette's cmdk), held to the same rule.
+export const OVERLAY_LIBRARIES = ["Radix Dialog", "cmdk"];
 
 // The names no chunk was detected as. chunks is a list of { libraries }, with
 // libraries from findDeferredLibraries.
@@ -218,4 +240,75 @@ export function payloadFailures(
 
 export function formatKb(bytes) {
   return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+// Sums the built chunks that hold the sound's code and checks them against
+// its own limit. chunks is a list of { bytes, libraries }, with libraries
+// from findDeferredLibraries. hasCode says whether the sound's source has
+// code: then a build with no chunk detected as sound means its signature no
+// longer matches, and the first-load check could not find it either. A sound
+// chunk in a first load fails in the route check, like every deferred
+// library.
+export function soundCheck(chunks, hasCode) {
+  let count = 0;
+  let bytes = 0;
+  for (const chunk of chunks) {
+    if (!chunk.libraries.includes(SOUND)) continue;
+    count += 1;
+    bytes += chunk.bytes;
+  }
+  const failures = [];
+  if (hasCode && count === 0) {
+    failures.push(
+      "the sound has code but no built chunk is detected as sound, so its size is unmeasured",
+    );
+  }
+  if (bytes > SOUND_LIMIT_BYTES) {
+    failures.push(
+      `sound code ${formatKb(bytes)} is over its own limit of ${formatKb(SOUND_LIMIT_BYTES)}`,
+    );
+  }
+  return { count, bytes, limit: SOUND_LIMIT_BYTES, failures };
+}
+
+// The file names of the recordings the sound's source fetches: every
+// "/sound/..." address in it (voices.ts, BEDS).
+export function soundFilesNamed(source) {
+  return [
+    ...new Set(
+      [...source.matchAll(/["'`]\/sound\/([^"'`/]+)["'`]/g)].map(
+        (match) => match[1],
+      ),
+    ),
+  ];
+}
+
+// Checks each of the bed's recordings, a list of { name, bytes }, against
+// the file limit. A visitor downloads one, so the largest is what one costs.
+// named is the list soundFilesNamed reads from the source: a file it names
+// that is not there fails, so a missing folder or a renamed file can never
+// pass as a folder with nothing to measure (D-064, D-180).
+export function soundFileCheck(files, named = []) {
+  const present = new Set(files.map((file) => file.name));
+  const failures = [
+    ...named
+      .filter((name) => !present.has(name))
+      .map(
+        (name) =>
+          `sound file ${name} is fetched by the sound's code but missing from ${SOUND_FILES_DIR}`,
+      ),
+    ...files
+      .filter((file) => file.bytes > SOUND_FILE_LIMIT_BYTES)
+      .map(
+        (file) =>
+          `sound file ${file.name} ${formatKb(file.bytes)} is over its own limit of ${formatKb(SOUND_FILE_LIMIT_BYTES)}`,
+      ),
+  ];
+  const largest = files.reduce((most, file) => Math.max(most, file.bytes), 0);
+  return {
+    count: files.length,
+    largest,
+    limit: SOUND_FILE_LIMIT_BYTES,
+    failures,
+  };
 }

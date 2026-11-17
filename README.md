@@ -54,12 +54,13 @@ Two more runs open a visible browser on the machine's own GPU and are not part o
 ```
 src/app/         routes, the root layout, fonts and the global styles
 src/app/(dev)/   pages that exist only on the development server
-src/components/  the bar, footer and links, the home sections and their scroll story, the home page's loader, the study pages and the field's place behind the page
+src/components/  the bar, footer and links, the menu and the command palette, the sound, the home sections and their scroll story, the home page's loader, the study pages and the field's place behind the page
 src/content/     every word on the site as typed objects, with the study outline
 src/engine/      the particle field: tier choice, one simulation for WebGPU and WebGL2, the contact chapter's sky, loaded after first content
-src/lib/         the stores and bridges between the page and the field: tier, calm mode, the loader's steps, the scroll story
+src/lib/         the stores and bridges between the page and the field: tier, calm mode, the loader's steps, the scroll story, the open overlay, the sound settings and the easter eggs
 src/tokens/      the colour tokens shared by the CSS and the engine
 public/brand/    the T7SEN marks
+public/sound/    the background sound's recordings, fetched only when it is turned on
 public/still/    the still frames shown where the field cannot run
 public/work/     the study pages' screenshots
 scripts/         budget, environment, format, class and colour token checks, and the script that writes the star catalogue
